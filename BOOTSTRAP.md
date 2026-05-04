@@ -127,7 +127,7 @@ uv tool install pre-commit detect-secrets pip-audit
 npm i -g @redocly/cli  (if OpenAPI)
 
 # 3. Init git (pre-commit needs .git/ to exist)
-git init && git branch -m main && git checkout -b develop
+git init && git branch -m main
 
 # 4. Activate pre-commit hooks (regular + commit-msg)
 pre-commit install --install-hooks
@@ -144,15 +144,15 @@ git add . && git commit -m "chore: bootstrap repository"
 
 # 8. Push
 git remote add origin git@github.com:doudoune444/<repo>.git
-git push -u origin main && git push -u origin develop
+git push -u origin main
 ```
 
 ## 13. GitHub repo config (one-time, post-push)
 
 - [ ] Description + topics — discoverability.
-- [ ] Default branch = `develop` — `main` reserved for releases.
+- [ ] Default branch = `main` — trunk-based, all PRs target `main`.
 - [ ] Issues enabled with templates loaded.
-- [ ] **Branch protection on `main` + `develop`**: PR review (≥1), required status checks (by name), block force push, block deletion. `main` also: linear history.
+- [ ] **Branch protection on `main`**: PR review (≥1), required status checks (by name), linear history, block force push, block deletion.
 - [ ] CI secrets: LLM keys + third-party service keys.
 - [ ] Dependabot alerts + security updates enabled.
 - [ ] Secret scanning + push protection enabled.

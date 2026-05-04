@@ -10,7 +10,7 @@ Pre-flight checks:
 1. Verify `specs/acceptance/$ARGUMENTS.md` exists.
 2. Verify `specs/plans/$ARGUMENTS.md` exists. If not: tell user to run `/plan $ARGUMENTS` first, abort.
 3. Verify the working tree is clean (`git status --porcelain` returns nothing). If dirty, ask user to commit or stash first — but **never** run `git stash` yourself.
-4. Verify a feature branch is checked out (not `main` and not `develop`). Branch name should match `feat/$ARGUMENTS-<short-slug>` or `hotfix/<slug>`. If on `main` or `develop`, instruct user to create a branch — **never** create one yourself with `git checkout -b`.
+4. Verify a feature branch is checked out (not `main`). Branch name should match `feat/$ARGUMENTS-<short-slug>` or `hotfix/<slug>`. If on `main`, instruct user to create a branch — **never** create one yourself with `git checkout -b`.
 
 If all checks pass, delegate to the `implementer` sub-agent with this prompt:
 

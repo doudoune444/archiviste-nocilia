@@ -45,22 +45,10 @@ if echo "$cmd" | grep -qE 'git (config|remote (add|remove|set-url|rename))\b'; t
   exit 2
 fi
 
-# Direct push to main/master forbidden — release via merge from develop only.
+# Direct push to main forbidden — PR-only flow (trunk-based: feature -> main via PR).
 if echo "$cmd" | grep -qE 'git push.*\borigin\s+(main|master)\b'; then
-  echo "BLOCKED: direct push to main/master forbidden — release via merge develop -> main only." >&2
+  echo "BLOCKED: direct push to main forbidden — open a PR instead." >&2
   exit 2
-fi
-
-# PR --base main only allowed from hotfix/* or release/* branches.
-if echo "$cmd" | grep -qE 'gh pr create.*--base\s+(main|master)\b'; then
-  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  case "$branch" in
-    hotfix/*|release/*) ;;  # allowed
-    *)
-      echo "BLOCKED: PR --base main only allowed from hotfix/* or release/* (current: $branch). Target develop instead." >&2
-      exit 2
-      ;;
-  esac
 fi
 
 # Block GCP metadata service exfiltration (IMDS / metadata.google.internal).

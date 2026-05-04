@@ -9,7 +9,6 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
-    target-branch: "develop"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -31,7 +30,6 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
-    target-branch: "develop"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -52,7 +50,6 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
-    target-branch: "develop"
     labels:
       - "dependencies"
       - "ci"
@@ -68,7 +65,6 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
-    target-branch: "develop"
     labels:
       - "dependencies"
       - "docker"

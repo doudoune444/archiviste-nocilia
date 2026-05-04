@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint (cross-cutting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check port consistency
+        run: bash scripts/check-ports.sh
+
+  gateway:
+    name: gateway (rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gateway
+
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --all
+
+      - name: build release
+        run: cargo build --release
+
+  workers:
+    name: workers (python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install uv
+        run: pip install uv
+
+      - name: sync deps
+        run: uv sync --all-extras
+
+      - name: ruff format check
+        run: uv run ruff format --check .
+
+      - name: ruff lint
+        run: uv run ruff check .
+
+      - name: mypy
+        run: uv run mypy src/
+
+      - name: pytest
+        run: uv run pytest --cov --cov-report=xml
+
+  contract:
+    name: contract (schemathesis)
+    runs-on: ubuntu-latest
+    needs: [gateway, workers]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: archiviste
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install uv schemathesis
+
+      - name: install workers
+        working-directory: workers
+        run: uv sync --all-extras
+
+      - name: start workers
+        working-directory: workers
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+        run: |
+          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
+          for i in {1..30}; do
+            curl -sf http://localhost:8000/healthz && break
+            sleep 1
+          done
+
+      - name: schemathesis
+        run: |
+          schemathesis run specs/openapi/gateway-to-workers.yml \
+            --base-url http://localhost:8000 \
+            --checks all \
+            --hypothesis-max-examples 30

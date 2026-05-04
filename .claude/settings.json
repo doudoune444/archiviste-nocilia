@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo sqlx:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo audit:*)",
+      "Bash(cargo deny:*)",
+      "Bash(rustfmt:*)",
+      "Bash(uv run:*)",
+      "Bash(uv add:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv lock:*)",
+      "Bash(uv pip:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(pytest:*)",
+      "Bash(pip-audit:*)",
+      "Bash(docker compose:*)",
+      "Bash(curl -sf http\\://localhost:*)",
+      "Bash(curl -s http\\://localhost:*)",
+      "Bash(git status)",
+      "Bash(git status --porcelain)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add specs/*)",
+      "Bash(git add eval/runs/*)",
+      "Bash(git add docs/*)",
+      "Bash(git add CHANGELOG.md)",
+      "Bash(git add gateway/*)",
+      "Bash(git add workers/*)",
+      "Bash(git add infra/*)",
+      "Bash(git add migrations/*)",
+      "Bash(git add scripts/*)",
+      "Bash(git add .claude/*)",
+      "Bash(git commit -m:*)",
+      "Bash(git commit --message:*)",
+      "Bash(git branch --show-current)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git push)",
+      "Bash(git push origin HEAD)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(mkdir -p:*)",
+      "Bash(ls:*)",
+      "Bash(bash scripts/check-setup.sh)",
+      "Bash(bash .claude/scripts/*)",
+      "Read(./**)",
+      "Write(./gateway/**)",
+      "Write(./workers/**)",
+      "Write(./eval/**)",
+      "Write(./infra/**)",
+      "Write(./scripts/**)",
+      "Write(./docs/**)",
+      "Write(./.claude/**)",
+      "Write(./specs/plans/**)",
+      "Write(./specs/reviews/**)",
+      "Write(./specs/acceptance/**)",
+      "Write(./CHANGELOG.md)",
+      "Edit(./gateway/**)",
+      "Edit(./workers/**)",
+      "Edit(./eval/**)",
+      "Edit(./infra/**)",
+      "Edit(./scripts/**)",
+      "Edit(./docs/**)",
+      "Edit(./.claude/**)",
+      "Edit(./specs/plans/**)",
+      "Edit(./specs/reviews/**)",
+      "Edit(./specs/acceptance/**)",
+      "Edit(./CHANGELOG.md)",
+      "Edit(./CLAUDE.md)",
+      "Edit(./README.md)",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git rebase:*)",
+      "Bash(git config:*)",
+      "Bash(git remote:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git filter-repo:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -f:*)",
+      "Bash(curl http\\://169.254.169.254/*)",
+      "Bash(curl https\\://169.254.169.254/*)",
+      "Bash(curl http\\://metadata.google.internal/*)",
+      "Bash(wget http\\://169.254.169.254/*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.key)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.p12)",
+      "Read(./**/*.pfx)",
+      "Read(./**/id_rsa)",
+      "Read(./**/id_ed25519)",
+      "Read(./**/*-sa.json)",
+      "Read(./**/service-account*.json)",
+      "Read(./**/*.tfvars)",
+      "Read(./**/terraform.tfstate)",
+      "Read(./**/terraform.tfstate.backup)",
+      "Read(./**/kubeconfig*)",
+      "Read(./.npmrc)",
+      "Read(./.pypirc)",
+      "Read(./secrets/**)",
+      "Edit(./eval/baseline.json)",
+      "Edit(./migrations/**)",
+      "Write(./eval/baseline.json)",
+      "Write(./migrations/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/format-on-save.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/guard-git.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/validate-claude-config.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/guard-secret-paths.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "RUST_LOG": "info",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/doudoune444/archiviste-nocilia/security/advisories/new
+    about: Use private security advisories for any security-related report. See SECURITY.md.
+  - name: Question / discussion
+    url: https://github.com/doudoune444/archiviste-nocilia/discussions
+    about: For open-ended questions, use Discussions instead of Issues.

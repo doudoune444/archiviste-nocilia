@@ -1,0 +1,73 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^workers/
+      - id: ruff-format
+        files: ^workers/
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        args: [--manifest-path, gateway/Cargo.toml, --]
+      - id: clippy
+        args: [--manifest-path, gateway/Cargo.toml, --all-targets, --, -D, warnings]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: conventional-commit
+        name: conventional commit message
+        entry: bash scripts/check-commit-msg.sh
+        language: system
+        stages: [commit-msg]
+
+      - id: redocly-lint
+        name: redocly OpenAPI lint
+        entry: bash -c 'command -v npx >/dev/null && npx -y @redocly/cli@latest lint specs/openapi/*.yml || echo "redocly skipped (npx unavailable)"'
+        language: system
+        files: ^specs/openapi/.*\.ya?ml$
+        pass_filenames: false
+
+      - id: cargo-deny
+        name: cargo deny check
+        entry: bash -c 'command -v cargo-deny >/dev/null && cd gateway && cargo deny check advisories bans licenses sources || echo "cargo-deny skipped (not installed)"'
+        language: system
+        files: ^(gateway/Cargo\.toml|gateway/Cargo\.lock|deny\.toml)$
+        pass_filenames: false
+
+      - id: pip-audit
+        name: pip-audit (Python deps)
+        entry: bash -c 'cd workers && uv run pip-audit --strict || echo "pip-audit FAILED — see above"'
+        language: system
+        files: ^workers/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
+      - id: check-ports
+        name: check port consistency
+        entry: bash scripts/check-ports.sh
+        language: system
+        pass_filenames: false
+        files: \.(md|ya?ml|sh)$|^docker-compose\.ya?ml$

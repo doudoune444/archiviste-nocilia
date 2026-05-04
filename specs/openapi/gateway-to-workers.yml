@@ -1,0 +1,182 @@
+openapi: 3.1.0
+info:
+  title: Archiviste Nocilia — Gateway to Workers contract
+  version: 0.1.0
+  description: |
+    Internal contract between the Rust gateway and the Python workers.
+    Source of truth for both sides. Tested via schemathesis.
+
+servers:
+  - url: http://workers:8000
+    description: Workers in docker-compose
+  - url: http://localhost:8000
+    description: Workers running locally
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        '200':
+          description: Worker is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /v1/retrieve:
+    post:
+      summary: Retrieve top-k chunks for a query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetrieveRequest'
+      responses:
+        '200':
+          description: Top-k chunks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrieveResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/generate:
+    post:
+      summary: Generate an answer from a query and retrieved contexts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: Generated answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResponse'
+
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+
+    RetrieveRequest:
+      type: object
+      required: [query, conversation_id]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        conversation_id:
+          type: string
+          format: uuid
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+        mode:
+          type: string
+          enum: [vector, hybrid, bm25, mmr]
+          default: hybrid
+
+    RetrieveResponse:
+      type: object
+      required: [chunks, retrieval_id]
+      properties:
+        retrieval_id:
+          type: string
+          format: uuid
+        chunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chunk'
+
+    Chunk:
+      type: object
+      required: [id, text, score, source]
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        source:
+          type: string
+
+    GenerateRequest:
+      type: object
+      required: [query, contexts, conversation_id]
+      properties:
+        query:
+          type: string
+        contexts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chunk'
+        conversation_id:
+          type: string
+          format: uuid
+
+    GenerateResponse:
+      type: object
+      required: [answer, model, cost_eur, lore_gap_detected]
+      properties:
+        answer:
+          type: string
+        model:
+          type: string
+        cost_eur:
+          type: number
+          minimum: 0
+        lore_gap_detected:
+          type: boolean
+        ticket_id:
+          type: string
+          format: uuid
+          nullable: true
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas_errors:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

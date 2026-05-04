@@ -2,7 +2,7 @@
 name: implementer
 description: Writes implementation code for a ticket. Reads ONLY the validated plan + acceptance criteria + relevant existing files. Writes tests AND implementation.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: opus
+model: sonnet
 ---
 
 # Implementer Agent

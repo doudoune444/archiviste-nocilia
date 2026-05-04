@@ -32,8 +32,7 @@ jobs:
 
       - name: pull images
         # AC-11 image-presence check requires postgres + redis present locally.
-        env:
-          REDIS_PASSWORD: ci-placeholder
+        # REDIS_PASSWORD picked up from `.env` written above.
         run: docker compose pull postgres redis
 
       - name: measure boot

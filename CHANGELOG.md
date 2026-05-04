@@ -16,6 +16,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 - Golden Q/A skeleton + property invariants table
 - CI workflows : lint + test + contract + ragas eval
 - pre-commit : ruff, fmt, clippy, gitleaks, conventional commits
+- **FOUND-001** : minimal viable scaffold — gateway `/healthz` proxying workers `/healthz`, docker-compose dev stack (postgres + gateway + workers), integration test green, CI passing.
 
 ## [0.1.0] - TBD
 

@@ -20,13 +20,13 @@ PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]
 resolve_image() {
   # Returns the image name declared for a service, or empty if it is built.
   docker compose config --format json 2>/dev/null \
-    | python -c "import json,sys,os; svc=json.load(sys.stdin)['services'].get(os.environ['SVC'],{}); print(svc.get('image',''))" \
+    | python -c "import json,sys; svc=json.load(sys.stdin)['services'].get(sys.argv[1],{}); print(svc.get('image',''))" "$1" \
     || true
 }
 
 # AC-11: image presence check before `up -d`.
 for svc in "${SERVICES[@]}"; do
-  SVC="$svc" explicit=$(resolve_image)
+  explicit=$(resolve_image "$svc")
   candidates=()
   [[ -n "$explicit" ]] && candidates+=("$explicit")
   candidates+=("${PROJECT}-${svc}" "${PROJECT}_${svc}")

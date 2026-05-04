@@ -30,6 +30,12 @@ jobs:
         # postgres / redis are pulled (no `build:` block); restrict to local images.
         run: docker compose build workers gateway
 
+      - name: pull images
+        # AC-11 image-presence check requires postgres + redis present locally.
+        env:
+          REDIS_PASSWORD: ci-placeholder
+        run: docker compose pull postgres redis
+
       - name: measure boot
         id: measure
         continue-on-error: true

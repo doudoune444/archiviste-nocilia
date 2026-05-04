@@ -1,0 +1,96 @@
+name: Boot SLA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: measure boot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: write .env (placeholders only)
+        run: |
+          {
+            echo "REDIS_PASSWORD=ci-placeholder"
+            echo "DATABASE_URL=postgres://postgres:postgres@postgres:5432/archiviste"
+          } > .env
+
+      - name: build images
+        # postgres / redis are pulled (no `build:` block); restrict to local images.
+        run: docker compose build workers gateway
+
+      - name: pull images
+        # AC-11 image-presence check requires postgres + redis present locally.
+        # REDIS_PASSWORD picked up from `.env` written above.
+        run: docker compose pull postgres redis
+
+      - name: measure boot
+        id: measure
+        continue-on-error: true
+        env:
+          BOOT_METRICS_OUT: boot-metrics.json
+          SLA_SECONDS: "30"
+        run: bash scripts/measure-boot.sh
+
+      - name: validate boot-metrics.json shape
+        # Spec only forbids gating on `passed`. Schema correctness IS enforced
+        # so a crashed measure step (which leaves no artefact) fails the job.
+        run: |
+          python - <<'PY'
+          import json, sys
+          with open("boot-metrics.json", encoding="utf-8") as f:
+              doc = json.load(f)
+          required = {"total_seconds", "sla_seconds", "passed", "services"}
+          missing = required - doc.keys()
+          assert not missing, f"missing keys: {missing}"
+          assert isinstance(doc["services"], list) and len(doc["services"]) == 4, \
+              f"services must have 4 entries, got {doc['services']}"
+          for svc in doc["services"]:
+              assert {"name", "healthy_at_seconds"} <= svc.keys(), svc
+          PY
+
+      - name: upload artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-metrics
+          path: boot-metrics.json
+          retention-days: 30
+
+  stack-integration:
+    name: stack integration (redis auth + persistence + migrator profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: write .env (placeholders only)
+        run: |
+          {
+            echo "REDIS_PASSWORD=ci-placeholder"
+            echo "DATABASE_URL=postgres://postgres:postgres@postgres:5432/archiviste"
+          } > .env
+
+      - name: redis auth + persistence + migrator profile (AC-2, AC-3, AC-6)
+        env:
+          REDIS_PASSWORD: ci-placeholder
+        run: bash tests/integration/test_stack.sh
+
+  migrations-integration:
+    name: migrations runner (AC-7..AC-10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: run migrator integration suite
+        run: bash tests/migrations/run_tests.sh

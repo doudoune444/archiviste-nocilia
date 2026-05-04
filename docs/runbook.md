@@ -18,6 +18,13 @@ cd workers && uv sync && cd ..
 cp .env.example .env
 # Éditer .env avec les clés API
 docker compose up -d
+
+# 4. Premier boot : appliquer les migrations (obligatoire).
+# `docker compose up -d` ne monte plus `./migrations` sur
+# `/docker-entrypoint-initdb.d` — la base est vierge tant que `make migrate`
+# n'a pas tourné. Sans cette étape : pas d'extensions `vector` / `pgcrypto`,
+# pas de table `schema_version`, et toute requête applicative échouera.
+make migrate
 ```
 
 Vérification :
@@ -107,15 +114,55 @@ Jamais de secret en clair dans le repo, jamais de `.env` committé.
 
 ## Migrations DB
 
+Le runner est un conteneur jetable lancé via `make migrate`
+(`docker compose --profile tools run --rm migrator`). Il lit chaque fichier
+`migrations/NNNN_<slug>.sql`, applique en transaction (`BEGIN ... COMMIT`)
+ceux absents de la table `schema_version`, puis insère la ligne `(version,
+description, applied_at)` correspondante. Voir `migrations/run.sh`.
+
 ```bash
-# Nouvelle migration
-cd gateway
-sqlx migrate add <name>
-# Édite migrations/<timestamp>_<name>.sql
+# Nouvelle migration : créer le fichier (4 chiffres, snake_case, .sql)
+$EDITOR migrations/0002_my_change.sql
 
-# Appliquer en local
-sqlx migrate run
-
-# Rollback (manuel, pas de down auto par défaut)
-psql $DATABASE_URL -f migrations/down/<timestamp>_<name>.sql
+# Appliquer (lit DATABASE_URL depuis .env)
+make migrate
 ```
+
+Conventions et garanties :
+
+- Nommage `^[0-9]{4}_[a-z0-9_]+\.sql$` strict ; un fichier hors-norme fait sortir le runner en erreur.
+- Une migration = une transaction. Si la version `N` échoue, seule `N` rollback ; les versions `<N` déjà committées restent appliquées.
+- Une version `N` déjà présente est sautée (log `migration N already applied, skipping`).
+- Gap detection : si un fichier `N` est absent de `schema_version` alors qu'une version supérieure y figure, le runner sort en erreur (`migration gap: file version N missing ...`) sans rien appliquer.
+- Pas de down/rollback automatisé (out of scope FOUND-002). Procédure manuelle ad hoc via `psql $DATABASE_URL`.
+- **Les fichiers de migration NE DOIVENT PAS contenir `BEGIN` / `COMMIT` / `ROLLBACK`.** Le runner applique chaque fichier via `psql --single-transaction -f <file> -c "INSERT INTO schema_version ..."` : un `BEGIN`/`COMMIT` interne fermerait la transaction prématurément et l'`INSERT` s'exécuterait hors-tx, cassant la garantie AC-8. À traiter au prochain ticket migrations : ajouter une vérification statique dans `migrations/run.sh`.
+
+Tests d'intégration du runner : `bash tests/migrations/run_tests.sh` (Docker requis).
+
+## SLA boot local
+
+Le script `scripts/measure-boot.sh` vérifie via `docker image inspect` la
+présence des 4 images (`postgres`, `redis`, `workers`, `gateway`) avant
+`docker compose up -d`, puis mesure `total_seconds` et le `healthy_at_seconds`
+de chaque service via le polling de `docker compose ps --format json`. Il
+écrit un artefact JSON conforme au schéma de l'annexe AC-12.
+
+Baselines de référence pour la calibration :
+
+- **Dev local** : 4 cœurs / 8 GiB RAM / SSD. Cible SLA `total_seconds <= 30s`.
+- **CI** : `ubuntu-latest` GitHub Actions runner. Variance acceptée vs baseline locale ; mesure non-bloquante (`continue-on-error: true` dans `.github/workflows/boot-sla.yml`).
+
+Le script sort toujours en code 0 (sauf images manquantes, qui font sortir
+en non-zéro avec `Image <name> missing. Run 'docker compose build' first.`).
+Le booléen `passed` dans l'artefact reflète la comparaison `total_seconds <= sla_seconds`.
+
+Lancement local :
+
+```bash
+docker compose build
+make boot-measure  # ou: bash scripts/measure-boot.sh
+cat boot-metrics.json
+```
+
+Note Windows : `make`, `bash` et les scripts POSIX supposent Git Bash, WSL,
+ou un shell équivalent.

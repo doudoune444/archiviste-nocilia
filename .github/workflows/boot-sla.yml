@@ -1,0 +1,46 @@
+name: Boot SLA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: measure boot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: write .env (placeholders only)
+        run: |
+          {
+            echo "REDIS_PASSWORD=ci-placeholder"
+            echo "DATABASE_URL=postgres://postgres:postgres@postgres:5432/archiviste"
+          } > .env
+
+      - name: build images
+        run: docker compose build postgres redis workers gateway
+
+      - name: measure boot
+        id: measure
+        continue-on-error: true
+        env:
+          BOOT_METRICS_OUT: boot-metrics.json
+          SLA_SECONDS: "30"
+        run: bash scripts/measure-boot.sh
+
+      - name: upload artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-metrics
+          path: boot-metrics.json
+          retention-days: 30

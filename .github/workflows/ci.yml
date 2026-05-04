@@ -105,7 +105,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install uv schemathesis
+      - run: pip install uv "schemathesis>=4,<5"
 
       - name: install workers
         working-directory: workers
@@ -125,6 +125,6 @@ jobs:
       - name: schemathesis
         run: |
           schemathesis run specs/openapi/gateway-to-workers.yml \
-            --base-url http://localhost:8000 \
+            --url http://localhost:8000 \
             --checks all \
-            --hypothesis-max-examples 30
+            --max-examples 30

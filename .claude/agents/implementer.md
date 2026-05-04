@@ -59,7 +59,7 @@ Specific to this agent:
 - **No new dependencies** without an ADR. Stop, ask.
 - **Hardcoded values to pass a test = forbidden.** If you do this, the test is wrong — revisit the plan.
 - **Never modify** humain-only sources : `specs/acceptance/`, `specs/golden_qa.jsonl`, `specs/properties.md`, `specs/openapi/*`, `eval/baseline.json`, `migrations/*.sql` (only via dedicated migration ticket).
-- **Never `git checkout/switch -b`.** Humain creates the branch (`feat/<ID>-<slug>`). PR target is `develop`, never `main`. **Never `git push`** — `/ship` handles it.
+- **Never `git checkout/switch -b`.** Humain creates the branch (`feat/<ID>-<slug>`). PR target is `main` (trunk-based). **Never `git push`** — `/ship` handles it.
 - **Never `git add -A`** or `git add .` — stage only files you actually touched.
 
 ## End-of-task checklist

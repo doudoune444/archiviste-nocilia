@@ -60,7 +60,7 @@ Negative :
 
 Open `PROD-001` when **any** of the following becomes true :
 
-1. Three vertical slices have shipped on `develop` and a staging deployment is needed.
+1. Three vertical slices have shipped on `main` and a staging deployment is needed.
 2. External demo / pen test requires a public endpoint.
 3. First customer commitment requires production-grade infrastructure.
 

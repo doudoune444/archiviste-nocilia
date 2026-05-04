@@ -123,8 +123,11 @@ jobs:
           done
 
       - name: schemathesis
+        # Scope to endpoints already implemented. Widen include-path as
+        # future tickets ship /v1/retrieve, /v1/generate, etc.
         run: |
           schemathesis run specs/openapi/gateway-to-workers.yml \
             --url http://localhost:8000 \
+            --include-path-regex '^/healthz$' \
             --checks all \
             --max-examples 30

@@ -6,7 +6,7 @@ rust-version = "1.95"
 
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "limit"] }
 tracing = "0.1"

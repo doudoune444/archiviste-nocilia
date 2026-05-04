@@ -53,15 +53,38 @@ while :; do
   now=$(date +%s.%N)
   if awk "BEGIN{exit !($now > $deadline)}"; then break; fi
 
-  # `docker compose ps --format json` emits one JSON object per line (v2).
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    svc=$(echo "$line" | python -c "import json,sys; o=json.loads(sys.stdin.read()); print(o.get('Service',''))")
-    state=$(echo "$line" | python -c "import json,sys; o=json.loads(sys.stdin.read()); print(o.get('Health') or o.get('State',''))")
+  # `docker compose ps --format json` emits NDJSON on compose v2.0..v2.20 and a
+  # single JSON array on v2.21+. Parse the whole buffer once with a tolerant
+  # reader so neither form silently degrades to "no service ever healthy".
+  ps_buffer=$(docker compose ps --format json 2>/dev/null || true)
+  while IFS=$'\t' read -r svc state; do
+    [[ -z "$svc" ]] && continue
     if [[ "$state" == "healthy" && -z "${healthy_at[$svc]:-}" ]]; then
       healthy_at[$svc]=$(awk "BEGIN{printf \"%.2f\", $now - $start_epoch}")
     fi
-  done < <(docker compose ps --format json 2>/dev/null || true)
+  done < <(printf '%s' "$ps_buffer" | python -c "
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+try:
+    parsed = json.loads(raw)
+    items = parsed if isinstance(parsed, list) else [parsed]
+except json.JSONDecodeError:
+    items = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+for item in items:
+    name = item.get('Service', '')
+    health = item.get('Health') or item.get('State', '')
+    print(f'{name}\t{health}')
+")
 
   all_done=1
   for svc in "${SERVICES[@]}"; do

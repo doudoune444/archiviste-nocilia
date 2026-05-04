@@ -18,6 +18,13 @@ cd workers && uv sync && cd ..
 cp .env.example .env
 # Éditer .env avec les clés API
 docker compose up -d
+
+# 4. Premier boot : appliquer les migrations (obligatoire).
+# `docker compose up -d` ne monte plus `./migrations` sur
+# `/docker-entrypoint-initdb.d` — la base est vierge tant que `make migrate`
+# n'a pas tourné. Sans cette étape : pas d'extensions `vector` / `pgcrypto`,
+# pas de table `schema_version`, et toute requête applicative échouera.
+make migrate
 ```
 
 Vérification :
@@ -128,6 +135,7 @@ Conventions et garanties :
 - Une version `N` déjà présente est sautée (log `migration N already applied, skipping`).
 - Gap detection : si un fichier `N` est absent de `schema_version` alors qu'une version supérieure y figure, le runner sort en erreur (`migration gap: file version N missing ...`) sans rien appliquer.
 - Pas de down/rollback automatisé (out of scope FOUND-002). Procédure manuelle ad hoc via `psql $DATABASE_URL`.
+- **Les fichiers de migration NE DOIVENT PAS contenir `BEGIN` / `COMMIT` / `ROLLBACK`.** Le runner applique chaque fichier via `psql --single-transaction -f <file> -c "INSERT INTO schema_version ..."` : un `BEGIN`/`COMMIT` interne fermerait la transaction prématurément et l'`INSERT` s'exécuterait hors-tx, cassant la garantie AC-8. À traiter au prochain ticket migrations : ajouter une vérification statique dans `migrations/run.sh`.
 
 Tests d'intégration du runner : `bash tests/migrations/run_tests.sh` (Docker requis).
 

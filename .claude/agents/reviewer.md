@@ -16,7 +16,7 @@ You are a hostile reviewer. Your job is to find what the implementer missed, gam
 A ticket ID or a PR number. You then:
 
 1. **Read** `specs/acceptance/<ID>.md` and `specs/plans/<ID>.md`.
-2. **Run** `git diff develop...HEAD` (or `gh pr diff <num>`) to get the full change set. PR target = `develop`, never `main`.
+2. **Run** `git diff main...HEAD` (or `gh pr diff <num>`) to get the full change set. PR target = `main` (trunk-based).
 3. **Read** every file in the diff.
 4. **Run** the test suites and lint locally to confirm green.
 

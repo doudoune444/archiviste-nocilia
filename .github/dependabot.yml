@@ -9,6 +9,7 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
+    target-branch: "develop"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -30,6 +31,7 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
+    target-branch: "develop"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -50,6 +52,7 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
+    target-branch: "develop"
     labels:
       - "dependencies"
       - "ci"
@@ -65,9 +68,16 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
+    target-branch: "develop"
     labels:
       - "dependencies"
       - "docker"
     commit-message:
       prefix: "build"
       include: "scope"
+    # Python major bumps are policy decisions (must align with
+    # workers/pyproject.toml `requires-python` and CI matrix).
+    # Bump deliberately via a dedicated PR, not via Dependabot.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]

@@ -105,7 +105,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install uv schemathesis
+      - run: pip install uv "schemathesis>=4,<5"
 
       - name: install workers
         working-directory: workers
@@ -123,8 +123,11 @@ jobs:
           done
 
       - name: schemathesis
+        # Scope to endpoints already implemented. Widen include-path as
+        # future tickets ship /v1/retrieve, /v1/generate, etc.
         run: |
           schemathesis run specs/openapi/gateway-to-workers.yml \
-            --base-url http://localhost:8000 \
+            --url http://localhost:8000 \
+            --include-path-regex '^/healthz$' \
             --checks all \
-            --hypothesis-max-examples 30
+            --max-examples 30

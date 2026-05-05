@@ -1,24 +1,21 @@
 ---
 description: Author or iterate on a ticket's acceptance specification (Socratic dialogue with spec-author agent)
-argument-hint: <ID> "<initial brief>"  OR  <ID>  (to iterate on existing)
+argument-hint: [ID] "<initial brief>"   (ID optional — omit it and spec-author proposes one)
 ---
 
 The user wants help authoring or iterating on a ticket's acceptance spec.
 
-Parse arguments:
-- If `$ARGUMENTS` contains an ID + a quoted brief: new spec authoring.
-- If `$ARGUMENTS` is just an ID and `specs/acceptance/<ID>.md` exists: iteration mode.
-- If `$ARGUMENTS` is empty: ask the user for an ID + brief.
+Extract from `$ARGUMENTS`:
+- An ID matching `^[A-Z]+-[0-9]+$` if present. Otherwise unknown — let spec-author propose one.
+- The brief = remainder. If empty and ID is unknown, ask humain for a brief.
 
-Pre-flight:
+Delegate to the `spec-author` sub-agent. Prompt template:
 
-0. Sanitize ID: extract first token. Must match `^[A-Z]+-[0-9]+$`. Otherwise abort with reason.
-1. Verify `specs/acceptance/` directory exists. If not, create it (it's a project bootstrap moment).
-2. If the user gave an ID for a new spec and the file already exists, confirm with the user whether to iterate or pick a different ID — don't overwrite.
+> Author or iterate on the acceptance spec for the ticket described below.
 
-Delegate to the `spec-author` sub-agent with this prompt:
+Brief: <quoted brief>
 
-> Author or iterate on the acceptance spec for ticket `$ARGUMENTS`. Follow your full workflow: orient (read CLAUDE.md, specs/README.md, existing specs for format), ask round-1 questions (max 5), draft v1, run the quality checklist, surface open questions, iterate with the human until checklist is green and human says ready. Never mark Status: ready without explicit human confirmation. Never propose implementations.
+Follow your full workflow: orient (read CLAUDE.md, specs/README.md, existing specs for format), ask questions (min 5), draft v1, run the quality checklist, surface open questions, iterate with the humain until checklist is green and humain says ready. Never mark Status: ready without explicit humain confirmation. Never propose implementations.
 
 After the spec-author returns:
 

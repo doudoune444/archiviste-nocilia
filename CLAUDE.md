@@ -29,7 +29,7 @@ infra/          # Terraform + docker-compose
 2. **Plan avant code** : `/plan <ID>` → `architect` produit `plan.md` validé humain. **Pre-flight obligatoire** avant `ExitPlanMode` ou plan finalisé : agent liste (a) fichiers/dirs lus, (b) 3 hypothèses clés du plan, (c) zones d'incertitude. Attend confirmation humaine avant de présenter le plan.
 3. **Vertical slice ≤ 300 lignes/PR** : 1 PR = 1 ticket = end-to-end.
 4. **Sub-agents séparés** : `spec-author`, `architect`, `implementer`, `reviewer`, `eval-runner`, `debugger`.
-5. **Branch topology** : trunk-based — `main` ← `feat/<ID>-slug`. PR target = `main`. Tags `vX.Y.Z` gérés par release-please. Voir [`docs/adr/0004-trunk-based-development.md`](docs/adr/0004-trunk-based-development.md).
+5. **Branch topology** : trunk-based — `main` ← `feat/<ID>-slug`. PR target = `main`. **Worktrees pour parallélisme** : 1 ticket = 1 worktree sous `.worktrees/<ID>/`, main repo reste sur `main`. Création : `git worktree add -b feat/<ID>-slug .worktrees/<ID>`. Tags `vX.Y.Z` gérés par release-please. Voir [`docs/adr/0004-trunk-based-development.md`](docs/adr/0004-trunk-based-development.md).
 6. **Commits = agents, validation humaine** : agent prépare le diff + message de commit, **présente à l'humain et attend validation explicite** avant `git commit`. Scopes : `docs(spec):`, `docs(plan):`, `feat/fix(scope):`, `docs(review):`, `chore(eval):`. Humain ne commit pas à la main.
 7. **CI gates** : `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` + `ruff check` + `mypy --strict` + `pytest` + schemathesis (si OpenAPI) + Ragas eval (si RAG).
 

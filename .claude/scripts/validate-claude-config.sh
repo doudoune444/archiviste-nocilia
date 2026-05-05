@@ -26,7 +26,7 @@ fi
 
 # 2. settings.json must be valid JSON.
 if [ -f "$REPO_ROOT/.claude/settings.json" ]; then
-  if ! python -c "import json,sys; json.load(open(r'$REPO_ROOT/.claude/settings.json'))" 2>/dev/null; then
+  if ! python -c "import json,sys; json.load(open(sys.argv[1]))" "$REPO_ROOT/.claude/settings.json" 2>/dev/null; then
     echo "BLOCKED: .claude/settings.json invalid JSON" >&2
     fail=1
   fi

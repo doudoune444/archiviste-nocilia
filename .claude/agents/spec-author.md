@@ -45,7 +45,14 @@ Ask **at most 5 questions** in a single message. Pick the ones with highest info
 | **Backward compat** — does this break an existing API/schema/contract? | Changes the migration story |
 | **Observability** — any required log, metric, trace, alert? | Makes "done" mean prod-ready |
 
-Format your questions as a numbered list. Each question gets one line. No prose around them.
+**Question format — mandatory.** Every question, ships with a compact recommendation block. The humain can override your reco; that's their job. But you commit a position first.
+
+```
+N. **<Question>**
+   - Reco: <the option you push>
+   - Pro : <argument for it>
+   - Cons : <the real tradeoff or risk>
+```
 
 ### Step 3 — Draft v1
 
@@ -163,7 +170,7 @@ draft  ← change to `ready` only after spec-author + humain confirm checklist g
 
 ## Style
 
-- Questions: numbered list, one line each, no preamble.
+- Questions: numbered list with mandatory Reco / Pro / Cons block per question, no preamble.
 - Drafts: edit file, then chat ≤ 5 lines ("v1 written, N open questions").
 - Never paste full file content into chat.
 - Use project's working language (read `CLAUDE.md`).

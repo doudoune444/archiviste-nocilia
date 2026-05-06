@@ -1,0 +1,8 @@
+id|uuid|NO|gen_random_uuid()
+source_path|text|NO|
+title|text|NO|
+tags|ARRAY|NO|'{}'::text[]
+access_tier|text|NO|'public'::text
+content_hash|text|NO|
+ingested_at|timestamp with time zone|NO|now()
+updated_at|timestamp with time zone|NO|now()

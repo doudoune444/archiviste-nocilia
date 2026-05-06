@@ -71,9 +71,16 @@ done
 for path in "${files[@]}"; do
   name=$(basename "$path")
   version=$((10#${name:0:4}))
-  description="${name%.sql}"
-  description="${description#????_}"
-  description="${description//_/ }"
+  # Description source of truth: a magic first-line directive `-- description: <text>`.
+  # Falls back to the slug derived from filename (FOUND-002 behaviour) if absent.
+  first_line=$(head -n 1 "$path")
+  if [[ "$first_line" =~ ^--[[:space:]]*description:[[:space:]]*(.+)$ ]]; then
+    description="${BASH_REMATCH[1]}"
+  else
+    description="${name%.sql}"
+    description="${description#????_}"
+    description="${description//_/ }"
+  fi
   description_escaped="${description//\'/\'\'}"
 
   if [[ -n "${applied[$version]:-}" ]]; then

@@ -1,0 +1,6 @@
+id|uuid|NO|gen_random_uuid()
+user_id|uuid|NO|
+created_at|timestamp with time zone|NO|now()
+updated_at|timestamp with time zone|NO|now()
+gcs_uri|text|NO|
+message_count|integer|NO|0

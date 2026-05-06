@@ -1,0 +1,13 @@
+id|uuid|NO|gen_random_uuid()
+request_id|uuid|NO|
+user_id|uuid|NO|
+conversation_id|uuid|YES|
+query_text|text|NO|
+intent|text|YES|
+mode|text|YES|
+status_code|integer|NO|
+latency_ms|integer|NO|
+prompt_tokens|integer|YES|
+completion_tokens|integer|YES|
+cost_eur|numeric|YES|
+created_at|timestamp with time zone|NO|now()

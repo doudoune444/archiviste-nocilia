@@ -1,0 +1,5 @@
+id|uuid|NO|gen_random_uuid()
+document_id|uuid|NO|
+ord|integer|NO|
+text|text|NO|
+embedding|USER-DEFINED|NO|

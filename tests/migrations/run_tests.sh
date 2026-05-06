@@ -200,9 +200,12 @@ psql_db "INSERT INTO conversations (id, user_id, gcs_uri)
                  'gs://bucket/conv-ac8.md');" >/dev/null
 psql_db "INSERT INTO tickets (conversation_id, question)
          VALUES ('11111111-1111-1111-1111-111111111111', 'q?');" >/dev/null
-delete_err=$(docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
-  psql -U postgres -d archiviste -v ON_ERROR_STOP=1 \
-  -c "DELETE FROM conversations WHERE id='11111111-1111-1111-1111-111111111111';" 2>&1 || true)
+delete_err=$(docker exec -i -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
+  psql -U postgres -d archiviste -v ON_ERROR_STOP=1 <<'SQL' 2>&1 || true
+\set VERBOSITY verbose
+DELETE FROM conversations WHERE id='11111111-1111-1111-1111-111111111111';
+SQL
+)
 echo "$delete_err" | grep -q "23503" || { echo "FAIL AC-8 expected SQLSTATE 23503: $delete_err"; exit 1; }
 remaining=$(psql_db "SELECT COUNT(*) FROM conversations WHERE id='11111111-1111-1111-1111-111111111111';")
 assert_eq "$remaining" "1" "AC-8 conversation retained"

@@ -71,6 +71,9 @@
       "Write(./specs/plans/**)",
       "Write(./specs/reviews/**)",
       "Write(./specs/acceptance/**)",
+      "Write(./tests/**)",
+      "Write(./migrations/run.sh)",
+      "Write(./migrations/README.md)",
       "Write(./CHANGELOG.md)",
       "Edit(./gateway/**)",
       "Edit(./workers/**)",
@@ -82,6 +85,9 @@
       "Edit(./specs/plans/**)",
       "Edit(./specs/reviews/**)",
       "Edit(./specs/acceptance/**)",
+      "Edit(./tests/**)",
+      "Edit(./migrations/run.sh)",
+      "Edit(./migrations/README.md)",
       "Edit(./CHANGELOG.md)",
       "Edit(./CLAUDE.md)",
       "Edit(./README.md)",
@@ -125,9 +131,9 @@
       "Read(./.pypirc)",
       "Read(./secrets/**)",
       "Edit(./eval/baseline.json)",
-      "Edit(./migrations/**)",
+      "Edit(./migrations/*.sql)",
       "Write(./eval/baseline.json)",
-      "Write(./migrations/**)"
+      "Write(./migrations/*.sql)"
     ]
   },
   "hooks": {

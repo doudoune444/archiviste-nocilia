@@ -238,16 +238,22 @@ echo "$dim_err" | grep -q "expected 1024 dimensions" \
   || { echo "FAIL AC-11 expected 1024 dimensions, got: $dim_err"; exit 1; }
 
 # AC-12: tickets.status check_violation.
-status_err=$(docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
-  psql -U postgres -d archiviste -v ON_ERROR_STOP=1 \
-  -c "INSERT INTO tickets (conversation_id, question, status)
-      VALUES ('11111111-1111-1111-1111-111111111111', 'q?', 'unknown');" 2>&1 || true)
+status_err=$(docker exec -i -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
+  psql -U postgres -d archiviste -v ON_ERROR_STOP=1 <<'SQL' 2>&1 || true
+\set VERBOSITY verbose
+INSERT INTO tickets (conversation_id, question, status)
+VALUES ('11111111-1111-1111-1111-111111111111', 'q?', 'unknown');
+SQL
+)
 echo "$status_err" | grep -q "23514" || { echo "FAIL AC-12 SQLSTATE 23514: $status_err"; exit 1; }
 
 # AC-13: users.tier check_violation.
-tier_err=$(docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
-  psql -U postgres -d archiviste -v ON_ERROR_STOP=1 \
-  -c "INSERT INTO users (tier) VALUES ('admin');" 2>&1 || true)
+tier_err=$(docker exec -i -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
+  psql -U postgres -d archiviste -v ON_ERROR_STOP=1 <<'SQL' 2>&1 || true
+\set VERBOSITY verbose
+INSERT INTO users (tier) VALUES ('admin');
+SQL
+)
 echo "$tier_err" | grep -q "23514" || { echo "FAIL AC-13 SQLSTATE 23514: $tier_err"; exit 1; }
 
 # AC-14: schema_version row (2, 'schema walking skeleton').

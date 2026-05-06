@@ -166,3 +166,38 @@ cat boot-metrics.json
 
 Note Windows : `make`, `bash` et les scripts POSIX supposent Git Bash, WSL,
 ou un shell équivalent.
+
+## Ingestion lore (ING-001)
+
+Pipeline CLI one-shot : parcourt `lore/`, parse frontmatter YAML, normalise
+NFKC + strip controls, chunk via `RecursiveCharacterTextSplitter` (tokenizer
+`BAAI/bge-m3`, 512/64), embed avec sentence-transformers, UPSERT idempotent
+dans `documents` + `chunks` (transaction par fichier, hash SHA-256 du corps
+normalisé).
+
+Pré-requis :
+- FOUND-002 : `make migrate` appliqué (extensions + `schema_version`).
+- FOUND-003 : `documents` + `chunks` créés.
+- Premier run : réseau sortant pour télécharger `BAAI/bge-m3` (~2.3 GiB) dans
+  `~/.cache/huggingface/`. Runs suivants : cache hit, aucune requête sortante.
+
+Variables d'environnement :
+- `DATABASE_URL` (cf `.env.example`).
+- `EMBED_BATCH_SIZE` (optionnel, défaut `32`).
+
+Commande :
+
+```bash
+cd workers
+uv run python -m archiviste_workers.ingest --path lore/
+```
+
+Comportement :
+- `inserted` : nouveau `source_path`, INSERT documents + chunks.
+- `skipped` (`reason: unchanged`) : `content_hash` identique → aucune écriture.
+- `updated` : hash différent → `DELETE chunks` + `UPDATE documents` + nouvelle
+  séquence chunks dans une transaction unique.
+- `error` : frontmatter invalide, fichier > 1 MiB, ou erreur DB.
+
+Logs JSON sur stdout : `ingest.start`, un `ingest.document` par fichier,
+`ingest.summary` final. Exit code 0 si zéro erreur, 1 sinon (2 = init fatal).

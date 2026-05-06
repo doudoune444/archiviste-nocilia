@@ -14,6 +14,8 @@ from archiviste_workers.conversation.gcs_storage import (
 )
 from archiviste_workers.conversation.repository import ConversationRepository
 from archiviste_workers.conversation.router import router as conversation_router
+from archiviste_workers.embedder import Embedder
+from archiviste_workers.retrieve.router import router as retrieve_router
 from archiviste_workers.routers import health
 from archiviste_workers.settings import Settings
 
@@ -40,6 +42,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gcs_storage = storage
     app.state.conversation_repo = ConversationRepository(pool)
 
+    # RET-001 AC-6: load embedder once at startup; failure leaves state=None (AC-13).
+    # Catch broad Exception: model download / OOM / file IO can surface various
+    # exception classes from sentence-transformers; we never want to crash the boot.
+    try:
+        app.state.embedder = Embedder(settings.embedding_model)
+    except Exception as exc:
+        logger.warning("embedder_unavailable", error_type=type(exc).__name__)
+        app.state.embedder = None
+
     logger.info("workers.startup", version=__version__, env=settings.env)
     try:
         yield
@@ -56,3 +67,4 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(conversation_router)
+app.include_router(retrieve_router)

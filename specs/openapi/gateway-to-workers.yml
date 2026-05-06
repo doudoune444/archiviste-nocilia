@@ -168,7 +168,8 @@ components:
         contexts:
           type: array
           items:
-            $ref: '#/components/schemas/Chunk'
+            # RET-001 review MED: point at RetrievedChunk (was `Chunk`, removed by RET-001). GEN-001 will redefine.
+            $ref: '#/components/schemas/RetrievedChunk'
         conversation_id:
           type: string
           format: uuid

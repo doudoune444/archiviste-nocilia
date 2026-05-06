@@ -8,6 +8,7 @@ Sequence per AC-1..AC-16 :
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -148,7 +149,9 @@ async def _execute_search(
     log_fields: dict[str, Any],
 ) -> Response:
     embedding_started = time.perf_counter()
-    [vector] = embedder.encode_batch([query], batch_size=1)
+    # RET-001 review MED: offload synchronous CPU encode so concurrent retrieves
+    # don't serialize on the event loop. Measure around the awaited call.
+    [vector] = await asyncio.to_thread(embedder.encode_batch, [query], 1)
     log_fields["embedding_ms"] = _elapsed_ms(embedding_started)
 
     pool = request.app.state.db_pool

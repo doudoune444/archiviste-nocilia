@@ -1,0 +1,3 @@
+id|uuid|NO|gen_random_uuid()
+tier|text|NO|
+created_at|timestamp with time zone|NO|now()

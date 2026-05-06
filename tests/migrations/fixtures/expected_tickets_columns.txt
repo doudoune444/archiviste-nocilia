@@ -1,0 +1,8 @@
+id|uuid|NO|gen_random_uuid()
+conversation_id|uuid|NO|
+question|text|NO|
+category|text|NO|'uncategorized'::text
+priority_score|integer|NO|1
+status|text|NO|'open'::text
+created_at|timestamp with time zone|NO|now()
+updated_at|timestamp with time zone|NO|now()

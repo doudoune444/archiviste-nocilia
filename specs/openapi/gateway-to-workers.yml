@@ -26,7 +26,10 @@ paths:
 
   /v1/retrieve:
     post:
-      summary: Retrieve top-k chunks for a query
+      summary: Retrieve top-k chunks for a query (RET-001)
+      description: |
+        Embed the query with bge-m3, run an ACL-filtered cosine top-K SQL against
+        `chunks`, return the ordered chunks with deterministic tie-break.
       requestBody:
         required: true
         content:
@@ -35,15 +38,23 @@ paths:
               $ref: '#/components/schemas/RetrieveRequest'
       responses:
         '200':
-          description: Top-k chunks
+          description: Top-k chunks (may be empty)
           content:
-            application/json:
+            application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/RetrieveResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+          description: Invalid request body
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RetrieveError'
+        '503':
+          description: Embedder or database unavailable
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RetrieveError'
 
   /v1/generate:
     post:
@@ -76,51 +87,77 @@ components:
 
     RetrieveRequest:
       type: object
-      required: [query, conversation_id]
+      additionalProperties: true
+      required: [query, user_tier]
       properties:
         query:
           type: string
           minLength: 1
-          maxLength: 2000
-        conversation_id:
-          type: string
-          format: uuid
+          maxLength: 4096
+          description: |
+            Free-text query, non-empty after strip, at most 4096 UTF-8 bytes.
         top_k:
           type: integer
           minimum: 1
           maximum: 20
           default: 5
-        mode:
+          description: Number of chunks to return. Defaults to 5 if absent or null.
+          nullable: true
+        user_tier:
           type: string
-          enum: [vector, hybrid, bm25, mmr]
-          default: hybrid
+          enum: [anonymous, members, author_only]
+          description: ACL scope mapping directly to `documents.access_tier`.
 
     RetrieveResponse:
       type: object
-      required: [chunks, retrieval_id]
+      required: [chunks, embedding_ms, search_ms]
       properties:
-        retrieval_id:
-          type: string
-          format: uuid
         chunks:
           type: array
           items:
-            $ref: '#/components/schemas/Chunk'
+            $ref: '#/components/schemas/RetrievedChunk'
+        embedding_ms:
+          type: integer
+          minimum: 0
+        search_ms:
+          type: integer
+          minimum: 0
 
-    Chunk:
+    RetrievedChunk:
       type: object
-      required: [id, text, score, source]
+      required: [chunk_id, document_id, source_path, ord, text, score]
       properties:
-        id:
+        chunk_id:
           type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        source_path:
+          type: string
+        ord:
+          type: integer
+          minimum: 0
         text:
           type: string
         score:
           type: number
           minimum: 0
           maximum: 1
-        source:
+
+    RetrieveError:
+      type: object
+      required: [error]
+      properties:
+        error:
           type: string
+          enum:
+            - invalid_request
+            - invalid_query
+            - invalid_top_k
+            - invalid_user_tier
+            - embedder_unavailable
+            - database_unavailable
 
     GenerateRequest:
       type: object
@@ -131,7 +168,8 @@ components:
         contexts:
           type: array
           items:
-            $ref: '#/components/schemas/Chunk'
+            # RET-001 review MED: point at RetrievedChunk (was `Chunk`, removed by RET-001). GEN-001 will redefine.
+            $ref: '#/components/schemas/RetrievedChunk'
         conversation_id:
           type: string
           format: uuid

@@ -25,5 +25,5 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
-    embedding_model: str = "intfloat/multilingual-e5-base"
+    embedding_model: str = "BAAI/bge-m3"
     default_chat_model: str = "claude-3-5-sonnet-20241022"

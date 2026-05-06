@@ -40,6 +40,20 @@ jobs:
         # REDIS_PASSWORD picked up from `.env` written above.
         run: docker compose pull postgres redis
 
+      - name: provision pgvector extension (RET-001)
+        # Workers lifespan registers the pgvector codec at boot, which fails if
+        # the extension isn't installed. measure-boot.sh's `docker compose up -d`
+        # is idempotent, so starting postgres early + creating the extension
+        # before workers start keeps boot-metrics.json schema unchanged.
+        run: |
+          docker compose up -d postgres
+          for i in {1..30}; do
+            if docker compose exec -T postgres pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+          docker compose exec -T postgres psql -U postgres -d archiviste \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
       - name: measure boot
         id: measure
         continue-on-error: true

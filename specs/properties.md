@@ -12,6 +12,8 @@ Chaque invariant a un ID. Les property tests le référencent dans un commentair
 | INV-6 | Auth : toute requête sans JWT valide retourne 401, jamais 200 avec un tier dégradé | `gateway/tests/auth_properties.rs` | proptest |
 | INV-7 | `conversation_id` d'un ticket référence une ligne de conversation existante (FK enforcée en DB) | `workers/tests/test_ticket_creation.py` | hypothesis |
 | INV-8 | Le cost tracker : `total_cost == somme(per_call_cost)` pour toute séquence d'appels | `workers/tests/test_cost_tracker_properties.py` | hypothesis |
+| INV-9 | Tout score retourné par `/v1/retrieve` est borné : `score ∈ [0, 1]` (cosine similarity normalisée) | `workers/tests/test_retrieve_properties.py` | hypothesis |
+| INV-10 | La réponse `/v1/retrieve` respecte `len(chunks) ≤ top_k` et tous les `chunk_id` sont uniques dans la réponse | `workers/tests/test_retrieve_properties.py` | hypothesis |
 
 ## Ajouter un invariant
 

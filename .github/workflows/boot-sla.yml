@@ -21,12 +21,14 @@ jobs:
 
       - name: write .env (placeholders only)
         # GCS_EMULATOR_HOST forces workers to skip ADC discovery at boot (ING-003).
-        # Boot SLA measures startup time, not GCS round-trip; no API call is issued.
+        # `.invalid` TLD is reserved by RFC 2606 and guaranteed to never resolve,
+        # so any accidental GCS call (e.g. config leak to prod) fails closed
+        # instead of exfiltrating conversation content to a real host.
         run: |
           {
             echo "REDIS_PASSWORD=ci-placeholder"
             echo "DATABASE_URL=postgres://postgres:postgres@postgres:5432/archiviste"
-            echo "GCS_EMULATOR_HOST=http://placeholder"
+            echo "GCS_EMULATOR_HOST=http://gcs.invalid"
           } > .env
 
       - name: build images

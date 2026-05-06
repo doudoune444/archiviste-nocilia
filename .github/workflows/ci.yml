@@ -111,6 +111,15 @@ jobs:
         working-directory: workers
         run: uv sync --all-extras
 
+      - name: provision pgvector extension (RET-001)
+        # Workers lifespan registers the pgvector codec at boot; without the
+        # extension the introspection of `public.vector` fails and uvicorn exits.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d archiviste \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
       - name: start workers
         working-directory: workers
         env:

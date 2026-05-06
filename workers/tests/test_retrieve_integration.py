@@ -230,9 +230,14 @@ async def test_top_k_caps_results_and_orders_by_score(
 async def test_database_unavailable_returns_503(shared_embedder: Embedder) -> None:
     """AC-14: closed pool → 503 database_unavailable, no DB error string in body."""
     # Use a dedicated pool we own + close, so the shared `clean_db` fixture stays
-    # healthy for sibling tests in the module.
+    # healthy for sibling tests in the module. Mirror conftest.db_pool skip gate
+    # so this test (which doesn't consume `clean_db`) doesn't crash CI when
+    # Postgres is unreachable.
     dsn = os.environ.get("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/archiviste")
-    pool = await create_pool(dsn)
+    try:
+        pool = await create_pool(dsn)
+    except (OSError, RuntimeError, ConnectionError) as exc:
+        pytest.skip(f"postgres unavailable: {exc}")
     await pool.close()
 
     app = FastAPI()

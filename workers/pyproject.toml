@@ -20,6 +20,9 @@ dependencies = [
     "langchain-openai>=0.2",
     "langchain-anthropic>=0.2",
     "sentence-transformers>=3.3",
+    "transformers>=4.45",
+    "langchain-text-splitters>=0.3",
+    "pyyaml>=6.0",
     "google-cloud-storage>=2.18",
     "langfuse>=2.55",
     "structlog>=24.4",
@@ -41,6 +44,7 @@ dev = [
     "datasets>=3.2",
     "pip-audit>=2.7",
     "detect-secrets>=1.5",
+    "types-PyYAML>=6.0",
 ]
 
 [build-system]
@@ -90,6 +94,19 @@ disallow_untyped_defs = true
 disallow_any_generics = true
 no_implicit_optional = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "asyncpg",
+    "pgvector.*",
+    "sentence_transformers",
+    "sentence_transformers.*",
+    "transformers",
+    "transformers.*",
+    "langchain_text_splitters",
+    "langchain_text_splitters.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

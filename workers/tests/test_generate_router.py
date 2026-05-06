@@ -123,7 +123,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_nominal_response_shape() -> None:
-    # AC-1, AC-3, AC-4, AC-24.
+    # AC-1, AC-3.
     captured: dict[str, Any] = {}
     chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha"}]
     llm = _FakeLlmClient()
@@ -143,8 +143,50 @@ async def test_nominal_response_shape() -> None:
     assert body["citations"] == [{"source_path": "a/b.md", "chunk_ords": [0]}]
     assert isinstance(body["retrieve_ms"], int)
     assert isinstance(body["llm_ms"], int)
-    assert body["retrieve_ms"] + body["llm_ms"] <= max(body["retrieve_ms"] + body["llm_ms"], 1)
     assert captured["headers"]["x-request-id"] == REQUEST_ID
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_timings_consistent_with_query_log_latency(db_pool: asyncpg.Pool) -> None:
+    # AC-24: retrieve_ms + llm_ms <= latency_ms persisted in query_log.
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha"}]
+    llm = _FakeLlmClient()
+    app, http_clients = _build_app(
+        retrieve_handler=_retrieve_handler_factory(chunks=chunks),
+        conversation_handler=_conversation_handler,
+        llm_client=llm,
+        pool=db_pool,
+    )
+    request_id = "77777777-7777-4777-8777-777777777777"
+    conversation_id = "88888888-8888-4888-8888-888888888888"
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM query_log WHERE request_id=$1", request_id)
+        await conn.execute("DELETE FROM conversations WHERE id=$1", conversation_id)
+        await conn.execute(
+            "INSERT INTO conversations (id, user_id, gcs_uri) VALUES ($1, $2, $3)",
+            conversation_id,
+            USER_ID,
+            f"gs://test/{conversation_id}.md",
+        )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/generate",
+            json=_payload(request_id=request_id, conversation_id=conversation_id),
+        )
+    assert r.status_code == 200
+    body = r.json()
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT latency_ms FROM query_log WHERE request_id=$1", request_id
+        )
+    assert row is not None
+    assert body["retrieve_ms"] + body["llm_ms"] <= row["latency_ms"]
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM query_log WHERE request_id=$1", request_id)
+        await conn.execute("DELETE FROM conversations WHERE id=$1", conversation_id)
     for http in http_clients:
         await http.aclose()
 
@@ -201,7 +243,7 @@ async def test_retrieve_failure_502_no_query_log_no_llm() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/v1/generate", json=_payload())
     assert r.status_code == 502
-    assert r.json()["detail"]["error"] == "retrieve_failed"
+    assert r.json() == {"error": "retrieve_failed"}
     assert llm.captured_messages == []
     app.state.query_log_repo.insert.assert_not_called()
     for http in http_clients:
@@ -221,7 +263,7 @@ async def test_llm_upstream_4xx_502() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/v1/generate", json=_payload())
     assert r.status_code == 502
-    assert r.json()["detail"]["error"] == "llm_upstream"
+    assert r.json() == {"error": "llm_upstream"}
     app.state.query_log_repo.insert.assert_called_once()
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
     assert inserted_row.status_code == 502
@@ -261,7 +303,7 @@ async def test_llm_timeout_504() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/v1/generate", json=_payload())
     assert r.status_code == 504
-    assert r.json()["detail"]["error"] == "llm_timeout"
+    assert r.json() == {"error": "llm_timeout"}
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
     assert inserted_row.status_code == 504
     assert inserted_row.prompt_tokens is None

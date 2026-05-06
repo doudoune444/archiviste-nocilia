@@ -46,7 +46,7 @@ async def test_empty_query_400(client: AsyncClient) -> None:
     # AC-17.
     r = await client.post("/v1/generate", json=_payload(query=""))
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "invalid_query"
+    assert r.json() == {"error": "invalid_query"}
 
 
 @pytest.mark.asyncio
@@ -55,7 +55,7 @@ async def test_oversize_query_400(client: AsyncClient) -> None:
     big = "a" * (4 * 1024 + 1)
     r = await client.post("/v1/generate", json=_payload(query=big))
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "invalid_query"
+    assert r.json() == {"error": "invalid_query"}
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,7 @@ async def test_invalid_user_id_400(client: AsyncClient) -> None:
     # AC-18.
     r = await client.post("/v1/generate", json=_payload(user_id="not-a-uuid"))
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "invalid_user_id"
+    assert r.json() == {"error": "invalid_user_id"}
 
 
 @pytest.mark.asyncio
@@ -73,7 +73,7 @@ async def test_missing_request_id_400(client: AsyncClient) -> None:
     del payload["request_id"]
     r = await client.post("/v1/generate", json=payload)
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "invalid_request_id"
+    assert r.json() == {"error": "invalid_request_id"}
 
 
 @pytest.mark.asyncio
@@ -81,4 +81,4 @@ async def test_invalid_user_tier_422(client: AsyncClient) -> None:
     # AC-19.
     r = await client.post("/v1/generate", json=_payload(user_tier="admin"))
     assert r.status_code == 422
-    assert r.json()["detail"]["error"] == "invalid_user_tier"
+    assert r.json() == {"error": "invalid_user_tier"}

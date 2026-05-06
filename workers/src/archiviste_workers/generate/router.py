@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from archiviste_workers.generate.injection_filter import detect_injection
@@ -37,8 +38,18 @@ logger = structlog.get_logger()
 TOP_K = 5
 
 
-def _http_error(status: int, code: str) -> HTTPException:
-    return HTTPException(status_code=status, detail={"error": code})
+class _GenerateError(Exception):
+    # Internal-only sentinel: caught by post_generate to emit a JSON body of exactly
+    # {"error": code} (spec AC-11/17/18/19/21/22/23). Avoids FastAPI's HTTPException
+    # which wraps detail under {"detail": ...}.
+    def __init__(self, status: int, code: str) -> None:
+        super().__init__(code)
+        self.status = status
+        self.code = code
+
+
+def _error_response(status: int, code: str) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": code})
 
 
 def _parse_request(payload: dict[str, Any]) -> GenerateRequest:
@@ -47,35 +58,44 @@ def _parse_request(payload: dict[str, Any]) -> GenerateRequest:
         and isinstance(payload["user_id"], str)
         and not is_valid_uuid(payload["user_id"])
     ):
-        raise _http_error(400, "invalid_user_id")
+        raise _GenerateError(400, "invalid_user_id")
     if "request_id" not in payload or not isinstance(payload.get("request_id"), str):
-        raise _http_error(400, "invalid_request_id")
+        raise _GenerateError(400, "invalid_request_id")
     if not is_valid_uuid(payload["request_id"]):
-        raise _http_error(400, "invalid_request_id")
+        raise _GenerateError(400, "invalid_request_id")
     if (
         payload.get("conversation_id") is not None
         and isinstance(payload["conversation_id"], str)
         and not is_valid_uuid(payload["conversation_id"])
     ):
-        raise _http_error(400, "invalid_conversation_id")
+        raise _GenerateError(400, "invalid_conversation_id")
     try:
         return GenerateRequest.model_validate(payload)
     except ValidationError as exc:
         for err in exc.errors():
             loc = err.get("loc", ())
             if loc and loc[0] == "user_tier":
-                raise _http_error(422, "invalid_user_tier") from exc
+                raise _GenerateError(422, "invalid_user_tier") from exc
             if loc and loc[0] == "user_id":
-                raise _http_error(400, "invalid_user_id") from exc
+                raise _GenerateError(400, "invalid_user_id") from exc
             if loc and loc[0] == "request_id":
-                raise _http_error(400, "invalid_request_id") from exc
+                raise _GenerateError(400, "invalid_request_id") from exc
             if loc and loc[0] == "query":
-                raise _http_error(400, "invalid_query") from exc
-        raise _http_error(400, "invalid_query") from exc
+                raise _GenerateError(400, "invalid_query") from exc
+        raise _GenerateError(400, "invalid_query") from exc
 
 
 @router.post("/generate", response_model=GenerateResponse)
-async def post_generate(request: Request, payload: dict[str, Any]) -> GenerateResponse:
+async def post_generate(
+    request: Request, payload: dict[str, Any]
+) -> GenerateResponse | JSONResponse:
+    try:
+        return await _handle_generate(request, payload)
+    except _GenerateError as exc:
+        return _error_response(exc.status, exc.code)
+
+
+async def _handle_generate(request: Request, payload: dict[str, Any]) -> GenerateResponse:
     parsed = _parse_request(payload)
     conversation_id = parsed.conversation_id or str(uuid.uuid4())
     suspected = detect_injection(parsed.query)
@@ -101,7 +121,7 @@ async def post_generate(request: Request, payload: dict[str, Any]) -> GenerateRe
         )
     except RetrieveError as exc:
         logger.error("retrieve_failed", request_id=parsed.request_id, error=str(exc))
-        raise _http_error(502, "retrieve_failed") from exc
+        raise _GenerateError(502, "retrieve_failed") from exc
     retrieve_ms = int((time.perf_counter() - retrieve_started) * 1000)
 
     messages = build_messages(parsed.query, chunks, suspected_injection=bool(suspected))
@@ -125,7 +145,7 @@ async def post_generate(request: Request, payload: dict[str, Any]) -> GenerateRe
                 cost_eur=None,
             )
         )
-        raise _http_error(504, "llm_timeout") from None
+        raise _GenerateError(504, "llm_timeout") from None
     except LlmUpstreamError as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
@@ -143,7 +163,7 @@ async def post_generate(request: Request, payload: dict[str, Any]) -> GenerateRe
                 cost_eur=None,
             )
         )
-        raise _http_error(502, "llm_upstream") from exc
+        raise _GenerateError(502, "llm_upstream") from exc
     llm_ms = int((time.perf_counter() - llm_started) * 1000)
 
     answer = str(ai_message.content) if ai_message.content is not None else ""

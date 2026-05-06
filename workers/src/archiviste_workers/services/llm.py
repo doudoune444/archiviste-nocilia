@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
+from langchain_anthropic import ChatAnthropic
+from langchain_deepseek import ChatDeepSeek
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_mistralai import ChatMistralAI
+from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from archiviste_workers.generate.models import Usage
@@ -61,28 +66,16 @@ class LlmConfig:
 
 
 def _build_chat_model(config: LlmConfig) -> BaseChatModel:
-    # Lazy imports: only load the chosen provider's package at runtime to keep
-    # cold-start light and avoid pulling 5 SDKs when one is in use.
     key = config.api_key.get_secret_value()
     if config.provider == "mistral":
-        from langchain_mistralai import ChatMistralAI
-
         return ChatMistralAI(model=config.model, api_key=SecretStr(key), timeout=LLM_TIMEOUT_S)
     if config.provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
         return ChatAnthropic(model=config.model, api_key=SecretStr(key), timeout=LLM_TIMEOUT_S)
     if config.provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
         return ChatGoogleGenerativeAI(model=config.model, google_api_key=key, timeout=LLM_TIMEOUT_S)
     if config.provider == "openai":
-        from langchain_openai import ChatOpenAI
-
         return ChatOpenAI(model=config.model, api_key=SecretStr(key), timeout=LLM_TIMEOUT_S)
     if config.provider == "deepseek":
-        from langchain_deepseek import ChatDeepSeek
-
         return ChatDeepSeek(model_name=config.model, api_key=SecretStr(key), timeout=LLM_TIMEOUT_S)
     raise LlmConfigError(f"unsupported provider {config.provider!r}")  # pragma: no cover
 

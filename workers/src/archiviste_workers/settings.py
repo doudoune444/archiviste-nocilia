@@ -1,5 +1,6 @@
 """Application settings via pydantic-settings."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +13,11 @@ class Settings(BaseSettings):
 
     env: str = "local"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste"
-    gcs_bucket_conversations: str = "archiviste-conversations-dev"
+
+    # GCS_BUCKET is required (fail-fast at boot per AC-12, no default).
+    gcs_bucket: str = Field(...)
+    # When set, GCS client targets the emulator (fake-gcs-server). Unset in prod -> ADC.
+    gcs_emulator_host: str | None = None
 
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

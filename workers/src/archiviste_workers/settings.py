@@ -1,7 +1,11 @@
 """Application settings via pydantic-settings."""
 
-from pydantic import Field
+from typing import Literal
+
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LlmProvider = Literal["mistral", "anthropic", "google", "openai", "deepseek"]
 
 
 class Settings(BaseSettings):
@@ -27,3 +31,12 @@ class Settings(BaseSettings):
 
     embedding_model: str = "BAAI/bge-m3"
     default_chat_model: str = "claude-3-5-sonnet-20241022"
+
+    # GEN-001: LLM wrapper config-driven (AC-8/10).
+    llm_provider: LlmProvider | None = None
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+
+    # GEN-001: internal worker -> worker base URL for /v1/retrieve and ING-003.
+    workers_internal_base_url: str = "http://localhost:8000"
+    conversation_internal_base_url: str = "http://localhost:8000"

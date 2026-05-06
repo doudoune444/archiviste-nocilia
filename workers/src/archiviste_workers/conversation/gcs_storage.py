@@ -25,7 +25,7 @@ from archiviste_workers.conversation.models import (
 
 # AC-2 / AC-3: byte-for-byte format. Do not reformat without updating tests.
 _HEADER_TEMPLATE = (
-    "# Conversation {conversation_id}\n\n" "Created: {created_at}\nUser: {user_id}\n\n---\n"
+    "# Conversation {conversation_id}\n\nCreated: {created_at}\nUser: {user_id}\n\n---\n"
 )
 _BLOCK_TEMPLATE = "## [{timestamp}] {role}\n{content}\n\n"
 

@@ -115,6 +115,10 @@ jobs:
         working-directory: workers
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+          GCS_BUCKET: archiviste-conversations-ci
+          # Skip ADC discovery; .invalid TLD never resolves (RFC 2606) so any
+          # accidental GCS call fails closed instead of hitting a real host.
+          GCS_EMULATOR_HOST: http://gcs.invalid
         run: |
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
             > /tmp/uvicorn.log 2>&1 &

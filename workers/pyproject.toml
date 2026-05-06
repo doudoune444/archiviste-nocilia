@@ -98,6 +98,8 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = [
     "asyncpg",
+    "google.cloud",
+    "google.cloud.*",
     "pgvector.*",
     "sentence_transformers",
     "sentence_transformers.*",

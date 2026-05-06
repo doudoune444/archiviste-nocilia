@@ -115,12 +115,27 @@ jobs:
         working-directory: workers
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+          GCS_BUCKET: archiviste-conversations-ci
+          # Skip ADC discovery; .invalid TLD never resolves (RFC 2606) so any
+          # accidental GCS call fails closed instead of hitting a real host.
+          GCS_EMULATOR_HOST: http://gcs.invalid
         run: |
-          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
-          for i in {1..30}; do
-            curl -sf http://localhost:8000/healthz && break
+          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/uvicorn.log 2>&1 &
+          echo $! > /tmp/uvicorn.pid
+          for i in {1..60}; do
+            if curl -sf http://localhost:8000/healthz; then
+              echo "workers up after ${i}s"
+              exit 0
+            fi
             sleep 1
           done
+          echo "workers failed to bind :8000 within 60s"
+          echo "--- uvicorn log ---"
+          cat /tmp/uvicorn.log || true
+          echo "--- process status ---"
+          ps -p "$(cat /tmp/uvicorn.pid)" || echo "uvicorn process exited"
+          exit 1
 
       - name: schemathesis
         # Scope to endpoints already implemented. Widen include-path as

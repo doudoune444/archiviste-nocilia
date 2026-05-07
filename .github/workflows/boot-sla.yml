@@ -29,6 +29,9 @@ jobs:
             echo "REDIS_PASSWORD=ci-placeholder"
             echo "DATABASE_URL=postgres://postgres:postgres@postgres:5432/archiviste"
             echo "GCS_EMULATOR_HOST=http://gcs.invalid"
+            echo "LLM_PROVIDER=mistral"
+            echo "LLM_MODEL=mistral-small-latest"
+            echo "LLM_API_KEY=ci-placeholder"
           } > .env
 
       - name: build images

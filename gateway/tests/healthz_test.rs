@@ -19,6 +19,8 @@ async fn healthz_returns_degraded_when_workers_unreachable() {
         workers_url: "http://127.0.0.1:1".to_string(),
         database_url: "postgres://test".to_string(),
         version: "0.1.0".to_string(),
+        connect_timeout_ms: 500,
+        request_timeout_ms: 1_000,
     };
     let state = Arc::new(AppState::new(config).unwrap());
     let app = router(state);

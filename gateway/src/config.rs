@@ -14,13 +14,22 @@ pub struct Config {
     pub database_url: String,
     /// Crate version string surfaced via `/healthz`.
     pub version: String,
+    /// TCP connect timeout for outbound calls to workers (milliseconds).
+    /// Defaults to 5 000 ms. Override via `CONNECT_TIMEOUT_MS` env var.
+    /// In tests, set to a low value to keep AC-9 fast.
+    pub connect_timeout_ms: u64,
+    /// Total request timeout for outbound calls to workers (milliseconds).
+    /// Defaults to 35 000 ms. Override via `REQUEST_TIMEOUT_MS` env var.
+    /// In tests, set to a low value (e.g. 200) to test AC-8 without waiting 35 s.
+    pub request_timeout_ms: u64,
 }
 
 impl Config {
     /// Read configuration from process environment.
     ///
     /// `BIND_ADDR` defaults to `0.0.0.0:8080`. `WORKERS_URL` and
-    /// `DATABASE_URL` are required.
+    /// `DATABASE_URL` are required. `CONNECT_TIMEOUT_MS` and
+    /// `REQUEST_TIMEOUT_MS` are optional (defaults: 5000 / 35000).
     ///
     /// # Errors
     ///
@@ -31,6 +40,14 @@ impl Config {
             workers_url: std::env::var("WORKERS_URL").context("WORKERS_URL env var required")?,
             database_url: std::env::var("DATABASE_URL").context("DATABASE_URL env var required")?,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            connect_timeout_ms: std::env::var("CONNECT_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5_000),
+            request_timeout_ms: std::env::var("REQUEST_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(35_000),
         })
     }
 }

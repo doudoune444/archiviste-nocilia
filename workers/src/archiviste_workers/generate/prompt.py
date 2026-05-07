@@ -31,6 +31,6 @@ def build_messages(query: str, chunks: list[Chunk], suspected_injection: bool) -
     """Return [SystemMessage, HumanMessage]. Chunks NEVER reach the system role (AC-7)."""
     prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
     user_content = (
-        f"{prefix}{query}\n" f"<retrieved_chunks>\n{_render_chunks(chunks)}\n</retrieved_chunks>"
+        f"{prefix}{query}\n<retrieved_chunks>\n{_render_chunks(chunks)}\n</retrieved_chunks>"
     )
     return [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_content)]

@@ -128,6 +128,12 @@ jobs:
           # Skip ADC discovery; .invalid TLD never resolves (RFC 2606) so any
           # accidental GCS call fails closed instead of hitting a real host.
           GCS_EMULATOR_HOST: http://gcs.invalid
+          # GEN-001 AC-8: LlmClient.from_env fails fast when LLM_* missing.
+          # Schemathesis only hits /healthz so no real provider call happens —
+          # placeholders satisfy the boot validation.
+          LLM_PROVIDER: mistral
+          LLM_MODEL: mistral-small-latest
+          LLM_API_KEY: ci-placeholder
         run: |
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
             > /tmp/uvicorn.log 2>&1 &

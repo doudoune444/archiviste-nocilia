@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use reqwest::Client;
+use std::time::Duration;
 
 use crate::config::Config;
 
@@ -10,6 +11,9 @@ pub struct AppState {
     /// Loaded runtime configuration.
     pub config: Config,
     /// HTTP client used for outbound calls to the workers tier.
+    ///
+    /// Single instance shared across all requests (keep-alive pool).
+    /// Timeouts are set from `Config.connect_timeout_ms` / `Config.request_timeout_ms`.
     pub http: Client,
 }
 
@@ -21,7 +25,9 @@ impl AppState {
     /// Returns an error if the HTTP client cannot be constructed.
     pub fn new(config: Config) -> Result<Self> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
+            .timeout(Duration::from_millis(config.request_timeout_ms))
+            .pool_idle_timeout(Duration::from_secs(90))
             .build()?;
         Ok(Self { config, http })
     }

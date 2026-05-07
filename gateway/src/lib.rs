@@ -7,11 +7,103 @@ pub mod handlers;
 pub mod state;
 
 use anyhow::Result;
-use axum::{routing::get, Router};
+use axum::{
+    extract::Request,
+    http::{HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Serialize;
 use std::sync::Arc;
-use tower_http::trace::TraceLayer;
+use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
+use uuid::Uuid;
 
 use crate::{config::Config, state::AppState};
+
+// ---------------------------------------------------------------------------
+// Request-id middleware (R2)
+// ---------------------------------------------------------------------------
+
+/// Extension type carrying the gateway-generated request identifier.
+///
+/// Generated upstream of `RequestBodyLimitLayer` so that the error handler
+/// for oversized bodies can include the `request_id` in the 400 envelope.
+#[derive(Clone)]
+pub struct RequestId(pub String);
+
+/// Middleware: generate a `UUIDv4` `request_id` and attach it to request extensions.
+///
+/// AC-16: any client-supplied `X-Request-Id` header is not forwarded — only
+/// our generated value propagates.
+async fn attach_request_id(mut req: Request, next: Next) -> Response {
+    let id = Uuid::new_v4().to_string();
+    req.extensions_mut().insert(RequestId(id));
+    next.run(req).await
+}
+
+// ---------------------------------------------------------------------------
+// Body-limit error handler
+// ---------------------------------------------------------------------------
+
+/// Error shape used by the body-limit rejection handler.
+#[derive(Serialize)]
+struct BodyLimitError {
+    error: &'static str,
+    request_id: String,
+}
+
+/// Convert a `RequestBodyLimitLayer` rejection (413) into the uniform 400 envelope.
+///
+/// The `request_id` is read from request extensions (set by `attach_request_id`).
+async fn handle_body_limit_error(req: Request, next: Next) -> Response {
+    let request_id = req
+        .extensions()
+        .get::<RequestId>()
+        .map_or_else(|| Uuid::new_v4().to_string(), |r| r.0.clone());
+
+    let resp = next.run(req).await;
+
+    if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        // Rewrite 413 → 400 with uniform envelope (AC-7).
+        let body = BodyLimitError {
+            error: "invalid_request",
+            request_id,
+        };
+        return (
+            StatusCode::BAD_REQUEST,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            )],
+            Json(body),
+        )
+            .into_response();
+    }
+
+    resp
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+/// Build the gateway router with all routes wired and shared state attached.
+pub fn router(state: Arc<AppState>) -> Router {
+    // `/v1/chat` sub-router with body limit + error-handler middleware.
+    let chat_router = Router::new()
+        .route("/v1/chat", post(handlers::chat::chat))
+        .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB (AC-7)
+        .layer(middleware::from_fn(handle_body_limit_error));
+
+    Router::new()
+        .route("/healthz", get(handlers::health::healthz))
+        .merge(chat_router)
+        .layer(middleware::from_fn(attach_request_id))
+        .with_state(state)
+        .layer(TraceLayer::new_for_http())
+}
 
 /// Bind to `config.bind_addr` and serve the gateway router until shutdown.
 ///
@@ -28,12 +120,4 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!(%addr, "gateway listening");
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-/// Build the gateway router with all routes wired and shared state attached.
-pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/healthz", get(handlers::health::healthz))
-        .with_state(state)
-        .layer(TraceLayer::new_for_http())
 }

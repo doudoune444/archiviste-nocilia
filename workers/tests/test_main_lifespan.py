@@ -38,6 +38,13 @@ async def test_lifespan_pool_encodes_pgvector(
     monkeypatch.setenv(
         "GCS_EMULATOR_HOST", os.environ.get("GCS_EMULATOR_HOST", "http://127.0.0.1:1")
     )
+    # LlmClient.from_env() is called in lifespan before pool init. Provide valid
+    # config so it succeeds without a live call; fail-fast is tested separately in
+    # test_llm_wrapper.py. Without these, LlmConfigError (RuntimeError subclass)
+    # would be swallowed by the skip clause, hiding the pgvector regression.
+    monkeypatch.setenv("LLM_PROVIDER", os.environ.get("LLM_PROVIDER", "mistral"))
+    monkeypatch.setenv("LLM_MODEL", os.environ.get("LLM_MODEL", "mistral-small-latest"))
+    monkeypatch.setenv("LLM_API_KEY", os.environ.get("LLM_API_KEY", "test-key-not-used"))
 
     app = FastAPI()
     try:
@@ -47,5 +54,5 @@ async def test_lifespan_pool_encodes_pgvector(
             roundtrip = await pool.fetchval("SELECT $1::vector", sample)
             # pgvector returns a numpy.ndarray; comparing element-wise via list().
             assert list(roundtrip) == sample
-    except (OSError, ConnectionError, RuntimeError) as exc:
+    except (OSError, ConnectionError) as exc:
         pytest.skip(f"postgres unavailable: {exc}")

@@ -8,8 +8,8 @@
 //! - Log line never contains the raw `query` field (AC-13 / A09).
 
 use axum::{
-    extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode},
+    extract::{Extension, State},
+    http::{HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -17,9 +17,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
+
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{state::AppState, RequestId};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -62,15 +63,18 @@ pub struct ErrorBody {
 
 /// Handler for `POST /v1/chat`.
 ///
-/// Validates the request, generates a `request_id`, then forwards to workers.
-/// Returns passthrough body on success or a uniform error envelope on failure.
+/// Validates the request, reads the `request_id` from middleware extension (R2),
+/// then forwards to workers. Returns passthrough body on success or a uniform
+/// error envelope on failure.
+///
+/// AC-16: `X-Request-Id` from the client is never forwarded — `attach_request_id`
+/// middleware generates the id upstream and it is read here via `Extension<RequestId>`.
 pub async fn chat(
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    Extension(req_id): Extension<RequestId>,
     body: axum::body::Bytes,
 ) -> Response {
-    // AC-16: always generate our own request_id; any client X-Request-Id is ignored.
-    let request_id = Uuid::new_v4().to_string();
+    let request_id = req_id.0;
     let start = Instant::now();
 
     let validated = match parse_and_validate(&body) {
@@ -227,13 +231,23 @@ async fn handle_workers_response(
     }
 }
 
-/// Read up to `MAX_UPSTREAM_BODY` bytes.  Returns `Err(())` if cap exceeded.
+/// Read up to `MAX_UPSTREAM_BODY` bytes chunk-by-chunk.
+///
+/// Rejects immediately when the accumulator exceeds the cap — avoids buffering
+/// the full upstream body in memory before checking (AC-15 / A04 `DoS` guard).
 async fn read_capped_body(resp: reqwest::Response) -> Result<axum::body::Bytes, ()> {
-    let bytes = resp.bytes().await.map_err(|_| ())?;
-    if bytes.len() > MAX_UPSTREAM_BODY {
-        return Err(());
+    use futures_util::StreamExt as _;
+
+    let mut acc = bytes::BytesMut::with_capacity(MAX_UPSTREAM_BODY);
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| ())?;
+        if acc.len() + chunk.len() > MAX_UPSTREAM_BODY {
+            return Err(());
+        }
+        acc.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    Ok(acc.freeze())
 }
 
 // ---------------------------------------------------------------------------
@@ -296,5 +310,6 @@ fn build_passthrough(request_id: &str, bytes: axum::body::Bytes) -> Response {
 // ---------------------------------------------------------------------------
 
 fn elapsed_ms(start: Instant) -> i64 {
+    // Latency fits i64 unless elapsed > 292M years; fallback prevents panic on overflow.
     i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX)
 }

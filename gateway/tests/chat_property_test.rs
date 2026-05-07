@@ -30,7 +30,8 @@ fn make_state_for_property(workers_url: &str) -> Arc<AppState> {
         database_url: "postgres://test".to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 200,
-        request_timeout_ms: 500,
+        // 1000 ms gives headroom on loaded CI runners (MEDIUM finding #7).
+        request_timeout_ms: 1_000,
     };
     Arc::new(AppState::new(config).unwrap())
 }
@@ -115,20 +116,18 @@ fn is_error_status(status: StatusCode) -> bool {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(50))]
 
-    /// INV-GATEWAY-ERROR-ENVELOPE: for any malformed JSON body (empty query or
-    /// numeric query type), the 400 error envelope is always conforming.
+    /// INV-GATEWAY-ERROR-ENVELOPE: for any arbitrary byte sequence as body,
+    /// the gateway always responds with a conforming error envelope — no raw
+    /// body, stack trace, or internal detail leaks through (AC-12).
+    ///
+    /// Arbitrary bytes cover: empty, valid JSON with wrong types, binary noise,
+    /// UTF-8 strings, oversized JSON, and everything in between.
     #[test]
     fn prop_invalid_body_error_envelope(
-        use_number_query in proptest::bool::ANY,
+        raw_bytes in prop::collection::vec(prop::num::u8::ANY, 0..1024),
     ) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let body = if use_number_query {
-                r#"{"query":42}"#.to_string()
-            } else {
-                r#"{"query":""}"#.to_string()
-            };
-
             let state = make_state_for_property("http://127.0.0.1:1");
             let app = router(state);
 
@@ -138,7 +137,7 @@ proptest! {
                         .method("POST")
                         .uri("/v1/chat")
                         .header("content-type", "application/json")
-                        .body(Body::from(body))
+                        .body(Body::from(raw_bytes))
                         .unwrap(),
                 )
                 .await

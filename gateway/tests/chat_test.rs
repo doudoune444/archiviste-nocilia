@@ -230,6 +230,24 @@ async fn ac1_ac2_ac3_ac4_happy_path() {
         "request_id must be a UUIDv4 (36 chars)"
     );
 
+    // UI-001 AC-17: security headers present on POST /v1/chat (router-level middleware).
+    assert!(
+        resp.headers().get("content-security-policy").is_some(),
+        "Content-Security-Policy header missing on /v1/chat"
+    );
+    assert!(
+        resp.headers().get("x-content-type-options").is_some(),
+        "X-Content-Type-Options header missing on /v1/chat"
+    );
+    assert!(
+        resp.headers().get("referrer-policy").is_some(),
+        "Referrer-Policy header missing on /v1/chat"
+    );
+    assert!(
+        resp.headers().get("x-frame-options").is_some(),
+        "X-Frame-Options header missing on /v1/chat"
+    );
+
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body["answer"], "The scriptorium holds ancient knowledge.");

@@ -8,7 +8,7 @@ rust-version = "1.95"
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1.52", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "limit"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "limit", "fs", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 serde = { version = "1", features = ["derive"] }

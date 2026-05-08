@@ -17,7 +17,12 @@ use axum::{
 };
 use serde::Serialize;
 use std::sync::Arc;
-use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
+use tower_http::{
+    limit::RequestBodyLimitLayer,
+    services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
+};
 use uuid::Uuid;
 
 use crate::{config::Config, state::AppState};
@@ -89,6 +94,14 @@ async fn handle_body_limit_error(req: Request, next: Next) -> Response {
 // Router
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Security header constants (AC-6 literal values)
+// ---------------------------------------------------------------------------
+
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
+    img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; \
+    base-uri 'none'; form-action 'self'";
+
 /// Build the gateway router with all routes wired and shared state attached.
 pub fn router(state: Arc<AppState>) -> Router {
     // `/v1/chat` sub-router with body limit + error-handler middleware.
@@ -97,11 +110,36 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB (AC-7)
         .layer(middleware::from_fn(handle_body_limit_error));
 
+    // Static file routes: index.html at /, assets under /assets/*.
+    // ServeDir handles path-traversal rejection natively (AC-5).
+    let static_router = Router::new()
+        .route_service("/", ServeFile::new("static/index.html"))
+        .nest_service("/assets", ServeDir::new("static/assets"));
+
+    // Root router: merge API + static, then apply global security headers (AC-6).
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
         .merge(chat_router)
+        .merge(static_router)
         .layer(middleware::from_fn(attach_request_id))
         .with_state(state)
+        // AC-6 / AC-17: 4 security headers applied router-wide (static + API).
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(CSP),
+        ))
         .layer(TraceLayer::new_for_http())
 }
 

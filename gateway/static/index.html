@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Archiviste de Nocilia</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Archiviste de Nocilia</h1>
+      <button id="new-conversation-btn" type="button">Nouvelle conversation</button>
+    </header>
+    <section id="conversation" aria-live="polite" aria-label="Conversation"></section>
+    <form id="chat-form" autocomplete="off">
+      <label for="query-input" class="visually-hidden">Votre question</label>
+      <input
+        id="query-input"
+        type="text"
+        name="query"
+        placeholder="Posez votre question à l'Archiviste…"
+        required
+        maxlength="4096"
+      >
+      <button id="send-btn" type="submit">Envoyer</button>
+    </form>
+  </main>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

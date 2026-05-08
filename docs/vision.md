@@ -71,6 +71,7 @@ Justification : le provider phase MVP peut tomber, exploser en prix, ou être su
 | Embeddings | `BAAI/bge-m3` self-host via `sentence-transformers` | Multilingue FR/EN, 568M params, CPU acceptable phase MVP. Fallback `paraphrase-multilingual-MiniLM-L12-v2` si latence trop haute. |
 | Vector DB | Postgres + pgvector | Déjà en infra (FOUND-002). |
 | Auth phase MVP | Aucune. `user_tier="anonymous"` hardcodé gateway → workers | Pipeline RAG testable sans complexité auth. SEC-001 plus tard. |
+| Frontend MVP | Page HTML+CSS+JS vanilla servie par la gateway (`gateway/static/`) via `tower-http::ServeDir`. `conversation_id` UUIDv4 généré côté client + `localStorage`. Aucune build step, aucune dépendance JS tierce phase 1. | Vertical slice ≤ 300 LOC, same-origin = zéro CORS, 1 container Cloud Run, pas de supply chain npm. Cf. [`adr/0005-frontend-vanilla-served-by-gateway.md`](adr/0005-frontend-vanilla-served-by-gateway.md). |
 
 **Note compte Claude Max** : utilisable pour dev (claude.ai, Claude Code CLI) mais **pas programmatiquement**. App workers Python utilise une API key séparée du provider choisi (Mistral pour MVP).
 
@@ -90,25 +91,30 @@ Justification : le provider phase MVP peut tomber, exploser en prix, ou être su
 - Eval Ragas : faithfulness ≥ 0,85, answer_relevancy ≥ 0,85 sur golden set.
 - Overhead Rust gateway : < 80 ms p95 à 500 users concurrents.
 
-## Plan global (5 EPICs)
+## Plan global (6 EPICs)
 
 1. **FOUND** — scaffold + DB + ingestion + RAG basique + premier déploiement (FOUND-001/002 shipped).
-2. **ING / RET / GEN** — pipeline LangChain 4 modes + dashboard auteur.
-3. **SEC** — auth + rate-limit + cost guard + cache + injection defense + PII.
-4. **OBS** — Langfuse + structured logs + Ragas eval + load tests.
-5. **OPS / DOC** — CI/CD complet + Terraform + README/ADR + démo + diffusion.
+2. **ING / RET / GEN** — pipeline LangChain 4 modes + persistence conversations.
+3. **UI** — chat page MVP servie par gateway (vanilla HTML+JS), puis dashboard auteur (OPS-*).
+4. **SEC** — auth + rate-limit + cost guard + cache + injection defense + PII.
+5. **OBS** — Langfuse + structured logs + Ragas eval + load tests.
+6. **OPS / DOC** — CI/CD complet + Terraform + README/ADR + démo + diffusion.
 
 ## Walking skeleton MVP — ordre d'attaque
 
-1. **FOUND-003** — Schéma DB (`documents`, `chunks` pgvector, `conversations`, `tickets`, `query_log`, `users`).
-2. **ING-001** — Ingestion `lore/*.md` local (parse frontmatter + chunk + embed bge-m3 + upsert idempotent).
-3. **RET-001** — Endpoint `/v1/retrieve` top-K cosine (sans rerank phase 1).
-4. **GEN-001** — Endpoint `/v1/generate` mode 1 canon (LLM via wrapper config-driven, MVP = Mistral Small + citations + ton in-world).
-5. **GEN-002** — Forwarder gateway `/v1/chat` → workers (`request_id`, tier hardcodé `anonymous`).
-6. **ING-003** — Conversation logger (Markdown GCS + index Postgres).
-7. **EVAL-001** — Ragas runner sur golden_qa (auteur écrit le set après GEN-001 fonctionne).
+### Déjà livré (résumé)
 
-Modes 2/3/4 (off-topic, lore-gap, mystère), ACL, GDrive sync, auth, cache → après le skeleton.
+Backend chat round-trip end-to-end fonctionnel : ingestion `lore/*.md` → retrieve top-K pgvector → generate mode 1 canon (Mistral Small) → forward gateway `/v1/chat` → workers `/v1/generate` → persistence conversation Markdown GCS + index Postgres. Tickets mergés : FOUND-003, ING-001, RET-001, GEN-001, GEN-002, ING-003.
+
+État : API curl-able, pas encore d'UI publique.
+
+### Ordre d'attaque à partir de maintenant
+
+1. **UI-001** — Chat page MVP servie par gateway (vanilla HTML+JS+CSS, `conversation_id` UUIDv4 en `localStorage`, fetch `/v1/chat`). Premier ship public démontrable. Cf. [`adr/0005-frontend-vanilla-served-by-gateway.md`](adr/0005-frontend-vanilla-served-by-gateway.md).
+2. **Corpus + golden_qa réels** — tâche auteur (hors-ticket code) : remplir `lore/*.md` avec contenu canon réel + écrire `specs/golden_qa.jsonl` cohérent (≥ 30 entrées couvrant les 4 modes). Pré-requis EVAL-001.
+3. **EVAL-001** — Ragas runner sur golden_qa (faithfulness, answer_relevancy, context_precision/recall).
+
+Modes 2/3/4 (off-topic, lore-gap, mystère), ACL, GDrive sync, auth, cache, dashboard auteur → après ce skeleton.
 
 Référence détaillée externe (53 tickets, plan v3) :
 `D:\projet-flamme-doudoune\career-ops\reports\projet-lore-rag-tickets.md`.

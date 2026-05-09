@@ -49,7 +49,7 @@ L'app **ne fetch jamais d'URL runtime** : le runtime lit uniquement des fichiers
 |---|---|---|---|
 | 1 — MVP | `*.md` (frontmatter YAML : `title`, `tags`, `access_tier`) | Édition manuelle locale | ING-001 |
 | 2 — Images | + `images/*.png` (schémas, illustrations) | Caption via Vision LLM ou metadata frontmatter | ING-002 |
-| 3 — Sync Drive | + export hebdo gdocs→md, gsheets→md tabulaire, images PNG | Script `scripts/gdrive-export.py` (cron hebdo ou trigger manuel), service account `roles/drive.readonly` scope dossier unique | ING-010 |
+| 3 — Sync Drive | + export hebdo gdocs→md, gsheets→md tabulaire, gslides→md, images PNG | Script `scripts/gdrive_export.py` (cron hebdo ou trigger manuel), service account `roles/drive.readonly` scope dossier unique | ING-010 / ING-011 / ING-012 (split: core sync gdoc+png / converters gsheet+gslide multi-format / GHA workflow auto-PR) |
 
 Le script de sync est un **outil dev offline**, pas du code applicatif. Pas d'amendement threat-model requis.
 

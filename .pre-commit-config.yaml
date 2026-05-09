@@ -71,3 +71,17 @@ repos:
         language: system
         pass_filenames: false
         files: \.(md|ya?ml|sh)$|^docker-compose\.ya?ml$
+
+      - id: scripts-ruff
+        name: ruff (scripts/)
+        entry: bash -c 'cd scripts && uv run ruff check .'
+        language: system
+        files: ^scripts/.*\.py$
+        pass_filenames: false
+
+      - id: scripts-mypy
+        name: mypy (scripts/)
+        entry: bash -c 'cd scripts && uv run mypy .'
+        language: system
+        files: ^scripts/.*\.py$
+        pass_filenames: false

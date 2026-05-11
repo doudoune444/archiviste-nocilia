@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -229,3 +230,115 @@ class TestTimeout:
             with patch("gdrive_export.drive_client.build"):
                 DriveClient(MagicMock())
             mock_httplib2.Http.assert_called_once_with(timeout=30)
+
+
+class TestSheetsApi:
+    """AC-1 ING-011: get_spreadsheet_tabs and get_sheet_values."""
+
+    def _build_sheets_client(self, mock_sheets_svc: MagicMock) -> DriveClient:
+        # LOW-7: use from_services factory to avoid private attribute assignment
+        return DriveClient.from_services(MagicMock(), mock_sheets_svc, MagicMock())
+
+    def test_get_spreadsheet_tabs_returns_properties(self) -> None:
+        # AC-1: returns list of {title, sheetId, index} from API response
+        svc = MagicMock()
+        svc.spreadsheets.return_value.get.return_value.execute.return_value = {
+            "sheets": [
+                {"properties": {"title": "Tab1", "sheetId": 0, "index": 0}},
+                {"properties": {"title": "Tab2", "sheetId": 42, "index": 1}},
+            ]
+        }
+        client = self._build_sheets_client(svc)
+        tabs = client.get_spreadsheet_tabs("file123")
+        assert len(tabs) == 2
+        assert tabs[0]["title"] == "Tab1"
+        assert tabs[1]["sheetId"] == 42
+
+    def test_get_sheet_values_returns_rows(self) -> None:
+        # AC-2: returns list of rows (list of list of str)
+        svc = MagicMock()
+        svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+            "values": [["H1", "H2"], ["v1", "v2"]]
+        }
+        client = self._build_sheets_client(svc)
+        rows = client.get_sheet_values("file123", "Tab1")
+        assert rows == [["H1", "H2"], ["v1", "v2"]]
+
+    def test_get_spreadsheet_tabs_raises_on_http_error(self) -> None:
+        # AC-15: HttpError → DriveApiError
+        svc = MagicMock()
+        svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
+            HttpError(resp=_fake_resp(403), content=b'{"error":{"errors":[]}}')
+        )
+        client = self._build_sheets_client(svc)
+        with pytest.raises(DriveApiError):
+            client.get_spreadsheet_tabs("file123")
+
+
+class TestSlidesApi:
+    """AC-9 ING-011: get_presentation."""
+
+    def test_get_presentation_returns_dict(self) -> None:
+        # AC-9: returns presentation dict from Slides API
+        # LOW-7: use from_services factory
+        slides_svc = MagicMock()
+        pres_data: dict[str, Any] = {"slides": [{"pageElements": []}]}
+        slides_svc.presentations.return_value.get.return_value.execute.return_value = pres_data
+
+        client = DriveClient.from_services(MagicMock(), MagicMock(), slides_svc)
+        result = client.get_presentation("pres123")
+        assert result == pres_data
+
+    def test_get_presentation_raises_on_http_error(self) -> None:
+        # AC-9: HttpError → DriveApiError
+        slides_svc = MagicMock()
+        slides_svc.presentations.return_value.get.return_value.execute.side_effect = (
+            HttpError(resp=_fake_resp(503), content=b"")
+        )
+        client = DriveClient.from_services(MagicMock(), MagicMock(), slides_svc)
+        with pytest.raises(DriveApiError):
+            client.get_presentation("pres123")
+
+
+class TestScopeProbe:
+    """AC-15 ING-011: verify_extra_scopes exits on 403 insufficient scope."""
+
+    def test_404_probe_success(self) -> None:
+        # AC-15: 404 = scope present, spreadsheet not found (expected)
+        # LOW-7: use from_services factory
+        sheets_svc = MagicMock()
+        sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
+            HttpError(resp=_fake_resp(404), content=b"")
+        )
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
+        # Should not raise or exit
+        client.verify_extra_scopes()
+
+    def test_403_insufficient_scope_exits(self, capsys: Any) -> None:
+        # AC-15: 403 with reason insufficientPermissions → sys.exit(1)
+        sheets_svc = MagicMock()
+        sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
+            HttpError(
+                resp=_fake_resp(403),
+                content=json.dumps({
+                    "error": {"errors": [{"reason": "insufficientPermissions"}]}
+                }).encode(),
+            )
+        )
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
+        with pytest.raises(SystemExit) as exc_info:
+            client.verify_extra_scopes()
+        assert exc_info.value.code == 1
+        assert "gdrive scope missing" in capsys.readouterr().err
+
+    def test_unexpected_5xx_raises_drive_api_error(self) -> None:
+        # LOW-3: unexpected HTTP errors (5xx) are re-raised so boot fail-fast
+        # triggers visibly instead of silently passing scope validation.
+        sheets_svc = MagicMock()
+        sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
+            HttpError(resp=_fake_resp(503), content=b"Service Unavailable")
+        )
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
+        with pytest.raises(DriveApiError) as exc_info:
+            client.verify_extra_scopes()
+        assert exc_info.value.status_code == 503

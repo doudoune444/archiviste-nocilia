@@ -100,6 +100,16 @@ class TestSlugifyIdempotence:
         second = slugify(first, fallback_id)
         assert first == second, f"Not idempotent for {text!r}: {first!r} → {second!r}"
 
+    def test_cap_edge_trailing_hyphen(self) -> None:
+        # AC-3: cap at 80 must not leave a trailing '-' that breaks idempotence.
+        # Repro from fresh-eyes review: 79 'a' + spaces + 'b' → cap truncates mid-run.
+        text = "a" * 79 + "     b"
+        fallback_id = "abcdef12"
+        first = slugify(text, fallback_id)
+        second = slugify(first, fallback_id)
+        assert first == second, f"Cap-edge not idempotent: {first!r} → {second!r}"
+        assert not first.endswith("-"), f"Result ends with '-': {first!r}"
+
 
 @given(text=st.text(), fallback_id=st.from_regex(r"[0-9a-f]{8}", fullmatch=True))
 @settings(max_examples=200)

@@ -34,6 +34,11 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 - **ING-010 MED-1** (`scripts/gdrive_export/paths.py`): `resolve_local_path` now raises `ValueError` when both the plain candidate and the id-suffixed candidate are already in `taken_paths`, instead of silently returning a colliding path.
 - **ING-010 MED-2** (`scripts/gdrive_export/state.py`): `save_state` now writes to a sibling `.tmp` file and uses `os.replace()` for an atomic rename — protects against state corruption on process crash mid-write (POSIX + Windows).
 - **ING-010 MED-3** (`scripts/gdrive_export/frontmatter_merge.py`): `merge_frontmatter` now `copy.deepcopy`s each default value from `defaults_user` before inserting into the merged dict, preventing the module-level `USER_MANAGED_DEFAULTS["tags"]` list from being shared by reference across calls.
+- **ING-010 fresh-eyes HIGH** (`scripts/gdrive_export/slugify.py`): `slugify` now re-strips leading/trailing `-` after the 80-char cap, preventing a trailing hyphen when the cap lands mid-hyphen-run. Fixes AC-3 idempotence invariant.
+- **ING-010 fresh-eyes MED-1** (`scripts/tests/conftest.py`): AC-14 import-firewall regex strengthened to catch bare `import X`, aliased `import X as Y`, and `from X import ...` forms for `requests`, `httpx`, `urllib`/`urllib3`, `aiohttp`, and existing Drive API packages. Uses `re.MULTILINE`. New `tests/test_import_firewall.py` covers all bypass patterns (21 cases).
+
+### Notes
+- **ING-010 LOC budget**: PR totals ~1 058 LOC vs the ≤ 300 rule. Overrun is test-heavy (unit + property + git-integration suites across 6 modules). No production logic exceeds budget; test density is justified by TDD on filesystem/atomicity edge cases and property-based coverage of AC-3 invariants.
 
 ## [0.1.0] - TBD
 

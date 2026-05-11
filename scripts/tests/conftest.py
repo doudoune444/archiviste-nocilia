@@ -7,9 +7,12 @@ from pathlib import Path
 
 import pytest
 
-# AC-14: gdrive_export/ must never import Drive API modules.
+# AC-14: gdrive_export/ must never import Drive API modules or HTTP client libs.
+# Pattern catches both bare-module forms (`import requests`) and
+# from-module forms (`from httpx import ...`) for all forbidden packages.
 _DRIVE_API_PATTERN: re.Pattern[str] = re.compile(
-    r"(googleapiclient|google\.auth|httplib2|requests\.|httpx\.)"
+    r"^\s*(import|from)\s+(requests|httpx|urllib3?|aiohttp|googleapiclient|google\.auth|httplib2)\b",
+    re.MULTILINE,
 )
 _GDRIVE_EXPORT_DIR: Path = Path(__file__).parent.parent / "gdrive_export"
 
@@ -18,11 +21,10 @@ def _find_drive_api_imports() -> list[str]:
     """Return a list of '<file>:<line>' strings where Drive API imports appear."""
     violations: list[str] = []
     for py_file in _GDRIVE_EXPORT_DIR.rglob("*.py"):
-        for lineno, line in enumerate(
-            py_file.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if _DRIVE_API_PATTERN.search(line):
-                violations.append(f"{py_file.relative_to(_GDRIVE_EXPORT_DIR)}:{lineno}")
+        text = py_file.read_text(encoding="utf-8")
+        for match in _DRIVE_API_PATTERN.finditer(text):
+            lineno = text[: match.start()].count("\n") + 1
+            violations.append(f"{py_file.relative_to(_GDRIVE_EXPORT_DIR)}:{lineno}")
     return violations
 
 

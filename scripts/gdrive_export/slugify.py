@@ -20,7 +20,9 @@ def slugify(text: str, fallback_id: str) -> str:
     replaced = re.sub(r"[^a-z0-9]+", "-", lowered)
     collapsed = re.sub(r"-{2,}", "-", replaced)
     stripped = collapsed.strip("-")
-    capped = stripped[:MAX_LEN]
+    # Cap to MAX_LEN then re-strip: the cap may land mid-hyphen-run, leaving a
+    # trailing '-' that would violate the idempotence invariant (AC-3).
+    capped = stripped[:MAX_LEN].strip("-")
     if not capped:
         return f"file-{fallback_id[:8]}"
     return capped

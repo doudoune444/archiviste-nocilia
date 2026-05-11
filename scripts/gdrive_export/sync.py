@@ -86,6 +86,7 @@ def run_sync(
             local_path=local_path, existing=state.get(file_id),
             drive_client=drive_client, new_state=new_state, counts=counts,
             dry_run=dry_run,
+            drive_md5=file.get("md5Checksum"),
         )
 
     if not dry_run:
@@ -164,6 +165,7 @@ def _process_file(
     new_state: dict[str, StateEntry],
     counts: SummaryCounts,
     dry_run: bool,  # noqa: FBT001
+    drive_md5: str | None = None,
 ) -> None:
     """Process a single Drive file: fetch, diff, dispatch."""
     counts.total += 1
@@ -174,7 +176,10 @@ def _process_file(
                 drive_client, new_state, counts, dry_run,
             )
         else:
-            _process_png(file_id, local_path, existing, drive_client, new_state, counts, dry_run)
+            _process_png(
+                file_id, local_path, existing, drive_client, new_state, counts, dry_run,
+                drive_md5=drive_md5,
+            )
     except (DriveApiError, FrontmatterMergeError, OSError, ValueError) as exc:
         counts.errors += 1
         _log_file(file_id, str(local_path), "would_error" if dry_run else "error", reason=str(exc))
@@ -243,7 +248,7 @@ def _gdoc_status_and_rename(
     prefix = "would_" if dry_run else ""
     if existing is None:
         counts.created += 1
-        return f"{prefix}create"
+        return f"{prefix}create" if dry_run else "created"
     old_path = Path(existing.local_path)
     if old_path != local_path:
         counts.renamed += 1
@@ -285,8 +290,23 @@ def _process_png(
     new_state: dict[str, StateEntry],
     counts: SummaryCounts,
     dry_run: bool,  # noqa: FBT001
+    drive_md5: str | None = None,
 ) -> None:
-    """Download a PNG and write it locally."""
+    """Download a PNG and write it locally.
+
+    AC-11: content_signature = md5:<md5Checksum> from Drive API field (canonical).
+    Short-circuits download when signature matches existing state.
+    """
+    # AC-11: use Drive-native md5Checksum as canonical signature.
+    # This avoids a download when the file is unchanged.
+    if drive_md5 is not None:
+        new_sig = f"md5:{drive_md5}"
+        if existing is not None and existing.content_signature == new_sig:
+            new_state[file_id] = existing
+            counts.unchanged += 1
+            _log_file(file_id, str(local_path), "would_unchanged" if dry_run else "unchanged")
+            return
+
     png_bytes = drive_client.download_png(file_id)
 
     if len(png_bytes) > _ONE_MIB:
@@ -295,18 +315,19 @@ def _process_png(
                   reason="exported size exceeds 1 MiB cap")
         return
 
-    new_sig = f"md5:{hashlib.md5(png_bytes).hexdigest()}"  # noqa: S324
+    # Fallback to client-side md5 when Drive field is absent (defense-in-depth).
+    if drive_md5 is None:
+        new_sig = f"md5:{hashlib.md5(png_bytes).hexdigest()}"  # noqa: S324
+        if existing is not None and existing.content_signature == new_sig:
+            new_state[file_id] = existing
+            counts.unchanged += 1
+            _log_file(file_id, str(local_path), "would_unchanged" if dry_run else "unchanged")
+            return
+
     now = _now_iso()
-
-    if existing is not None and existing.content_signature == new_sig:
-        new_state[file_id] = existing
-        counts.unchanged += 1
-        _log_file(file_id, str(local_path), "would_unchanged" if dry_run else "unchanged")
-        return
-
     prefix = "would_" if dry_run else ""
     if existing is None:
-        status = f"{prefix}create"
+        status = f"{prefix}create" if dry_run else "created"
         counts.created += 1
     else:
         old_path = Path(existing.local_path)

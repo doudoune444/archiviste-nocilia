@@ -110,6 +110,7 @@ class TestFirstRun:
 
     def test_gdoc_written_and_state_saved(self, tmp_path: Path) -> None:
         # AC-2: gdoc exported and written as .md under lore_root.
+        # MED-1: per-file log status must be exactly "created" (not "create").
         lore_root = tmp_path / "lore"
         state_path = tmp_path / "state.json"
         body = "# Title\n\nContent here.\n"
@@ -117,12 +118,17 @@ class TestFirstRun:
             files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
             doc_bodies={"doc1": body},
         )
-        summary, _ = _run(client, lore_root, state_path)
+        summary, logs = _run(client, lore_root, state_path)
 
         md_file = lore_root / "my-doc.md"
         assert md_file.exists()
         assert summary.created == 1
         assert summary.errors == 0
+
+        # Verify per-file log status is exactly "created".
+        file_logs = [lg for lg in logs if lg.get("event") == "gdrive_sync.file"]
+        assert len(file_logs) == 1
+        assert file_logs[0]["status"] == "created"
 
         # Verify state persisted.
         state = load_state(state_path)
@@ -132,15 +138,17 @@ class TestFirstRun:
     def test_png_written_and_state_saved(self, tmp_path: Path) -> None:
         # AC-3: PNG downloaded and written under lore_root, no .md produced.
         # Drive name "beach" slugifies to "beach"; ext stays ".png".
+        # MED-2: per-file log status must be exactly "created" (not "create").
+        # MED-3: content_signature must use Drive md5Checksum field, not client-side hash.
         lore_root = tmp_path / "lore"
         state_path = tmp_path / "state.json"
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 50
-        md5 = hashlib.md5(png_bytes).hexdigest()  # noqa: S324
+        drive_md5 = hashlib.md5(png_bytes).hexdigest()  # noqa: S324
         client = _make_drive_client(
-            files=[_file_entry("png1", "beach", _PNG_MIME, md5=md5)],
+            files=[_file_entry("png1", "beach", _PNG_MIME, md5=drive_md5)],
             png_bodies={"png1": png_bytes},
         )
-        summary, _ = _run(client, lore_root, state_path)
+        summary, logs = _run(client, lore_root, state_path)
 
         # slugify("beach", ...) → "beach", ext=".png" → lore/beach.png
         png_file = lore_root / "beach.png"
@@ -149,8 +157,14 @@ class TestFirstRun:
         assert not (lore_root / "beach.md").exists()
         assert summary.created == 1
 
+        # Verify per-file log status is exactly "created".
+        file_logs = [lg for lg in logs if lg.get("event") == "gdrive_sync.file"]
+        assert len(file_logs) == 1
+        assert file_logs[0]["status"] == "created"
+
         state = load_state(state_path)
-        assert state["png1"].content_signature.startswith("md5:")
+        # MED-3: signature must come from Drive md5Checksum field, not client-side computation.
+        assert state["png1"].content_signature == f"md5:{drive_md5}"
 
     def test_first_run_log_order(self, tmp_path: Path) -> None:
         # AC-13: first run emits start then first_run events in order.

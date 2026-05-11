@@ -121,6 +121,8 @@ jobs:
           ARCHIVED: ${{ steps.summary.outputs.archived }}
           UNCHANGED: ${{ steps.summary.outputs.unchanged }}
         run: |
+          # shellcheck disable=SC2016
+          # Backticks below are literal Markdown code-span delimiters in the PR body, not command substitution.
           SUMMARY_JSON=$(cat /tmp/summary.json)
           {
             printf 'body<<EOF_BODY\n'

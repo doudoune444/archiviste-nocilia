@@ -7,6 +7,9 @@ authors = [{ name = "Doudoune (Baptiste Herbecq)", email = "baptiste.herbecq@gma
 
 dependencies = [
     "pyyaml>=6.0",
+    "google-api-python-client>=2.140",
+    "google-auth>=2.35",
+    "structlog>=24",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +20,7 @@ dev = [
     "mypy>=1.13",
     "ruff>=0.8",
     "types-PyYAML>=6.0",
+    "pytest-httpserver>=1.1",
 ]
 
 [build-system]
@@ -68,6 +72,10 @@ no_implicit_optional = true
 
 [[tool.mypy.overrides]]
 module = ["yaml"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["googleapiclient.*", "google.auth.*", "google.oauth2.*", "google_auth_httplib2", "httplib2", "structlog"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

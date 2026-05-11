@@ -18,7 +18,7 @@ class StateEntry:
     """Represents a single tracked Drive file in the sync state."""
 
     local_path: str
-    drive_md5_checksum: str
+    content_signature: str
     last_exported_at: str
     body_hash: str
     archived_at: str | None
@@ -54,7 +54,7 @@ def load_state(path: Path) -> dict[str, StateEntry]:
         try:
             result[file_id] = StateEntry(
                 local_path=entry["local_path"],
-                drive_md5_checksum=entry["drive_md5_checksum"],
+                content_signature=entry["content_signature"],
                 last_exported_at=entry["last_exported_at"],
                 body_hash=entry["body_hash"],
                 archived_at=entry.get("archived_at"),

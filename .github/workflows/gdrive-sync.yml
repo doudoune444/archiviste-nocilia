@@ -121,8 +121,6 @@ jobs:
           ARCHIVED: ${{ steps.summary.outputs.archived }}
           UNCHANGED: ${{ steps.summary.outputs.unchanged }}
         run: |
-          # shellcheck disable=SC2016
-          # Backticks below are literal Markdown code-span delimiters in the PR body, not command substitution.
           SUMMARY_JSON=$(cat /tmp/summary.json)
           {
             printf 'body<<EOF_BODY\n'
@@ -131,8 +129,10 @@ jobs:
             printf '\n```json\n'
             printf '%s\n' "${SUMMARY_JSON}"
             printf '```\n\n'
-            printf '- [ ] Reviewer skim diff\n'
-            printf '- [ ] Trigger ingestion `python -m archiviste_workers.ingest --path lore/` after merge\n'
+            cat <<'CHECKLIST'
+          - [ ] Reviewer skim diff
+          - [ ] Trigger ingestion `python -m archiviste_workers.ingest --path lore/` after merge
+          CHECKLIST
             printf 'EOF_BODY\n'
           } >> "$GITHUB_OUTPUT"
 

@@ -8,7 +8,7 @@ on:
 # AC-11: serialise concurrent runs; never cancel an in-progress run to avoid
 # mid-write corruption of scripts/.gdrive_state.json.
 concurrency:
-  group: gdrive-sync
+  group: ${{ github.workflow }}
   cancel-in-progress: false
 
 # AC-2: minimal explicit permissions; all others default to none.
@@ -69,8 +69,11 @@ jobs:
           fi
 
       # AC-9: extract the single gdrive_sync.summary line from teed log.
+      # if: always() so the placeholder summary fallback runs even on hard-crash,
+      # guaranteeing the upload-artifact step has a file to upload.
       - name: extract summary
         id: summary
+        if: always()
         run: |
           jq -c 'select(.event == "gdrive_sync.summary")' /tmp/sync.log \
             > /tmp/summary.json 2>/dev/null || true

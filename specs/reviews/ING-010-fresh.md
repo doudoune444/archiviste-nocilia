@@ -69,3 +69,119 @@ Independent adversarial review with no prior context of `specs/reviews/ING-010.m
 One real HIGH (slugify idempotence breaks on cap-at-hyphen, AC-3 is the headline AC of this ticket); one MED (vertical-slice LOC overshoot, plan estimate off by 3×); one MED (AC-14 guard regex from spec is bypassable). Several LOWs around defense-in-depth gaps and out-of-plan files. The implementer already shipped fixes for MED-1/2/3 from an earlier review, but missed the idempotence counter-example — likely because hypothesis didn't shrink to it.
 
 Fix the HIGH (one-line: re-strip after cap + regression test), tighten the AC-14 regex, then ship.
+
+---
+
+## Round 4 — Verification of fix commit `264c0b9`
+
+### Verdict
+APPROVE
+
+### Scope
+Verify fixes for fresh-eyes HIGH (slugify idempotence) + MED-1 (import-firewall regex). MED-2 (LOC overrun) is doc-only.
+
+### HIGH verification — slugify idempotence
+
+**Red-then-green**: Temporarily reverted `scripts/gdrive_export/slugify.py:25` to `capped = stripped[:MAX_LEN]` (no re-strip). Ran `uv run pytest tests/test_slugify.py -v` — `test_cap_edge_trailing_hyphen` FAILED with the exact counter-example from the fresh-eyes review (`'a'*79 + '-'` vs `'a'*79`, idempotence broken). Restored fix, all 28 slugify tests PASS.
+
+**Observation**: hypothesis property `test_property_idempotence` (200 examples) PASSED even with the bug present — proves the prior reviewer's claim that property fuzzing alone is insufficient and the explicit regression test was the right fix.
+
+**Adversarial cap-edge exploration** (13 inputs):
+
+| Input | Idempotent? | Notes |
+|---|---|---|
+| `'a'*79 + '-b'` | YES | exact cap boundary |
+| `'a'*79 + '-'` | YES | trailing-hyphen input |
+| `'a'*80 + '-b'` | YES | hyphen beyond cap |
+| `'a'*78 + ' b ' + 'c'*10` | YES | space at boundary |
+| `'a'*80` | YES | exactly 80 |
+| `'a'*81` | YES | one over |
+| `'-'*100` | YES | all hyphens → fallback |
+| `'-a' + 'b'*100` | YES | leading hyphen |
+| `'a' + '-'*100 + 'b'` | YES | massive collapsed hyphen run |
+| `'aaa'*30 + '!' + 'b'*30` | YES | punctuation at boundary |
+| `'x'*79 + '!y'` | YES | punct just past boundary |
+| `'x'*79 + ' y'` | YES | space at boundary |
+| `'x'*79 + 'é'` | YES | combining char at boundary |
+
+**Leading-hyphen scenario impossible by construction**: `stripped` has no leading `-` (stripped before cap), and `[:MAX_LEN]` truncates only from the right, so a leading `-` cannot appear in `capped`. Defense holds.
+
+Hypothesis property tests all pass.
+
+### MED-1 verification — import-firewall regex
+
+**Red-then-green**: Reverted `scripts/tests/conftest.py:14-15` to the old single-line regex `r"(googleapiclient|google\.auth|httplib2|requests\.|httpx\.)"`. Ran `uv run pytest tests/test_import_firewall.py -v`:
+- **13 of 21 forbidden-import tests FAILED** (well above the 3-case threshold): bare `import requests`, `import httpx`, `import urllib3`, `import aiohttp`, aliased `import httpx as h`, all `from X import Y` forms, and indented variants.
+- All 5 allowed-line tests still passed (no over-flagging).
+
+Restored fix, 21/21 PASS.
+
+**Adversarial bypass exploration** (21 patterns):
+
+| Pattern | Caught? | Severity |
+|---|---|---|
+| `__import__("requests")` | NO | LOW — dynamic, acceptable per fresh-eyes note (static-scope only) |
+| `importlib.import_module("requests")` | NO | LOW — dynamic, acceptable |
+| `from requests import (\n    get\n)` multi-line | YES (first line) | OK |
+| `# import requests` (comment) | NO | OK — correct behavior |
+| `"import requests"` (string literal) | NO | OK — correct behavior |
+| `if True:\n    import requests` | YES | OK |
+| `try:\n    import requests` | YES | OK |
+| `from . import requests` (relative) | NO | OK — sibling pkg named requests, harmless |
+| `from .requests import get` | NO | OK — relative submodule, harmless |
+| `import requests; x = 1` (semicolon-prefix) | YES | OK |
+| `x = 1; import requests` (semicolon-suffix) | NO | LOW — `^\s*` anchor blocks; theoretical bypass, but `ruff E702` would flag the style |
+| tab/mixed indent | YES | OK |
+| `\bimport\trequests` (tab between) | YES | OK |
+| `from requests.auth import HTTPBasicAuth` | YES | OK |
+
+**NEW LOW finding** — false-positive risk: regex `urllib3?` matches `urllib` (stdlib, harmless) as well as `urllib3` (HTTP client). Stdlib `from urllib.parse import urlparse` (pure URL string manipulation, no I/O) would be wrongly flagged. No current `gdrive_export/` module uses `urllib`, so risk is theoretical, but the regex over-blocks. Consider tightening to `r"\b(requests|httpx|urllib3|aiohttp|...)\b"` (drop the optional `?` on `urllib3?`).
+
+**Acceptable dynamic-import bypasses** (`__import__`, `importlib`) noted in fresh-eyes review as acceptable for static-scope AC-14.
+
+### MED-2 verification — CHANGELOG honesty
+
+CHANGELOG `### Notes` entry present:
+> **ING-010 LOC budget**: PR totals ~1 058 LOC vs the ≤ 300 rule. Overrun is test-heavy (unit + property + git-integration suites across 6 modules). No production logic exceeds budget; test density is justified by TDD on filesystem/atomicity edge cases and property-based coverage of AC-3 invariants.
+
+Honest disclosure of the ~3.5× overrun. Acceptable.
+
+### Regression check
+
+| Check | Result |
+|---|---|
+| `cd scripts && uv run ruff check .` | All checks passed. |
+| `cd scripts && uv run mypy .` | Success: no issues found in 16 source files. |
+| `cd scripts && uv run pytest` | **103 passed** in 2.02s (81 prior + 22 new = +21 import-firewall +1 cap-edge). |
+| Working tree | clean post-restore (`git status --short` empty). |
+
+No regressions. No new bugs introduced by the fixes.
+
+### Round-4 findings
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `scripts/tests/conftest.py:14` | LOW | regex over-block on stdlib `urllib` | `urllib3?` matches `urllib.parse` (stdlib URL parsing, no I/O). No current use in `gdrive_export/`, but tightening avoids future false-positive surface. | Replace `urllib3?` with `urllib3` (drop the `?`). |
+| `scripts/tests/conftest.py:14` | LOW | `^\s*` anchor allows `x = 1; import requests` bypass | Semicolon-joined imports after a statement are technically valid Python and slip past the line-start anchor. | Either drop `^\s*` (accept indented-only stays caught via MULTILINE), or rely on `ruff E702` (multiple-statements-per-line) catching it via complementary lint. Theoretical, not worth a code change. |
+
+Both LOW; neither blocks merge.
+
+### Status of all prior findings
+
+| Finding | Severity | Status round 4 |
+|---|---|---|
+| slugify idempotence cap-edge | HIGH | **FIXED + verified red-then-green** |
+| AC-14 regex bypassable | MED-1 | **FIXED + verified red-then-green** |
+| LOC overrun | MED-2 | **DISCLOSED in CHANGELOG** |
+| `.tmp` file leak + gitignore | LOW | not addressed (out of scope for this fix commit) |
+| TOCTOU in rename | LOW | not addressed |
+| paths.py adversarial tests | LOW | not addressed |
+| YAML 1.1 bool coercion | LOW | not addressed |
+| `git add -A` in AC-9 test | LOW | not addressed |
+| `docs/vision.md` out-of-plan | LOW | not addressed |
+| sister-ticket specs out-of-plan | LOW | not addressed |
+
+All HIGH and MED findings closed. Outstanding LOWs are acceptable for merge (defense-in-depth gaps + plan-scope quibbles, not blockers).
+
+### Bottom line round 4
+Both HIGH and MED-1 fixes verified by independent red-then-green. Adversarial exploration found no new HIGH/MED issues. Two new LOW findings on the firewall regex (false-positive on stdlib `urllib`, theoretical bypass on `x; import` chains) — neither blocks. APPROVE for merge.

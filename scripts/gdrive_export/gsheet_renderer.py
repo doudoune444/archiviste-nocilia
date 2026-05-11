@@ -82,19 +82,29 @@ def render_tab_markdown(
         parts.append("*(empty sheet)*")
         return "\n".join(parts)
 
+    width = max(len(r) for r in values)
     header = values[0]
     rows = values[1:]
 
-    header_cells = [_escape_cell(c) for c in header]
+    header_cells = [_escape_cell(c) for c in _pad_row(header, width)]
     parts.append("| " + " | ".join(header_cells) + " |")
-    parts.append("| " + " | ".join("---" for _ in header_cells) + " |")
+    parts.append("| " + " | ".join("---" for _ in range(width)) + " |")
 
     for row in rows:
-        padded = list(row) + [""] * max(0, len(header) - len(row))
-        escaped = [_escape_cell(c) for c in padded[: len(header)]]
+        escaped = [_escape_cell(c) for c in _pad_row(row, width)]
         parts.append("| " + " | ".join(escaped) + " |")
 
     return "\n".join(parts)
+
+
+def _pad_row(row: list[str], width: int) -> list[str]:
+    """Pad *row* with empty strings to *width* columns.
+
+    Merged cells in Sheets API return only the top-left value; trailing empties
+    are trimmed. Without padding, a merged header row would force truncation of
+    wider data rows.
+    """
+    return list(row) + [""] * max(0, width - len(row))
 
 
 def _escape_cell(text: str) -> str:

@@ -45,6 +45,25 @@ class TestRenderTabMarkdown:
         md = render_tab_markdown("Book", "Sheet1", values)
         assert "| Col1 | Col2 |" in md
 
+    def test_merged_header_pads_to_widest_row(self) -> None:
+        # Merged cell on header row: Sheets API returns ["Title"] (trimmed),
+        # data rows have full width. Table must pad header to max row width
+        # instead of truncating data rows to header length.
+        values = [["Titre"], ["a", "b", "c", "d"], ["e", "f", "g", "h"]]
+        md = render_tab_markdown("Book", "Sheet1", values)
+        assert "| Titre |  |  |  |" in md
+        assert "| --- | --- | --- | --- |" in md
+        assert "| a | b | c | d |" in md
+        assert "| e | f | g | h |" in md
+
+    def test_jagged_rows_pad_to_widest(self) -> None:
+        # Non-uniform row widths: pad all to max(len(row)) across all rows.
+        values = [["A", "B"], ["x"], ["y", "z", "w"]]
+        md = render_tab_markdown("Book", "Sheet1", values)
+        assert "| A | B |  |" in md
+        assert "| x |  |  |" in md
+        assert "| y | z | w |" in md
+
     def test_html_comment_first_line(self) -> None:
         # AC-17: first line of body (before table) is HTML comment with file_id and tab gid
         values = [["H"]]

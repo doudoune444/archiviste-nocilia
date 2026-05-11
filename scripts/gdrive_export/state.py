@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -68,10 +69,13 @@ def load_state(path: Path) -> dict[str, StateEntry]:
 def save_state(path: Path, state: dict[str, StateEntry]) -> None:
     """Write *state* to *path* as canonical sorted JSON (indent=2, ensure_ascii=False).
 
+    Writes to a sibling ``.tmp`` file first, then atomically replaces *path* via
+    ``os.replace`` — safe against process crashes mid-write on POSIX and Windows.
+
     Invariant: round-trip load(save(s)) == s for any valid state.
     """
     serializable = {file_id: asdict(entry) for file_id, entry in state.items()}
-    path.write_text(
-        json.dumps(serializable, sort_keys=True, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    content = json.dumps(serializable, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    os.replace(tmp_path, path)

@@ -96,6 +96,30 @@ class TestInvalidYaml:
             merge_frontmatter("- item1\n- item2\n", SCRIPT_DATA, USER_MANAGED_DEFAULTS)
 
 
+class TestMutableDefaultIsolation:
+    def test_tags_default_not_shared_across_calls(self) -> None:
+        # MED-3: USER_MANAGED_DEFAULTS["tags"] is a module-level list; merge_frontmatter
+        # must deep-copy it so mutations in one merged dict don't bleed into later calls.
+        result1 = merge_frontmatter(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
+        parsed1 = yaml.safe_load(result1)
+        # Mutate the returned tags list directly
+        parsed1["tags"].append("injected")
+        # Second call must still get a clean empty list
+        result2 = merge_frontmatter(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
+        parsed2 = yaml.safe_load(result2)
+        assert parsed2["tags"] == [], (
+            "MED-3: tags default was shared by ref — mutations leaked across calls"
+        )
+
+    def test_user_managed_defaults_list_unchanged_after_merge(self) -> None:
+        # MED-3: the module-level USER_MANAGED_DEFAULTS["tags"] list must remain []
+        # after a merge that injects it into a new document.
+        merge_frontmatter(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
+        assert USER_MANAGED_DEFAULTS["tags"] == [], (
+            "MED-3: merge_frontmatter mutated module-level USER_MANAGED_DEFAULTS"
+        )
+
+
 class TestScriptManagedKeys:
     def test_all_expected_keys_present(self) -> None:
         expected = {

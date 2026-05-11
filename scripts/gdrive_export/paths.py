@@ -30,6 +30,13 @@ def resolve_local_path(
     suffixed_slug = f"{safe_slug}-{drive_file_id[:8]}"
     candidate = root.joinpath(*safe_components) / f"{suffixed_slug}{ext}"
     _assert_under_root(candidate, root)
+    if candidate in taken_paths:
+        msg = (
+            f"Path collision unresolvable for slug={safe_slug!r}, "
+            f"drive_file_id={drive_file_id!r}: both plain and suffixed candidates "
+            f"are already taken."
+        )
+        raise ValueError(msg)
     return candidate
 
 

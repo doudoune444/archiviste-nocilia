@@ -105,6 +105,24 @@ class TestRoundTrip:
         assert loaded["x"].archived_at is None
 
 
+class TestAtomicSave:
+    def test_no_tmp_file_left_on_success(self, tmp_path: Path) -> None:
+        # MED-2: save_state must write atomically (tmp → replace) — no .tmp artefact
+        # should survive a successful write.
+        state_file = tmp_path / "state.json"
+        save_state(state_file, {"x": make_entry()})
+        tmp_file = tmp_path / "state.json.tmp"
+        assert not tmp_file.exists(), ".tmp artefact must not remain after successful save"
+
+    def test_state_file_present_after_save(self, tmp_path: Path) -> None:
+        # MED-2: the final state file must exist and be valid after atomic replace.
+        state_file = tmp_path / "state.json"
+        save_state(state_file, {"x": make_entry()})
+        assert state_file.exists()
+        loaded = load_state(state_file)
+        assert "x" in loaded
+
+
 class TestComputeBodyHash:
     def test_deterministic(self) -> None:
         assert compute_body_hash("hello") == compute_body_hash("hello")

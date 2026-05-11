@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import yaml
@@ -47,7 +48,7 @@ def merge_frontmatter(
     merged.update(script_managed)
     for key, default in defaults_user.items():
         if key not in merged:
-            merged[key] = default
+            merged[key] = copy.deepcopy(default)
     return yaml.safe_dump(merged, default_flow_style=False, allow_unicode=True, sort_keys=True)
 
 

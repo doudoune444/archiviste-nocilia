@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from gdrive_export.paths import resolve_local_path
 
 # AC-7: collision resolution, path traversal mitigation, is_relative_to(root).
@@ -133,3 +135,18 @@ class TestResolveLocalPath:
             root=tmp_path,
         )
         assert result == tmp_path / "mon-dossier-ete" / "mon-fichier.md"
+
+    def test_collision_suffixed_also_taken_raises(self, tmp_path: Path) -> None:
+        # MED-1: when the suffixed candidate is also in taken_paths, the function
+        # must not silently return a colliding path — it should raise ValueError.
+        plain = tmp_path / "doc.md"
+        suffixed = tmp_path / "doc-abcdef12.md"
+        with pytest.raises(ValueError, match="collision"):
+            resolve_local_path(
+                drive_path_components=[],
+                slug="doc",
+                ext=".md",
+                taken_paths={plain, suffixed},
+                drive_file_id="abcdef12",
+                root=tmp_path,
+            )

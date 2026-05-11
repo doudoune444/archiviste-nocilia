@@ -30,6 +30,11 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 - **ING-010** : `feat(scripts)` — gdrive_export utilities lib (slugify, state, frontmatter merge, paths, normalize, rename). Pure Python package `scripts/gdrive_export/` with isolated `scripts/pyproject.toml` + `scripts/uv.lock` (no Drive API, no runtime dep on workers/). 78 tests (unit + property hypothesis + git integration). Pre-commit hooks scoped `^scripts/.*\.py$`. `.gitignore` extended with `.gcp/`, `scripts/.gdrive_state.json{,.bak}`. ADR-0006 accepted. Ready for ING-013 (Drive API integration).
 
+### Fixed
+- **ING-010 MED-1** (`scripts/gdrive_export/paths.py`): `resolve_local_path` now raises `ValueError` when both the plain candidate and the id-suffixed candidate are already in `taken_paths`, instead of silently returning a colliding path.
+- **ING-010 MED-2** (`scripts/gdrive_export/state.py`): `save_state` now writes to a sibling `.tmp` file and uses `os.replace()` for an atomic rename — protects against state corruption on process crash mid-write (POSIX + Windows).
+- **ING-010 MED-3** (`scripts/gdrive_export/frontmatter_merge.py`): `merge_frontmatter` now `copy.deepcopy`s each default value from `defaults_user` before inserting into the merged dict, preventing the module-level `USER_MANAGED_DEFAULTS["tags"]` list from being shared by reference across calls.
+
 ## [0.1.0] - TBD
 
 Initial release.

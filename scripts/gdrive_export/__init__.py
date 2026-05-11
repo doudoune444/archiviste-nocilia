@@ -1,4 +1,4 @@
-"""gdrive_export — pure utility library for Google Drive sync (no Drive API)."""
+"""gdrive_export — utility library for Google Drive sync."""
 
 from gdrive_export.frontmatter_merge import FrontmatterMergeError, merge_frontmatter
 from gdrive_export.normalize import normalize_body

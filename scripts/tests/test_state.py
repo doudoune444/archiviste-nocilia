@@ -17,9 +17,10 @@ from gdrive_export.state import (
 
 
 def make_entry(local_path: str = "lore/doc.md") -> StateEntry:
+    # AC-11 amendment: drive_md5_checksum renamed to content_signature with algo prefix.
     return StateEntry(
         local_path=local_path,
-        drive_md5_checksum="d41d8cd98f00b204e9800998ecf8427e",
+        content_signature="md5:d41d8cd98f00b204e9800998ecf8427e",
         last_exported_at="2026-05-09T00:00:00Z",
         body_hash="abc123",
         archived_at=None,
@@ -86,7 +87,7 @@ class TestRoundTrip:
             "file-id-1": make_entry("lore/doc.md"),
             "file-id-2": StateEntry(
                 local_path="lore/other.md",
-                drive_md5_checksum="checksum2",
+                content_signature="sha256:deadbeef",
                 last_exported_at="2026-01-01T00:00:00Z",
                 body_hash="deadbeef",
                 archived_at="2026-03-01T00:00:00Z",

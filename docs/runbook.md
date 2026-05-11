@@ -175,6 +175,66 @@ NFKC + strip controls, chunk via `RecursiveCharacterTextSplitter` (tokenizer
 dans `documents` + `chunks` (transaction par fichier, hash SHA-256 du corps
 normalisé).
 
+## Sync Google Drive (ING-013)
+
+Synchronise un dossier Google Drive vers `lore/` via l'API Drive v3. Supporte
+gdoc → `.md` (export Markdown), PNG natif → `.png`, détection créé/updated/
+renamed/archived/unchanged, state persisté dans `scripts/.gdrive_state.json`.
+
+### Prérequis
+
+1. **Service account GCP** avec scope `drive.readonly` :
+   ```bash
+   gcloud iam service-accounts create gdrive-sync-sa \
+     --display-name "GDrive Sync SA"
+   # Télécharger la clé JSON
+   gcloud iam service-accounts keys create gdrive-sa-key.json \
+     --iam-account gdrive-sync-sa@<PROJECT>.iam.gserviceaccount.com
+   ```
+
+2. **Partager le dossier Drive** avec l'email du service account
+   (`gdrive-sync-sa@<PROJECT>.iam.gserviceaccount.com`) en lecture seule.
+
+3. **Variables d'environnement** (copier `.env.example` → `.env`, remplir) :
+   ```bash
+   # Option A — JSON inline
+   export GDRIVE_SA_KEY_JSON=$(cat gdrive-sa-key.json)
+   # Option B — chemin vers fichier
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/gdrive-sa-key.json
+   # Identifiant du dossier racine Drive (visible dans l'URL du dossier)
+   export GDRIVE_ROOT_FOLDER_ID=<FOLDER_ID>
+   ```
+
+### Invocation manuelle
+
+```bash
+cd scripts
+# Sync réel (écrit dans lore/, met à jour scripts/.gdrive_state.json)
+uv run python -m gdrive_export --root-folder-id $GDRIVE_ROOT_FOLDER_ID
+
+# Dry-run : affiche les actions sans rien écrire (exit code toujours 0)
+uv run python -m gdrive_export --root-folder-id $GDRIVE_ROOT_FOLDER_ID --dry-run
+```
+
+Logs JSON sur stdout : `gdrive_sync.start`, un `gdrive_sync.file` par fichier,
+`gdrive_sync.summary` en fin. Exit code 0 si zéro erreur, 1 sinon.
+
+### State
+
+`scripts/.gdrive_state.json` est versionné en git. Chaque run le met à jour.
+La différence inter-runs est visible via `git diff scripts/.gdrive_state.json`.
+Le backup `.bak` (écriture atomique) est ignoré par `.gitignore`.
+
+### Ingestion DB après sync
+
+Après un sync Drive, déclencher l'ingesteur ING-001 pour indexer les nouveaux
+`.md` dans pgvector :
+
+```bash
+cd workers
+uv run python -m archiviste_workers.ingest --path ../lore/
+```
+
 Pré-requis :
 - FOUND-002 : `make migrate` appliqué (extensions + `schema_version`).
 - FOUND-003 : `documents` + `chunks` créés.

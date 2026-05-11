@@ -29,6 +29,18 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 - **RET-001** : workers expose `POST /v1/retrieve` — embeds the query with bge-m3 (loaded once at lifespan startup), runs a single ACL-filtered cosine top-K SQL on `chunks` via the existing asyncpg pool (`<=>` operator, `WHERE access_tier = ANY(...)`, deterministic tie-break on `chunk_id`), and returns ordered chunks with `embedding_ms` / `search_ms` timings. Hard limits: `query` ≤ 4 KiB UTF-8, `top_k` ∈ [1, 20], SQL timeout 5 s. Errors map to `400 invalid_{request,query,top_k,user_tier}` and `503 {embedder,database}_unavailable`. Single redacted JSON log per request (no `query`/`text`/`embedding`/DB error leak). OpenAPI `/v1/retrieve` rewritten to match the new contract; `Settings.embedding_model` default flipped to `BAAI/bge-m3` (was the e5 768-dim placeholder).
 - **UI-001** : chat page MVP served by the gateway — vanilla HTML+CSS+JS (`gateway/static/`) served via `tower-http ServeDir/ServeFile`; 4 security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`) applied router-wide covering both static routes and `POST /v1/chat`; `app.js` manages `conversation_id` UUIDv4 in `localStorage`, inserts `<article data-role="user|assistant|error">` via `textContent` (XSS safe), shows generic error `L'archive ne répond pas. Réessayez.` with optional `<small>req: <id></small>`; "Nouvelle conversation" button clears DOM and rotates UUID.
 
+- **ING-010** : `feat(scripts)` — gdrive_export utilities lib (slugify, state, frontmatter merge, paths, normalize, rename). Pure Python package `scripts/gdrive_export/` with isolated `scripts/pyproject.toml` + `scripts/uv.lock` (no Drive API, no runtime dep on workers/). 78 tests (unit + property hypothesis + git integration). Pre-commit hooks scoped `^scripts/.*\.py$`. `.gitignore` extended with `.gcp/`, `scripts/.gdrive_state.json{,.bak}`. ADR-0006 accepted. Ready for ING-013 (Drive API integration).
+
+### Fixed
+- **ING-010 MED-1** (`scripts/gdrive_export/paths.py`): `resolve_local_path` now raises `ValueError` when both the plain candidate and the id-suffixed candidate are already in `taken_paths`, instead of silently returning a colliding path.
+- **ING-010 MED-2** (`scripts/gdrive_export/state.py`): `save_state` now writes to a sibling `.tmp` file and uses `os.replace()` for an atomic rename — protects against state corruption on process crash mid-write (POSIX + Windows).
+- **ING-010 MED-3** (`scripts/gdrive_export/frontmatter_merge.py`): `merge_frontmatter` now `copy.deepcopy`s each default value from `defaults_user` before inserting into the merged dict, preventing the module-level `USER_MANAGED_DEFAULTS["tags"]` list from being shared by reference across calls.
+- **ING-010 fresh-eyes HIGH** (`scripts/gdrive_export/slugify.py`): `slugify` now re-strips leading/trailing `-` after the 80-char cap, preventing a trailing hyphen when the cap lands mid-hyphen-run. Fixes AC-3 idempotence invariant.
+- **ING-010 fresh-eyes MED-1** (`scripts/tests/conftest.py`): AC-14 import-firewall regex strengthened to catch bare `import X`, aliased `import X as Y`, and `from X import ...` forms for `requests`, `httpx`, `urllib`/`urllib3`, `aiohttp`, and existing Drive API packages. Uses `re.MULTILINE`. New `tests/test_import_firewall.py` covers all bypass patterns (21 cases).
+
+### Notes
+- **ING-010 LOC budget**: PR totals ~1 058 LOC vs the ≤ 300 rule. Overrun is test-heavy (unit + property + git-integration suites across 6 modules). No production logic exceeds budget; test density is justified by TDD on filesystem/atomicity edge cases and property-based coverage of AC-3 invariants.
+
 ## [0.1.0] - TBD
 
 Initial release.

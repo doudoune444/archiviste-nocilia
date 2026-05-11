@@ -85,3 +85,10 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# GCP credentials (never commit)
+.gcp/
+
+# Google Drive sync runtime state (tracked manually — see ING-013)
+scripts/.gdrive_state.json
+scripts/.gdrive_state.json.bak

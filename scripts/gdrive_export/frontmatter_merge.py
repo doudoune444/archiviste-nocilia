@@ -29,6 +29,25 @@ class FrontmatterMergeError(Exception):
     """Raised when the existing frontmatter YAML cannot be parsed."""
 
 
+def _build_merged_dict(
+    existing_yaml: str | None,
+    script_managed: dict[str, Any],
+    defaults_user: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the merged frontmatter as a plain dict (pre-yaml-dump).
+
+    User-default values are deep-copied so the caller cannot mutate ``defaults_user``
+    by modifying the returned dict.
+    """
+    existing: dict[str, Any] = _parse_existing(existing_yaml)
+    merged = dict(existing)
+    merged.update(script_managed)
+    for key, default in defaults_user.items():
+        if key not in merged:
+            merged[key] = copy.deepcopy(default)
+    return merged
+
+
 def merge_frontmatter(
     existing_yaml: str | None,
     script_managed: dict[str, Any],
@@ -43,12 +62,7 @@ def merge_frontmatter(
 
     Returns the merged YAML string (alphabetically sorted, safe_dump).
     """
-    existing: dict[str, Any] = _parse_existing(existing_yaml)
-    merged = dict(existing)
-    merged.update(script_managed)
-    for key, default in defaults_user.items():
-        if key not in merged:
-            merged[key] = copy.deepcopy(default)
+    merged = _build_merged_dict(existing_yaml, script_managed, defaults_user)
     return yaml.safe_dump(merged, default_flow_style=False, allow_unicode=True, sort_keys=True)
 
 

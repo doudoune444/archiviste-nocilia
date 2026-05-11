@@ -106,21 +106,31 @@ class TestRoundTrip:
 
 
 class TestAtomicSave:
-    def test_no_tmp_file_left_on_success(self, tmp_path: Path) -> None:
-        # MED-2: save_state must write atomically (tmp → replace) — no .tmp artefact
-        # should survive a successful write.
+    def test_original_intact_when_replace_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # AC-5 / MED-2: atomicity — if os.replace raises mid-write the original state
+        # file must be left unchanged.  Pre-fix (write_text directly) would have already
+        # overwritten the original before any error could occur, so this test FAILS
+        # without the tmp-then-replace implementation.
         state_file = tmp_path / "state.json"
-        save_state(state_file, {"x": make_entry()})
-        tmp_file = tmp_path / "state.json.tmp"
-        assert not tmp_file.exists(), ".tmp artefact must not remain after successful save"
+        original_state = {"original": make_entry("lore/original.md")}
+        save_state(state_file, original_state)
+        original_content = state_file.read_text(encoding="utf-8")
 
-    def test_state_file_present_after_save(self, tmp_path: Path) -> None:
-        # MED-2: the final state file must exist and be valid after atomic replace.
-        state_file = tmp_path / "state.json"
-        save_state(state_file, {"x": make_entry()})
-        assert state_file.exists()
-        loaded = load_state(state_file)
-        assert "x" in loaded
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated crash during atomic replace")
+
+        monkeypatch.setattr("gdrive_export.state.os.replace", _raise)
+
+        new_state = {"new": make_entry("lore/new.md")}
+        with pytest.raises(OSError, match="simulated crash"):
+            save_state(state_file, new_state)
+
+        # Original must be byte-for-byte intact — not partially overwritten.
+        assert state_file.read_text(encoding="utf-8") == original_content, (
+            "MED-2: original state file was corrupted before os.replace — not atomic"
+        )
 
 
 class TestComputeBodyHash:

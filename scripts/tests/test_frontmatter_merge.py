@@ -7,6 +7,7 @@ from gdrive_export.frontmatter_merge import (
     SCRIPT_MANAGED_KEYS,
     USER_MANAGED_DEFAULTS,
     FrontmatterMergeError,
+    _build_merged_dict,
     merge_frontmatter,
 )
 
@@ -98,26 +99,24 @@ class TestInvalidYaml:
 
 class TestMutableDefaultIsolation:
     def test_tags_default_not_shared_across_calls(self) -> None:
-        # MED-3: USER_MANAGED_DEFAULTS["tags"] is a module-level list; merge_frontmatter
-        # must deep-copy it so mutations in one merged dict don't bleed into later calls.
-        result1 = merge_frontmatter(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
-        parsed1 = yaml.safe_load(result1)
-        # Mutate the returned tags list directly
-        parsed1["tags"].append("injected")
-        # Second call must still get a clean empty list
-        result2 = merge_frontmatter(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
-        parsed2 = yaml.safe_load(result2)
-        assert parsed2["tags"] == [], (
-            "MED-3: tags default was shared by ref — mutations leaked across calls"
+        # AC-6 / MED-3: _build_merged_dict must deep-copy user defaults so the
+        # returned dict's "tags" list is NOT the same object as USER_MANAGED_DEFAULTS["tags"].
+        # Without copy.deepcopy, merged["tags"] IS USER_MANAGED_DEFAULTS["tags"] (same
+        # reference).  A caller holding the merged dict could then mutate the module
+        # constant via merged["tags"].append(...), silently corrupting all future calls.
+        # This test FAILS when copy.deepcopy is replaced with a direct assignment.
+        merged = _build_merged_dict(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
+        # Mutate the returned dict's tags list.
+        merged["tags"].append("injected")
+        # Module constant must be unaffected — proves deepcopy broke the alias.
+        assert USER_MANAGED_DEFAULTS["tags"] == [], (
+            "MED-3: merged['tags'] is the same object as USER_MANAGED_DEFAULTS['tags'] — "
+            "deepcopy boundary missing"
         )
 
-    def test_user_managed_defaults_list_unchanged_after_merge(self) -> None:
-        # MED-3: the module-level USER_MANAGED_DEFAULTS["tags"] list must remain []
-        # after a merge that injects it into a new document.
-        merge_frontmatter(None, SCRIPT_DATA, USER_MANAGED_DEFAULTS)
-        assert USER_MANAGED_DEFAULTS["tags"] == [], (
-            "MED-3: merge_frontmatter mutated module-level USER_MANAGED_DEFAULTS"
-        )
+    # Note: test_user_managed_defaults_list_unchanged_after_merge (round-1) was removed
+    # (tautological — the buggy direct-assign never mutated the module constant either,
+    # so the test passed equally under both fixed and broken code; see review MED-3).
 
 
 class TestScriptManagedKeys:

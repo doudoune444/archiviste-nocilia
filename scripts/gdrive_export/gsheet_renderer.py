@@ -42,14 +42,14 @@ def resolve_tab_collisions(
     Returns a list of (tab_dict, slug) pairs in index order.
     """
     sorted_tabs = sorted(tabs, key=lambda t: int(t["index"]))
-    seen: dict[str, bool] = {}
+    seen: set[str] = set()
     result: list[tuple[dict[str, Any], str]] = []
     for tab in sorted_tabs:
         title = str(tab["title"])
         gid = int(tab["sheetId"])
         base_slug = slugify(title, str(gid))
         if base_slug not in seen:
-            seen[base_slug] = True
+            seen.add(base_slug)
             result.append((tab, base_slug))
         else:
             result.append((tab, f"{base_slug}-{gid}"))

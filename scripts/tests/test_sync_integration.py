@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import googleapiclient.errors as gae
 import pytest
@@ -826,6 +826,7 @@ class TestScopeFailFast:
         self, tmp_path: Path, capsys: Any
     ) -> None:
         # AC-15: verify_extra_scopes exits on 403 insufficient scope
+        # LOW-7: use DriveClient.from_services factory instead of private attribute access
         resp = MagicMock()
         resp.status = 403
         resp.reason = "Forbidden"
@@ -836,14 +837,12 @@ class TestScopeFailFast:
             }).encode(),
         )
 
-        with patch("gdrive_export.drive_client.build"):
-            client = DriveClient.__new__(DriveClient)
-            client._sheets_service = MagicMock()
-            side_effect = http_error
-            (
-                client._sheets_service.spreadsheets.return_value
-                .get.return_value.execute
-            ).side_effect = side_effect
+        sheets_svc = MagicMock()
+        (
+            sheets_svc.spreadsheets.return_value
+            .get.return_value.execute
+        ).side_effect = http_error
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
 
         with pytest.raises(SystemExit) as exc_info:
             client.verify_extra_scopes()
@@ -872,3 +871,83 @@ class TestMimeRegression:
         assert (lore_root / "my-doc.md").exists()
         assert (lore_root / "photo.png").exists()
         assert summary.errors == 0
+
+
+class TestGsheetWorkbookLevelError:
+    """HIGH-1: 429/5xx on get_spreadsheet_tabs → errors incremented, exit 1."""
+
+    def test_429_on_get_spreadsheet_tabs_increments_errors(self, tmp_path: Path) -> None:
+        # HIGH-1: spec L52 — quota/server errors on gsheet workbook listing must
+        # count as errors so __main__.py exits 1.  Previously counts.errors stayed 0.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        quota_err = DriveApiError("sheets_get_failed: 429", 429)
+        client = _make_drive_client(
+            files=[
+                _file_entry("sheet1", "My Sheet", _SHEET_MIME),
+                _file_entry("doc1", "My Doc", _DOC_MIME),
+            ],
+            doc_bodies={"doc1": "# OK\n"},
+            export_errors={"sheet1": quota_err},
+        )
+        summary, logs = _run(client, lore_root, state_path)
+
+        # HIGH-1: workbook-level failure must be counted as an error
+        assert summary.errors == 1
+        # Other files continue processing
+        assert summary.created == 1
+
+        error_logs = [
+            lg for lg in logs
+            if lg.get("event") == "gdrive_sync.file" and lg.get("status") == "error"
+        ]
+        assert len(error_logs) == 1
+        assert "429" in error_logs[0].get("reason", "")
+
+    def test_5xx_on_get_spreadsheet_tabs_increments_errors(self, tmp_path: Path) -> None:
+        # HIGH-1: 5xx server error on workbook listing also counts as error
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        server_err = DriveApiError("sheets_get_failed: 503", 503)
+        client = _make_drive_client(
+            files=[_file_entry("sheet1", "Broken Sheet", _SHEET_MIME)],
+            export_errors={"sheet1": server_err},
+        )
+        summary, _ = _run(client, lore_root, state_path)
+        assert summary.errors >= 1
+
+
+class TestWholeWorkbookDeletion:
+    """AC-7 coverage gap: whole-workbook deletion archives all its tabs."""
+
+    def test_workbook_deleted_archives_all_tabs(self, tmp_path: Path) -> None:
+        # AC-7: run-1 exports a workbook with 2 tabs; run-2 the workbook is gone
+        # from Drive → both tab .md files must get archived: true.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        tabs = [_sheet_tab("Tab1", 0, 0), _sheet_tab("Tab2", 1, 1)]
+        client1 = _make_drive_client(
+            files=[_file_entry("sid", "Book", _SHEET_MIME)],
+            sheet_tabs={"sid": tabs},
+            sheet_values={"sid": {
+                "Tab1": [["H"], ["v1"]],
+                "Tab2": [["H"], ["v2"]],
+            }},
+        )
+        _run(client1, lore_root, state_path)
+        md_files_run1 = list(lore_root.glob("*.md"))
+        assert len(md_files_run1) == 2
+
+        # Run 2: entire workbook absent from Drive
+        client2 = _make_drive_client(files=[])
+        summary, _ = _run(client2, lore_root, state_path)
+
+        # Both tab files must have archived: true
+        for md_file in lore_root.glob("*.md"):
+            content = md_file.read_text(encoding="utf-8")
+            fm_end = content.index("\n---\n", 4)
+            fm = yaml.safe_load(content[4:fm_end])
+            assert fm["archived"] is True, f"{md_file.name} should be archived"
+            assert fm.get("archived_at") is not None
+
+        assert summary.archived == 2  # AC-7: both tabs archived

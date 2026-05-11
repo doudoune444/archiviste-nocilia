@@ -236,11 +236,8 @@ class TestSheetsApi:
     """AC-1 ING-011: get_spreadsheet_tabs and get_sheet_values."""
 
     def _build_sheets_client(self, mock_sheets_svc: MagicMock) -> DriveClient:
-        with patch("gdrive_export.drive_client.build") as mock_build:
-            mock_build.return_value = MagicMock()
-            client = DriveClient(MagicMock())
-            client._sheets_service = mock_sheets_svc
-            return client
+        # LOW-7: use from_services factory to avoid private attribute assignment
+        return DriveClient.from_services(MagicMock(), mock_sheets_svc, MagicMock())
 
     def test_get_spreadsheet_tabs_returns_properties(self) -> None:
         # AC-1: returns list of {title, sheetId, index} from API response
@@ -283,17 +280,12 @@ class TestSlidesApi:
 
     def test_get_presentation_returns_dict(self) -> None:
         # AC-9: returns presentation dict from Slides API
-        svc = MagicMock()
-        svc.spreadsheets = MagicMock()
+        # LOW-7: use from_services factory
         slides_svc = MagicMock()
         pres_data: dict[str, Any] = {"slides": [{"pageElements": []}]}
         slides_svc.presentations.return_value.get.return_value.execute.return_value = pres_data
 
-        with patch("gdrive_export.drive_client.build") as mock_build:
-            mock_build.return_value = MagicMock()
-            client = DriveClient(MagicMock())
-            client._slides_service = slides_svc
-
+        client = DriveClient.from_services(MagicMock(), MagicMock(), slides_svc)
         result = client.get_presentation("pres123")
         assert result == pres_data
 
@@ -303,11 +295,7 @@ class TestSlidesApi:
         slides_svc.presentations.return_value.get.return_value.execute.side_effect = (
             HttpError(resp=_fake_resp(503), content=b"")
         )
-        with patch("gdrive_export.drive_client.build") as mock_build:
-            mock_build.return_value = MagicMock()
-            client = DriveClient(MagicMock())
-            client._slides_service = slides_svc
-
+        client = DriveClient.from_services(MagicMock(), MagicMock(), slides_svc)
         with pytest.raises(DriveApiError):
             client.get_presentation("pres123")
 
@@ -317,15 +305,12 @@ class TestScopeProbe:
 
     def test_404_probe_success(self) -> None:
         # AC-15: 404 = scope present, spreadsheet not found (expected)
+        # LOW-7: use from_services factory
         sheets_svc = MagicMock()
         sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
             HttpError(resp=_fake_resp(404), content=b"")
         )
-        with patch("gdrive_export.drive_client.build") as mock_build:
-            mock_build.return_value = MagicMock()
-            client = DriveClient(MagicMock())
-            client._sheets_service = sheets_svc
-
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
         # Should not raise or exit
         client.verify_extra_scopes()
 
@@ -340,12 +325,20 @@ class TestScopeProbe:
                 }).encode(),
             )
         )
-        with patch("gdrive_export.drive_client.build") as mock_build:
-            mock_build.return_value = MagicMock()
-            client = DriveClient(MagicMock())
-            client._sheets_service = sheets_svc
-
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
         with pytest.raises(SystemExit) as exc_info:
             client.verify_extra_scopes()
         assert exc_info.value.code == 1
         assert "gdrive scope missing" in capsys.readouterr().err
+
+    def test_unexpected_5xx_raises_drive_api_error(self) -> None:
+        # LOW-3: unexpected HTTP errors (5xx) are re-raised so boot fail-fast
+        # triggers visibly instead of silently passing scope validation.
+        sheets_svc = MagicMock()
+        sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
+            HttpError(resp=_fake_resp(503), content=b"Service Unavailable")
+        )
+        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
+        with pytest.raises(DriveApiError) as exc_info:
+            client.verify_extra_scopes()
+        assert exc_info.value.status_code == 503

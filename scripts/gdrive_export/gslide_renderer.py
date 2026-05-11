@@ -6,9 +6,20 @@ No Drive API imports (firewall AC-14).
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 from gdrive_export.normalize import normalize_body
+
+
+def _normalize_slide_text(text: str) -> str:
+    """Normalize slide/notes text: NFKC + strip C0 controls + strip Cf (zero-width) chars.
+
+    LOW-8: mirrors the Cf-strip applied in gsheet_renderer._escape_cell so both
+    renderers share the same normalization level for all extracted text.
+    """
+    nfkc = normalize_body(text)
+    return "".join(ch for ch in nfkc if unicodedata.category(ch) != "Cf")
 
 
 def extract_slide_text(slide: dict[str, Any]) -> str:
@@ -40,7 +51,7 @@ def extract_slide_text(slide: dict[str, Any]) -> str:
         shapes_with_pos.append((translate_y, translate_x, raw_text))
 
     shapes_with_pos.sort(key=lambda t: (t[0], t[1]))
-    return "\n\n".join(normalize_body(text) for _, _, text in shapes_with_pos)
+    return "\n\n".join(_normalize_slide_text(text) for _, _, text in shapes_with_pos)
 
 
 def extract_speaker_notes(slide: dict[str, Any]) -> str:
@@ -58,15 +69,18 @@ def extract_speaker_notes(slide: dict[str, Any]) -> str:
             continue
         text_obj = element["shape"].get("text", {})
         text_elements: list[dict[str, Any]] = text_obj.get("textElements", [])
-        raw = "".join(
+        # LOW-4: join multiple textRuns with '\n' so multi-shape notes don't run together.
+        runs = [
             te["textRun"]["content"]
             for te in text_elements
             if "textRun" in te
-        )
-        if raw:
-            parts.append(normalize_body(raw))
+        ]
+        raw = "\n".join(runs)
+        if raw.strip():
+            parts.append(_normalize_slide_text(raw))
 
-    return "".join(parts)
+    # LOW-4: join across shapes with '\n' as well, keeping single blockquote prefix intact.
+    return "\n".join(parts)
 
 
 def render_presentation_markdown(
@@ -114,7 +128,11 @@ def render_presentation_markdown(
         notes = extract_speaker_notes(slide)
         if notes:
             parts.append("")
-            parts.append(f"> **Notes**: {notes}")
+            # LOW-4: prefix every line with '> ' so multi-line notes remain valid blockquote.
+            note_lines = notes.splitlines()
+            first_line = f"> **Notes**: {note_lines[0]}"
+            continuation = [f"> {line}" for line in note_lines[1:]]
+            parts.append("\n".join([first_line, *continuation]))
 
         parts.append("")
 

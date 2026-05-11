@@ -28,6 +28,7 @@ _SUPPORTED_MIMES = frozenset({_GDOC_MIME, _PNG_MIME, _FOLDER_MIME, _SHEET_MIME, 
 _LIST_FIELDS = "nextPageToken, files(id, name, mimeType, parents, md5Checksum)"
 _PAGE_SIZE = 1000
 _HTTP_FORBIDDEN = 403
+_HTTP_NOT_FOUND = 404
 
 
 class DriveApiError(Exception):
@@ -47,6 +48,23 @@ class DriveClient:
         self._service = build("drive", "v3", http=authorized_http)
         self._sheets_service = build("sheets", "v4", http=authorized_http)
         self._slides_service = build("slides", "v1", http=authorized_http)
+
+    @classmethod
+    def from_services(
+        cls,
+        drive_service: Any,
+        sheets_service: Any,
+        slides_service: Any,
+    ) -> DriveClient:
+        """Construct a DriveClient from pre-built API service objects.
+
+        LOW-7: test-only factory that avoids accessing private attributes directly.
+        """
+        instance = object.__new__(cls)
+        instance._service = drive_service
+        instance._sheets_service = sheets_service
+        instance._slides_service = slides_service
+        return instance
 
     def list_folder_recursive(
         self, folder_id: str, _path_components: list[str] | None = None
@@ -141,6 +159,8 @@ class DriveClient:
 
         Probes Sheets API with a bogus ID; expects 404 (found scope, no such file)
         or raises SystemExit on 403 insufficient scope.
+        LOW-3: unexpected HTTP codes (502, network errors) are re-raised so boot
+        fail-fast triggers visibly rather than silently passing scope validation.
         """
         try:
             self._sheets_service.spreadsheets().get(spreadsheetId="__probe__").execute()
@@ -152,8 +172,13 @@ class DriveClient:
                 )
                 print(msg, file=sys.stderr)  # noqa: T201
                 sys.exit(1)
-            # 404 = probe success (scope OK, spreadsheet not found — expected)
-            # Other codes: ignore for probe purposes
+            if exc.status_code == _HTTP_NOT_FOUND:
+                # 404 = probe success (scope OK, spreadsheet not found — expected)
+                return
+            # Unexpected HTTP error (5xx, network) — re-raise so boot fails visibly.
+            raise DriveApiError(
+                f"scope_probe_failed: {exc.status_code}", exc.status_code
+            ) from exc
 
     def export_gdoc_markdown(self, file_id: str) -> str:
         """Export a Google Doc as Markdown text.
@@ -216,5 +241,6 @@ def _is_insufficient_scope(exc: HttpError) -> bool:
             e.get("reason") in ("insufficientPermissions", "accessNotConfigured")
             for e in errors
         )
-    except Exception:  # parse failure → fail-fast is the safer default
+    except (json.JSONDecodeError, KeyError, AttributeError, UnicodeDecodeError):
+        # Parse failure → fail-fast is the safer default (LOW-2: specific exceptions only)
         return True

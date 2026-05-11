@@ -105,6 +105,60 @@ class TestExtractSpeakerNotes:
         slide = _make_slide([_make_shape("body")], notes_text="")
         assert extract_speaker_notes(slide) == ""
 
+    def test_multi_textrun_notes_joined_with_newline(self) -> None:
+        # LOW-4: multiple textRuns in notes must be joined with '\n' (not '')
+        # to prevent words from running together in the blockquote.
+        multi_run_shape: dict[str, object] = {
+            "shape": {
+                "text": {
+                    "textElements": [
+                        {"textRun": {"content": "First run"}},
+                        {"textRun": {"content": "Second run"}},
+                    ]
+                }
+            },
+            "transform": {"translateY": 0.0, "translateX": 0.0},
+        }
+        slide: dict[str, object] = {
+            "pageElements": [_make_shape("body")],
+            "pageProperties": {},
+            "slideProperties": {
+                "notesPage": {"pageElements": [multi_run_shape]}
+            },
+        }
+        result = extract_speaker_notes(slide)
+        # Runs must be separated, not concatenated
+        assert "First run" in result
+        assert "Second run" in result
+        assert result != "First runSecond run"
+
+    def test_multi_shape_notes_blockquote_valid(self) -> None:
+        # LOW-4: multi-shape notes must produce valid blockquote (each line prefixed '>')
+        slide_with_two_note_shapes: dict[str, object] = {
+            "pageElements": [_make_shape("body")],
+            "pageProperties": {},
+            "slideProperties": {
+                "notesPage": {
+                    "pageElements": [
+                        _make_shape("Line one"),
+                        _make_shape("Line two"),
+                    ]
+                }
+            },
+        }
+        presentation = {"slides": [slide_with_two_note_shapes]}
+        body, _ = render_presentation_markdown("Deck", presentation)
+        # Every line after "> **Notes**:" prefix must also start with ">" if non-empty
+        in_notes = False
+        for line in body.splitlines():
+            if line.startswith("> **Notes**:"):
+                in_notes = True
+                continue
+            if in_notes and line.strip():
+                assert line.startswith(">"), f"Non-blockquote notes line: {line!r}"
+            else:
+                in_notes = False
+
 
 class TestRenderPresentationMarkdown:
     """AC-9/10/11/16/17: full presentation rendering."""

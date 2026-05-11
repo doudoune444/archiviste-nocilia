@@ -1,4 +1,10 @@
 repos:
+  - repo: https://github.com/rhysd/actionlint
+    rev: a443f344ff32813837fa49f7aa6cbc478d770e62 # v1.7.9
+    hooks:
+      - id: actionlint
+        files: ^\.github/workflows/.*\.ya?ml$
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:

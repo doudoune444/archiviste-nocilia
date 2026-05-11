@@ -14,6 +14,10 @@ from typing import Any, cast
 from google.oauth2 import service_account
 
 _DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+_SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+_SLIDES_READONLY_SCOPE = "https://www.googleapis.com/auth/presentations.readonly"
+
+_SCOPES = [_DRIVE_READONLY_SCOPE, _SHEETS_READONLY_SCOPE, _SLIDES_READONLY_SCOPE]
 
 
 def load_service_account_credentials() -> service_account.Credentials:
@@ -78,7 +82,7 @@ def _build_credentials(info: dict[str, Any]) -> service_account.Credentials:
     try:
         # google-auth has no stubs for from_service_account_info (upstream gap, not a workaround).
         creds = service_account.Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
-            info, scopes=[_DRIVE_READONLY_SCOPE]
+            info, scopes=_SCOPES
         )
         return cast(service_account.Credentials, creds)
     except Exception as exc:

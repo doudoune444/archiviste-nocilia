@@ -78,6 +78,33 @@ class TestSluggifyMatrix:
         assert result == "fichier-ete-2024"
 
 
+class TestUnicodeDashNormalization:
+    """AC-3 ING-011: Unicode dashes map to ASCII '-' before slug pipeline."""
+
+    def test_em_dash_normalized(self) -> None:
+        # AC-3: em-dash U+2014 → ASCII '-' → collapsed with surroundings
+        result = slugify("before—after", "abc12345")
+        assert result == "before-after"
+
+    def test_en_dash_normalized(self) -> None:
+        # AC-3: en-dash U+2013 → ASCII '-'
+        en_dash = chr(0x2013)
+        result = slugify(f"before{en_dash}after", "abc12345")
+        assert result == "before-after"
+
+    def test_figure_dash_normalized(self) -> None:
+        # AC-3: figure-dash U+2012 → ASCII '-'
+        figure_dash = chr(0x2012)
+        result = slugify(f"before{figure_dash}after", "abc12345")
+        assert result == "before-after"
+
+    def test_minus_sign_normalized(self) -> None:
+        # AC-3: minus sign U+2212 → ASCII '-'
+        minus_sign = chr(0x2212)
+        result = slugify(f"before{minus_sign}after", "abc12345")
+        assert result == "before-after"
+
+
 class TestSlugifyIdempotence:
     """AC-3: idempotence — slugify(slugify(s)) == slugify(s)."""
 

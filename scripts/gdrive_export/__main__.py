@@ -50,6 +50,9 @@ def main() -> None:
     creds = load_service_account_credentials()
     client = DriveClient(creds)
 
+    # AC-15: fail-fast if SA lacks spreadsheets.readonly / presentations.readonly.
+    client.verify_extra_scopes()
+
     summary = run_sync(
         client,
         root_folder_id=args.root_folder_id,

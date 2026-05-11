@@ -1,12 +1,15 @@
 """Google Drive API v3 wrapper.
 
-Provides list_folder_recursive, export_gdoc_markdown, and download_png.
+Provides list_folder_recursive, export_gdoc_markdown, download_png,
+get_spreadsheet_tabs, get_sheet_values, get_presentation, verify_extra_scopes.
 Timeout: 30s per HTTP call (AC-18 / security.md A04).
 Drive API imports authorized here by conftest.py firewall (ING-013).
 """
 
 from __future__ import annotations
 
+import json
+import sys
 from typing import Any
 
 import google_auth_httplib2
@@ -18,10 +21,13 @@ from googleapiclient.errors import HttpError
 _GDOC_MIME = "application/vnd.google-apps.document"
 _PNG_MIME = "image/png"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
-_SUPPORTED_MIMES = frozenset({_GDOC_MIME, _PNG_MIME, _FOLDER_MIME})
+_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
+_SLIDES_MIME = "application/vnd.google-apps.presentation"
+_SUPPORTED_MIMES = frozenset({_GDOC_MIME, _PNG_MIME, _FOLDER_MIME, _SHEET_MIME, _SLIDES_MIME})
 
 _LIST_FIELDS = "nextPageToken, files(id, name, mimeType, parents, md5Checksum)"
 _PAGE_SIZE = 1000
+_HTTP_FORBIDDEN = 403
 
 
 class DriveApiError(Exception):
@@ -39,11 +45,13 @@ class DriveClient:
         http = httplib2.Http(timeout=30)
         authorized_http = google_auth_httplib2.AuthorizedHttp(credentials, http)
         self._service = build("drive", "v3", http=authorized_http)
+        self._sheets_service = build("sheets", "v4", http=authorized_http)
+        self._slides_service = build("slides", "v1", http=authorized_http)
 
     def list_folder_recursive(
         self, folder_id: str, _path_components: list[str] | None = None
     ) -> list[dict[str, Any]]:
-        """Return all gdoc + PNG files under *folder_id* recursively.
+        """Return all gdoc + PNG + gsheet + gslide files under *folder_id* recursively.
 
         Each file dict is augmented with 'drive_path_components' (list of folder
         name strings from the root, not including the root itself).
@@ -62,7 +70,7 @@ class DriveClient:
                 if mime == _FOLDER_MIME:
                     sub_components = [*_path_components, file["name"]]
                     result.extend(self.list_folder_recursive(file["id"], sub_components))
-                elif mime in (_GDOC_MIME, _PNG_MIME):
+                elif mime in (_GDOC_MIME, _PNG_MIME, _SHEET_MIME, _SLIDES_MIME):
                     file["drive_path_components"] = list(_path_components)
                     result.append(file)
                 # Other types (shortcuts, PDFs, etc.) are silently skipped per spec.
@@ -71,6 +79,81 @@ class DriveClient:
                 break
 
         return result
+
+    def get_spreadsheet_tabs(self, file_id: str) -> list[dict[str, Any]]:
+        """Return sheet metadata list from Sheets API v4 spreadsheets.get.
+
+        Each entry has 'title', 'sheetId' (gid), 'index'.
+        Raises DriveApiError on HTTP error.
+        """
+        try:
+            resp: dict[str, Any] = (
+                self._sheets_service.spreadsheets()
+                .get(spreadsheetId=file_id, fields="sheets(properties(title,sheetId,index))")
+                .execute()
+            )
+        except HttpError as exc:
+            raise DriveApiError(
+                f"sheets_get_failed: {exc.status_code}", exc.status_code
+            ) from exc
+        sheets: list[dict[str, Any]] = resp.get("sheets", [])
+        return [s["properties"] for s in sheets]
+
+    def get_sheet_values(self, file_id: str, tab_title: str) -> list[list[str]]:
+        """Return cell values for *tab_title* via Sheets API v4 spreadsheets.values.get.
+
+        Returns a list of rows, each row a list of string cell values.
+        Raises DriveApiError on HTTP error.
+        """
+        try:
+            resp: dict[str, Any] = (
+                self._sheets_service.spreadsheets()
+                .values()
+                .get(spreadsheetId=file_id, range=tab_title)
+                .execute()
+            )
+        except HttpError as exc:
+            raise DriveApiError(
+                f"sheets_values_get_failed: {exc.status_code}", exc.status_code
+            ) from exc
+        rows: list[list[str]] = resp.get("values", [])
+        return rows
+
+    def get_presentation(self, file_id: str) -> dict[str, Any]:
+        """Return presentation data from Slides API v1 presentations.get.
+
+        Raises DriveApiError on HTTP error.
+        """
+        try:
+            resp: dict[str, Any] = (
+                self._slides_service.presentations()
+                .get(presentationId=file_id)
+                .execute()
+            )
+        except HttpError as exc:
+            raise DriveApiError(
+                f"slides_get_failed: {exc.status_code}", exc.status_code
+            ) from exc
+        return resp
+
+    def verify_extra_scopes(self) -> None:
+        """AC-15: fail-fast if SA lacks spreadsheets.readonly or presentations.readonly.
+
+        Probes Sheets API with a bogus ID; expects 404 (found scope, no such file)
+        or raises SystemExit on 403 insufficient scope.
+        """
+        try:
+            self._sheets_service.spreadsheets().get(spreadsheetId="__probe__").execute()
+        except HttpError as exc:
+            if exc.status_code == _HTTP_FORBIDDEN and _is_insufficient_scope(exc):
+                msg = (
+                    "gdrive scope missing: spreadsheets.readonly and "
+                    "presentations.readonly required"
+                )
+                print(msg, file=sys.stderr)  # noqa: T201
+                sys.exit(1)
+            # 404 = probe success (scope OK, spreadsheet not found — expected)
+            # Other codes: ignore for probe purposes
 
     def export_gdoc_markdown(self, file_id: str) -> str:
         """Export a Google Doc as Markdown text.
@@ -117,3 +200,21 @@ class DriveClient:
             kwargs["pageToken"] = page_token
         response: dict[str, Any] = self._service.files().list(**kwargs).execute()
         return response
+
+
+def _is_insufficient_scope(exc: HttpError) -> bool:
+    """Return True if HttpError indicates a missing OAuth scope (AC-15).
+
+    Parses the error body JSON for 'insufficientPermissions' or 'accessNotConfigured'.
+    On parse failure, returns True (fail-fast is the safer default).
+    """
+    try:
+        content = exc.content if isinstance(exc.content, bytes) else exc.content.encode()
+        body: dict[str, Any] = json.loads(content)
+        errors: list[dict[str, Any]] = body.get("error", {}).get("errors", [])
+        return any(
+            e.get("reason") in ("insufficientPermissions", "accessNotConfigured")
+            for e in errors
+        )
+    except Exception:  # parse failure → fail-fast is the safer default
+        return True

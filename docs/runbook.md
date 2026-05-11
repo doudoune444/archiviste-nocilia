@@ -175,15 +175,17 @@ NFKC + strip controls, chunk via `RecursiveCharacterTextSplitter` (tokenizer
 dans `documents` + `chunks` (transaction par fichier, hash SHA-256 du corps
 normalisé).
 
-## Sync Google Drive (ING-013)
+## Sync Google Drive (ING-013 + ING-011)
 
 Synchronise un dossier Google Drive vers `lore/` via l'API Drive v3. Supporte
-gdoc → `.md` (export Markdown), PNG natif → `.png`, détection créé/updated/
-renamed/archived/unchanged, state persisté dans `scripts/.gdrive_state.json`.
+gdoc → `.md` (export Markdown), PNG natif → `.png`, Google Sheets → `.md`
+(un fichier par onglet, table GFM), Google Slides → `.md` (un fichier par
+présentation, `## Slide N`). Détection créé/updated/renamed/archived/unchanged,
+state persisté dans `scripts/.gdrive_state.json`.
 
 ### Prérequis
 
-1. **Service account GCP** avec scope `drive.readonly` :
+1. **Service account GCP** avec scopes additionnels Sheets et Slides (ING-011) :
    ```bash
    gcloud iam service-accounts create gdrive-sync-sa \
      --display-name "GDrive Sync SA"
@@ -191,6 +193,17 @@ renamed/archived/unchanged, state persisté dans `scripts/.gdrive_state.json`.
    gcloud iam service-accounts keys create gdrive-sa-key.json \
      --iam-account gdrive-sync-sa@<PROJECT>.iam.gserviceaccount.com
    ```
+
+   Le script déclare les scopes suivants dans les credentials SA :
+   - `https://www.googleapis.com/auth/drive.readonly`
+   - `https://www.googleapis.com/auth/spreadsheets.readonly` (ING-011)
+   - `https://www.googleapis.com/auth/presentations.readonly` (ING-011)
+
+   Le partage de fichiers GSheet/GSlide avec le service account (via Drive)
+   suffit pour obtenir l'accès en lecture ; aucune configuration IAM
+   supplémentaire n'est requise. Si les scopes manquent, le script sort en
+   erreur au démarrage avec le message `gdrive scope missing: spreadsheets.readonly
+   and presentations.readonly required`.
 
 2. **Partager le dossier Drive** avec l'email du service account
    (`gdrive-sync-sa@<PROJECT>.iam.gserviceaccount.com`) en lecture seule.

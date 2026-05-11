@@ -1,0 +1,155 @@
+name: gdrive-sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1" # Monday 03:00 UTC
+
+# AC-11: serialise concurrent runs; never cancel an in-progress run to avoid
+# mid-write corruption of scripts/.gdrive_state.json.
+concurrency:
+  group: gdrive-sync
+  cancel-in-progress: false
+
+# AC-2: minimal explicit permissions; all others default to none.
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  sync:
+    name: sync Drive -> lore/
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30 # AC-12
+
+    steps:
+      # AC-13: fail-fast BEFORE checkout if secret is absent (fork / initial config).
+      - name: check secret
+        env:
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+        run: |
+          if [ -z "${GDRIVE_SA_KEY}" ]; then
+            echo "secret GDRIVE_SA_KEY missing — see docs/runbook.md" >&2
+            exit 1
+          fi
+
+      # AC-3: pinned by commit SHA; fetch-depth=0 for history-aware git mv (ING-010 AC-9).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      # AC-4: uv installation; Python version resolved from scripts/pyproject.toml.
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+
+      - name: sync deps
+        working-directory: scripts
+        run: uv sync
+
+      # AC-5: module entrypoint (scripts/gdrive_export/__main__.py, not scripts/gdrive_export.py).
+      # Secret injected at step env scope only — never persisted to filesystem.
+      # set +o pipefail: PIPESTATUS[0] must be read before set -e can abort on the pipe.
+      # exit 0 → success; exit 1 → file-level errors (AC-8: draft PR); exit other → crash, propagate.
+      - name: run sync
+        id: run_sync
+        working-directory: scripts
+        env:
+          GDRIVE_SA_KEY_JSON: ${{ secrets.GDRIVE_SA_KEY }}
+        shell: bash
+        run: |
+          set +o pipefail
+          uv run python -m gdrive_export \
+            --root-folder-id "${{ vars.GDRIVE_ROOT_FOLDER_ID }}" \
+            | tee /tmp/sync.log
+          EXIT=${PIPESTATUS[0]}
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          if [ "${EXIT}" -ne 0 ] && [ "${EXIT}" -ne 1 ]; then
+            echo "sync crashed with exit code ${EXIT}" >&2
+            exit "${EXIT}"
+          fi
+
+      # AC-9: extract the single gdrive_sync.summary line from teed log.
+      - name: extract summary
+        id: summary
+        run: |
+          jq -c 'select(.event == "gdrive_sync.summary")' /tmp/sync.log \
+            > /tmp/summary.json 2>/dev/null || true
+          if [ ! -s /tmp/summary.json ]; then
+            echo '{"event":"gdrive_sync.summary","total":0,"created":0,"updated":0,"renamed":0,"archived":0,"unchanged":0,"errors":0}' \
+              > /tmp/summary.json
+          fi
+          {
+            printf 'errors=%s\n'    "$(jq -r '.errors    // 0' /tmp/summary.json)"
+            printf 'total=%s\n'     "$(jq -r '.total     // 0' /tmp/summary.json)"
+            printf 'created=%s\n'   "$(jq -r '.created   // 0' /tmp/summary.json)"
+            printf 'updated=%s\n'   "$(jq -r '.updated   // 0' /tmp/summary.json)"
+            printf 'renamed=%s\n'   "$(jq -r '.renamed   // 0' /tmp/summary.json)"
+            printf 'archived=%s\n'  "$(jq -r '.archived  // 0' /tmp/summary.json)"
+            printf 'unchanged=%s\n' "$(jq -r '.unchanged // 0' /tmp/summary.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      # AC-6: skip PR creation when there is nothing to commit.
+      - name: detect diff
+        id: diff
+        run: |
+          CHANGES=$(git status --porcelain lore/ scripts/.gdrive_state.json 2>/dev/null || true)
+          if [ -z "${CHANGES}" ]; then
+            echo "no changes to sync"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: compute date
+        id: date
+        if: steps.diff.outputs.has_changes == 'true'
+        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      # AC-7: build PR body with human summary line + fenced JSON + checklist.
+      - name: build PR body
+        id: pr_body
+        if: steps.diff.outputs.has_changes == 'true'
+        env:
+          ERRORS: ${{ steps.summary.outputs.errors }}
+          TOTAL: ${{ steps.summary.outputs.total }}
+          CREATED: ${{ steps.summary.outputs.created }}
+          UPDATED: ${{ steps.summary.outputs.updated }}
+          RENAMED: ${{ steps.summary.outputs.renamed }}
+          ARCHIVED: ${{ steps.summary.outputs.archived }}
+          UNCHANGED: ${{ steps.summary.outputs.unchanged }}
+        run: |
+          SUMMARY_JSON=$(cat /tmp/summary.json)
+          {
+            printf 'body<<EOF_BODY\n'
+            printf 'Summary: %s total, %s created, %s updated, %s renamed, %s archived, %s unchanged, %s errors\n' \
+              "${TOTAL}" "${CREATED}" "${UPDATED}" "${RENAMED}" "${ARCHIVED}" "${UNCHANGED}" "${ERRORS}"
+            printf '\n```json\n'
+            printf '%s\n' "${SUMMARY_JSON}"
+            printf '```\n\n'
+            printf '- [ ] Reviewer skim diff\n'
+            printf '- [ ] Trigger ingestion `python -m archiviste_workers.ingest --path lore/` after merge\n'
+            printf 'EOF_BODY\n'
+          } >> "$GITHUB_OUTPUT"
+
+      # AC-7 / AC-8: open PR (draft if errors >= 1, ready otherwise).
+      # AC-10: no git push origin main, no --force, no gh pr merge.
+      - name: create PR
+        if: steps.diff.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6.1.0
+        with:
+          branch: chore/gdrive-sync-${{ github.run_id }}
+          base: main
+          title: "chore(lore): gdrive sync ${{ steps.date.outputs.today }}"
+          commit-message: "chore(lore): gdrive sync run ${{ github.run_id }}"
+          labels: gdrive-sync,automation
+          draft: ${{ steps.summary.outputs.errors != '0' }}
+          body: ${{ steps.pr_body.outputs.body }}
+
+      # AC-9: upload summary artifact (always, even on sync error).
+      - name: upload artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gdrive-sync-summary.json
+          path: /tmp/summary.json
+          retention-days: 30

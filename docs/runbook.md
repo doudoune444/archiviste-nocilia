@@ -274,3 +274,70 @@ Comportement :
 
 Logs JSON sur stdout : `ingest.start`, un `ingest.document` par fichier,
 `ingest.summary` final. Exit code 0 si zéro erreur, 1 sinon (2 = init fatal).
+
+## Onboarding gdrive-sync
+
+Procédure complète pour activer le workflow `gdrive-sync.yml` sur un nouveau
+repo (ou après rotation de credentials).
+
+### (a) Créer le Service Account GCP et générer la clé
+
+Voir la section `## Sync Google Drive` ci-dessus pour la commande `gcloud iam
+service-accounts create` et le téléchargement de la clé JSON. Scopes requis :
+
+- `https://www.googleapis.com/auth/drive.readonly` (obligatoire)
+- `https://www.googleapis.com/auth/spreadsheets.readonly` (si ING-011 mergé)
+- `https://www.googleapis.com/auth/presentations.readonly` (si ING-011 mergé)
+
+### (b) Partager le dossier Drive racine en lecture
+
+Partager le dossier Drive racine avec l'email du service account
+(`gdrive-sync-sa@<PROJECT>.iam.gserviceaccount.com`) en tant que « Lecteur ».
+Aucune configuration IAM GCP supplémentaire n'est nécessaire.
+
+### (c) Ajouter le secret `GDRIVE_SA_KEY` au repo
+
+```bash
+# Contenu de la clé JSON SA inline (single line)
+gh secret set GDRIVE_SA_KEY \
+  --repo <OWNER>/<REPO> \
+  --body "$(cat gdrive-sa-key.json)"
+```
+
+Le secret est injecté en env step uniquement (`GDRIVE_SA_KEY_JSON`) ; il
+n'est jamais persisté sur le filesystem du runner ni loggué.
+
+### (d) Ajouter la variable `GDRIVE_ROOT_FOLDER_ID`
+
+`GDRIVE_ROOT_FOLDER_ID` est une variable de repo (non-secret) : c'est l'ID du
+dossier Drive racine (visible dans l'URL, ex. `1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs`).
+
+```bash
+gh variable set GDRIVE_ROOT_FOLDER_ID \
+  --repo <OWNER>/<REPO> \
+  --body "<FOLDER_ID>"
+```
+
+### (e) Déclencher le premier run et reviewer la PR auto
+
+```bash
+# Déclenchement manuel via gh CLI
+gh workflow run gdrive-sync.yml --repo <OWNER>/<REPO>
+
+# Suivre l'exécution
+gh run list --workflow gdrive-sync.yml --repo <OWNER>/<REPO> --limit 3
+```
+
+Si des fichiers Drive ont été trouvés, une PR `chore/gdrive-sync-<run_id>`
+est ouverte automatiquement vers `main` avec le summary du run en body.
+Reviewer le diff, puis merger manuellement. Déclencher ensuite l'ingesteur
+ING-001 :
+
+```bash
+cd workers
+uv run python -m archiviste_workers.ingest --path ../lore/
+```
+
+Si `secrets.GDRIVE_SA_KEY` est absent, le workflow échoue en première step
+avec le message `secret GDRIVE_SA_KEY missing — see docs/runbook.md` sans
+effectuer de checkout ni d'installation.

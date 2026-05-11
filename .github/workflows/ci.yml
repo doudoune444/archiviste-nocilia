@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: check port consistency
         run: bash scripts/check-ports.sh
+      - name: actionlint
+        uses: rhysd/actionlint@a443f344ff32813837fa49f7aa6cbc478d770e62 # v1.7.9
 
   gateway:
     name: gateway (rust)

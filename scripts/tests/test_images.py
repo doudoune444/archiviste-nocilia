@@ -243,6 +243,21 @@ class TestCompressImage:
         with pytest.raises(ImageUndecodableError, match="pillow decode failed"):
             compress_image(b"\x00\x00garbage_data", "image/png", "src1", 0)
 
+    def test_decompression_bomb_treated_as_undecodable(self) -> None:
+        # Security spec L122: PIL.Image.MAX_IMAGE_PIXELS caps pixel count before resize.
+        # A PNG whose declared pixel count exceeds the cap must raise ImageUndecodableError
+        # (via DecompressionBombError → caught and reclassified), never silently succeed.
+        # Strategy: temporarily lower MAX_IMAGE_PIXELS to 1 so any real image trips the
+        # guard, then restore original value.
+        original_max = PIL.Image.MAX_IMAGE_PIXELS
+        try:
+            PIL.Image.MAX_IMAGE_PIXELS = 1
+            raw = _make_png(100, 100)  # 10 000 pixels > 1 → triggers DecompressionBombError
+            with pytest.raises(ImageUndecodableError):
+                compress_image(raw, "image/png", "src1", 0)
+        finally:
+            PIL.Image.MAX_IMAGE_PIXELS = original_max
+
     def test_transparent_png_flattened_on_jpeg_encode(self) -> None:
         # AC-3b: RGBA PNG > 5 MiB after resize → JPEG (no alpha), MIME = image/jpeg.
         rng = random.Random(2)  # noqa: S311

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import random
 import re
 import sys
 from pathlib import Path
@@ -1039,6 +1040,16 @@ def _make_inline_object(content_uri: str) -> dict[str, Any]:
     }
 
 
+def _make_large_incompressible_png() -> bytes:
+    """Return a 2048x2048 noise PNG whose JPEG re-encode exceeds 5 MiB (AC-3c fixture)."""
+    rng = random.Random(0)  # noqa: S311
+    raw_pixels = bytes(rng.randint(0, 255) for _ in range(2048 * 2048 * 3))
+    img = PIL.Image.frombytes("RGB", (2048, 2048), raw_pixels)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", compress_level=0)
+    return buf.getvalue()
+
+
 class TestGdocDocsApiCall:
     """AC-1/AC-13: get_document called for every gdoc including those without images."""
 
@@ -1470,3 +1481,119 @@ class TestSummaryImageFields:
         _run(client, lore_root, state_path)
         state = load_state(state_path)
         assert state["doc1"].images != {}  # AC-8: manifest not empty
+
+
+class TestGdocUnchangedPermute:
+    """AC-9 permute-order: same md5 set in different order → unchanged.
+
+    Spec oracle line 101: when ALL images share the same binary (same md5 post-dedup),
+    permuting which objectId is listed first in the Docs API response does NOT change
+    content_signature (all sidecar refs resolve to the same md5 path) nor the manifest
+    set — both checks in the unchanged guard pass.
+    """
+
+    def test_unchanged_when_images_permuted(self, tmp_path: Path) -> None:
+        # AC-9 spec oracle line 101: run 2 où seul l'ordre des images change
+        # sans changer le set md5 → unchanged.
+        # Two objects share the SAME binary → same md5 post-dedup → sidecar path
+        # is identical for both, so rewritten body is identical regardless of
+        # which objectId appears first in the Docs API body traversal.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri_a = "https://lh3.googleusercontent.com/imgA"
+        uri_b = "https://lh3.googleusercontent.com/imgB"
+        same_png = _make_png_bytes(10, 10)
+
+        # Run 1: body traversal order kix.a first, kix.b second.
+        client1 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri_a})\n\n![b]({uri_b})\n"},
+            doc_inline_objects={
+                "doc1": {
+                    "kix.a": _make_inline_object(uri_a),
+                    "kix.b": _make_inline_object(uri_b),
+                }
+            },
+            image_payloads={uri_a: (same_png, "image/png"), uri_b: (same_png, "image/png")},
+        )
+        _run(client1, lore_root, state_path)
+
+        # Run 2: Docs API body traversal now lists kix.b first, kix.a second
+        # (simulates Drive reordering objects). Same binary → same md5 set, and
+        # because md5 is identical for both objects the rewritten body is unchanged.
+        client2 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri_a})\n\n![b]({uri_b})\n"},
+            doc_inline_objects={
+                "doc1": {
+                    "kix.b": _make_inline_object(uri_b),
+                    "kix.a": _make_inline_object(uri_a),
+                }
+            },
+            image_payloads={uri_a: (same_png, "image/png"), uri_b: (same_png, "image/png")},
+        )
+        summary, _ = _run(client2, lore_root, state_path)
+        # AC-9: manifest set unchanged, content_signature unchanged → unchanged.
+        assert summary.unchanged == 1
+
+
+class TestGdocOversizedIntegration:
+    """AC-3c end-to-end: oversized image through sync → placeholder + counter + log."""
+
+    def test_oversized_image_placeholder(self, tmp_path: Path) -> None:
+        # AC-3c spec oracle line 94: integration test — synthetic incompressible noise
+        # 2048x2048 → compress_image raises ImageOversizedError → placeholder
+        # ![image trop volumineuse](#oversized-<objectId>) in MD + images_failed++ +
+        # log event gdrive_sync.image_oversized.
+        noise_png = _make_large_incompressible_png()
+
+        # Guard: verify that JPEG q=85 of this fixture actually exceeds 5 MiB on this host.
+        # If not (unusual hardware/codec), skip so we don't ship a false-green test.
+        verify_buf = io.BytesIO()
+        PIL.Image.frombytes("RGB", (2048, 2048),
+            bytes(random.Random(0).randint(0, 255) for _ in range(2048 * 2048 * 3))  # noqa: S311
+        ).save(verify_buf, format="JPEG", quality=85)
+        if len(verify_buf.getvalue()) <= 5 * 1024 * 1024:
+            pytest.skip("JPEG encoder compressed noise below 5 MiB on this platform")
+
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img_noise"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![alt]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.z": _make_inline_object(uri)}},
+            image_payloads={uri: (noise_png, "image/png")},
+        )
+        summary, run_logs = _run(client, lore_root, state_path)
+
+        # Counter incremented.
+        assert summary.images_failed == 1
+        # No binary written to sidecar.
+        assert not (lore_root / "my-doc.images").exists()
+        # Oversized log emitted.
+        oversized_logs = [
+            lg for lg in run_logs if lg.get("event") == "gdrive_sync.image_oversized"
+        ]
+        assert len(oversized_logs) == 1
+        assert oversized_logs[0]["object_id"] == "kix.z"
+        # Placeholder appears in the written markdown.
+        content = (lore_root / "my-doc.md").read_text(encoding="utf-8")
+        assert "#oversized-kix.z" in content
+
+
+class TestDryRunCounterCorrectness:
+    """AC-14: dry-run images_written must not inflate (MED-3 fix)."""
+
+    def test_dry_run_does_not_inflate_images_written(self, tmp_path: Path) -> None:
+        # AC-14: dry-run → images_written == 0 (no download → no knowledge of success).
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        summary, _ = _run(client, lore_root, state_path, dry_run=True)
+        assert summary.images_written == 0

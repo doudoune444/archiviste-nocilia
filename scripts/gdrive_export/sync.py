@@ -366,7 +366,10 @@ def _process_gdoc(
     if not ctx.dry_run:
         # AC-10: cleanup orphaned images after writing new ones (images were written
         # inside _process_doc_images / _compress_and_register).
-        orphans = cleanup_orphans(sidecar_dir, set(images_manifest.keys()), file_id, dry_run=False)
+        orphans = cleanup_orphans(
+            sidecar_dir, set(images_manifest.keys()), file_id,
+            dry_run=False, lore_root=ctx.lore_root,
+        )
         ctx.counts.orphans_removed += orphans
         existing_fm = _read_existing_frontmatter(local_path)
         _check_local_drift_before_write(file_id, local_path, existing, new_body_hash)
@@ -382,7 +385,7 @@ def _process_gdoc(
             last_exported_at=now, body_hash=new_body_hash, archived_at=None,
             images=images_manifest,
         )
-        # Dry-run: AC-14 — images_written already counted in _resolve_one_image.
+        # Dry-run: AC-14 — images_written is not incremented (no download → unknown outcome).
         # AC-10: count orphans that would be removed.
         if sidecar_dir.exists():
             existing_manifest = existing.images if existing is not None else {}
@@ -451,12 +454,13 @@ def _resolve_one_image(
 ) -> None:
     """Download + compress one image; update resolutions and manifest in place."""
     if ctx.dry_run:
-        # AC-14: no downloads in dry-run.
+        # AC-14: no downloads in dry-run.  Counter NOT incremented here — we cannot
+        # know whether a real download+compress would succeed or fail without running it.
+        # Dry-run summary therefore reports would_images_written=0 (conservative).
         resolutions[obj_id] = ImageResolution(
             kind="ok", object_id=obj_id,
             rel_path=f"{doc_slug}.images/dryrun-{image_index:04d}.png", alt=None
         )
-        ctx.counts.images_written += 1
         return
 
     try:
@@ -469,8 +473,10 @@ def _resolve_one_image(
         )
         ctx.counts.images_failed += 1
         return
-    except Exception as exc:
-        reason = "timeout" if "timed out" in str(exc).lower() else f"download_error:{exc}"
+    except OSError as exc:
+        # Covers socket.timeout (OSError subclass) and ssl.SSLError (OSError subclass).
+        # Non-OSError network errors (e.g. httplib2.ServerNotFoundError) propagate up.
+        reason = "timeout" if "timed out" in str(exc).lower() else f"network_error:{exc.errno}"
         _log_image_failed(file_id, obj_id, reason)
         resolutions[obj_id] = ImageResolution(
             kind="failed", object_id=obj_id, rel_path=None, alt=None

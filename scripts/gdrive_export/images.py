@@ -239,12 +239,23 @@ def cleanup_orphans(
     source_id: str,
     *,
     dry_run: bool,
+    lore_root: Path | None = None,
 ) -> int:
     """Remove files in sidecar_dir whose MD5 prefix is not in kept_md5s.
 
     Returns count of removed files. Removes the directory itself if it becomes empty.
     Emits log events per removal (AC-10).
+
+    AC-18 / defense-in-depth: if lore_root is supplied, verifies that sidecar_dir
+    stays under lore_root before touching the filesystem (path-traversal guard).
     """
+    if lore_root is not None:
+        resolved = sidecar_dir.resolve()
+        if not resolved.is_relative_to(lore_root.resolve()):
+            raise ValueError(
+                f"cleanup_orphans: sidecar_dir escapes lore_root: {resolved}"
+            )
+
     if not sidecar_dir.exists():
         return 0
 

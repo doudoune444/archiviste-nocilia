@@ -198,6 +198,15 @@ state persisté dans `scripts/.gdrive_state.json`.
    - `https://www.googleapis.com/auth/drive.readonly`
    - `https://www.googleapis.com/auth/spreadsheets.readonly` (ING-011)
    - `https://www.googleapis.com/auth/presentations.readonly` (ING-011)
+   - `https://www.googleapis.com/auth/documents.readonly` (ING-014)
+
+   **ING-014** : l'API Google Docs doit également être activée sur le projet GCP :
+   ```bash
+   gcloud services enable docs.googleapis.com --project <PROJECT>
+   ```
+   Si ce scope ou cette API manque, le script sort en erreur au premier
+   `documents.get` avec le message `gdrive docs scope missing: enable
+   https://www.googleapis.com/auth/documents.readonly on the service account`.
 
    Le partage de fichiers GSheet/GSlide avec le service account (via Drive)
    suffit pour obtenir l'accès en lecture ; aucune configuration IAM
@@ -288,6 +297,15 @@ service-accounts create` et le téléchargement de la clé JSON. Scopes requis :
 - `https://www.googleapis.com/auth/drive.readonly` (obligatoire)
 - `https://www.googleapis.com/auth/spreadsheets.readonly` (si ING-011 mergé)
 - `https://www.googleapis.com/auth/presentations.readonly` (si ING-011 mergé)
+- `https://www.googleapis.com/auth/documents.readonly` (si ING-014 mergé)
+
+Activer les APIs GCP nécessaires :
+```bash
+gcloud services enable drive.googleapis.com --project <PROJECT>
+gcloud services enable sheets.googleapis.com --project <PROJECT>
+gcloud services enable slides.googleapis.com --project <PROJECT>
+gcloud services enable docs.googleapis.com --project <PROJECT>
+```
 
 ### (b) Partager le dossier Drive racine en lecture
 

@@ -82,13 +82,16 @@ jobs:
               > /tmp/summary.json
           fi
           {
-            printf 'errors=%s\n'    "$(jq -r '.errors    // 0' /tmp/summary.json)"
-            printf 'total=%s\n'     "$(jq -r '.total     // 0' /tmp/summary.json)"
-            printf 'created=%s\n'   "$(jq -r '.created   // 0' /tmp/summary.json)"
-            printf 'updated=%s\n'   "$(jq -r '.updated   // 0' /tmp/summary.json)"
-            printf 'renamed=%s\n'   "$(jq -r '.renamed   // 0' /tmp/summary.json)"
-            printf 'archived=%s\n'  "$(jq -r '.archived  // 0' /tmp/summary.json)"
-            printf 'unchanged=%s\n' "$(jq -r '.unchanged // 0' /tmp/summary.json)"
+            printf 'errors=%s\n'         "$(jq -r '.errors         // 0' /tmp/summary.json)"
+            printf 'total=%s\n'          "$(jq -r '.total          // 0' /tmp/summary.json)"
+            printf 'created=%s\n'        "$(jq -r '.created        // 0' /tmp/summary.json)"
+            printf 'updated=%s\n'        "$(jq -r '.updated        // 0' /tmp/summary.json)"
+            printf 'renamed=%s\n'        "$(jq -r '.renamed        // 0' /tmp/summary.json)"
+            printf 'archived=%s\n'       "$(jq -r '.archived       // 0' /tmp/summary.json)"
+            printf 'unchanged=%s\n'      "$(jq -r '.unchanged      // 0' /tmp/summary.json)"
+            printf 'images_failed=%s\n'  "$(jq -r '.images_failed  // 0' /tmp/summary.json)"
+            printf 'images_written=%s\n' "$(jq -r '.images_written // 0' /tmp/summary.json)"
+            printf 'orphans_removed=%s\n' "$(jq -r '.orphans_removed // 0' /tmp/summary.json)"
           } >> "$GITHUB_OUTPUT"
 
       # AC-6: skip PR creation when there is nothing to commit.
@@ -120,12 +123,16 @@ jobs:
           RENAMED: ${{ steps.summary.outputs.renamed }}
           ARCHIVED: ${{ steps.summary.outputs.archived }}
           UNCHANGED: ${{ steps.summary.outputs.unchanged }}
+          IMAGES_FAILED: ${{ steps.summary.outputs.images_failed }}
+          IMAGES_WRITTEN: ${{ steps.summary.outputs.images_written }}
+          ORPHANS_REMOVED: ${{ steps.summary.outputs.orphans_removed }}
         run: |
           SUMMARY_JSON=$(cat /tmp/summary.json)
           {
             printf 'body<<EOF_BODY\n'
-            printf 'Summary: %s total, %s created, %s updated, %s renamed, %s archived, %s unchanged, %s errors\n' \
-              "${TOTAL}" "${CREATED}" "${UPDATED}" "${RENAMED}" "${ARCHIVED}" "${UNCHANGED}" "${ERRORS}"
+            printf 'Summary: %s total, %s created, %s updated, %s renamed, %s archived, %s unchanged, %s errors, %s images_written, %s images_failed, %s orphans_removed\n' \
+              "${TOTAL}" "${CREATED}" "${UPDATED}" "${RENAMED}" "${ARCHIVED}" "${UNCHANGED}" "${ERRORS}" \
+              "${IMAGES_WRITTEN}" "${IMAGES_FAILED}" "${ORPHANS_REMOVED}"
             printf '\n```json\n'
             printf '%s\n' "${SUMMARY_JSON}"
             printf '```\n\n'
@@ -147,7 +154,7 @@ jobs:
           title: "chore(lore): gdrive sync ${{ steps.date.outputs.today }}"
           commit-message: "chore(lore): gdrive sync run ${{ github.run_id }}"
           labels: gdrive-sync,automation
-          draft: ${{ steps.summary.outputs.errors != '0' }}
+          draft: ${{ steps.summary.outputs.errors != '0' || steps.summary.outputs.images_failed != '0' }}
           body: ${{ steps.pr_body.outputs.body }}
 
       # AC-9: upload summary artifact (always, even on sync error).

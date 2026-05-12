@@ -10,6 +10,7 @@ dependencies = [
     "google-api-python-client>=2.140",
     "google-auth>=2.35",
     "structlog>=24",
+    "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]
@@ -76,6 +77,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["googleapiclient.*", "google.auth.*", "google.oauth2.*", "google_auth_httplib2", "httplib2", "structlog"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["PIL.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

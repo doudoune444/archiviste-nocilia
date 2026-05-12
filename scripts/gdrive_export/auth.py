@@ -16,8 +16,14 @@ from google.oauth2 import service_account
 _DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 _SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 _SLIDES_READONLY_SCOPE = "https://www.googleapis.com/auth/presentations.readonly"
+_DOCS_READONLY_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
 
-_SCOPES = [_DRIVE_READONLY_SCOPE, _SHEETS_READONLY_SCOPE, _SLIDES_READONLY_SCOPE]
+_SCOPES = [
+    _DRIVE_READONLY_SCOPE,
+    _SHEETS_READONLY_SCOPE,
+    _SLIDES_READONLY_SCOPE,
+    _DOCS_READONLY_SCOPE,
+]
 
 
 def load_service_account_credentials() -> service_account.Credentials:

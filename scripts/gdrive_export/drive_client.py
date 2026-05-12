@@ -239,8 +239,9 @@ class DriveClient:
             ) from exc
 
     def export_gdoc_markdown(self, file_id: str) -> str:
-        """Export a Google Doc as Markdown text.
+        """Export a Google Doc as Markdown text via Drive files.export.
 
+        Kept for potential non-gdoc callers. gdoc sync uses get_document instead.
         Raises DriveApiError on HTTP error (AC-15/16).
         """
         try:

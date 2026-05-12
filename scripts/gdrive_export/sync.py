@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from gdrive_export.docs_md_renderer import render_doc_markdown
 from gdrive_export.drive_client import DriveApiError, DriveClient
 from gdrive_export.frontmatter_merge import FrontmatterMergeError
 from gdrive_export.gsheet_renderer import (
@@ -32,10 +33,9 @@ from gdrive_export.images import (
     compress_image,
     compute_image_path,
     extract_inline_objects,
-    ordered_inline_object_ids,
     rename_sidecar,
 )
-from gdrive_export.md_rewrite import ImageResolution, rewrite_image_refs
+from gdrive_export.md_rewrite import ImageResolution
 from gdrive_export.normalize import normalize_body
 from gdrive_export.paths import resolve_local_path
 from gdrive_export.rename import rename_local_file
@@ -317,13 +317,15 @@ def _process_gdoc(
     existing: StateEntry | None,
     ctx: SyncContext,
 ) -> None:
-    """Export a Google Doc and write/update local .md, including image sidecar (AC-1..AC-15)."""
+    """Export a Google Doc and write/update local .md, including image sidecar (AC-1..AC-15).
+
+    Uses the Docs API document tree (body.content + positionedObjects) directly,
+    bypassing Drive files.export(text/markdown) which has its own 10 MiB cap and
+    cannot see positionedObjects images.
+    """
     # AC-1: always invoke Docs API for every gdoc (uniform, no fast-path).
     doc = ctx.drive_client.get_document(file_id)
-    obj_ids_ordered = ordered_inline_object_ids(doc)
     content_uri_map = extract_inline_objects(doc)
-
-    body_raw = normalize_body(ctx.drive_client.export_gdoc_markdown(file_id))
 
     doc_slug = local_path.stem
     # AC-12: rename sidecar BEFORE processing images so images are written to the
@@ -332,14 +334,11 @@ def _process_gdoc(
         rename_sidecar(Path(existing.local_path), local_path, file_id)
 
     resolutions, images_manifest = _process_doc_images(
-        file_id, doc_slug, components, obj_ids_ordered, content_uri_map, local_path, ctx
+        file_id, doc_slug, components, content_uri_map, local_path, ctx
     )
 
-    body = rewrite_image_refs(body_raw, obj_ids_ordered, resolutions, file_id)
+    body = normalize_body(render_doc_markdown(doc, resolutions, file_id))
 
-    # Cap checked AFTER image extraction — body_raw inlines images as base64 and
-    # routinely exceeds 1 MiB on image-heavy docs (the whole ING-014 use case);
-    # body post-rewrite contains only sidecar refs, so the cap reflects real text size.
     if len(body.encode("utf-8")) > _ONE_MIB:
         ctx.counts.errors += 1
         _log_file(file_id, str(local_path), "would_error" if ctx.dry_run else "error",
@@ -404,7 +403,6 @@ def _process_doc_images(
     file_id: str,
     doc_slug: str,
     components: list[str],
-    obj_ids_ordered: list[str],
     content_uri_map: dict[str, str],
     local_path: Path,
     ctx: SyncContext,
@@ -412,7 +410,7 @@ def _process_doc_images(
     """Download, compress, and build resolution map + images manifest for one gdoc.
 
     Returns (resolutions, images_manifest):
-    - resolutions: objectId → ImageResolution (used by md_rewrite)
+    - resolutions: objectId → ImageResolution (used by docs_md_renderer)
     - images_manifest: md5_hex_12 → POSIX rel_path (used by StateEntry.images)
     """
     resolutions: dict[str, ImageResolution] = {}
@@ -420,21 +418,7 @@ def _process_doc_images(
     # Intra-doc dedup: md5 → already-resolved rel_path (AC-5).
     md5_to_rel_path: dict[str, str] = {}
 
-    for image_index, obj_id in enumerate(obj_ids_ordered):
-        content_uri = content_uri_map.get(obj_id)
-        if content_uri is None:
-            _log({
-                "event": "gdrive_sync.image_failed",
-                "source_id": file_id,
-                "object_id": obj_id,
-                "reason": "object_id_unresolved",
-            })
-            resolutions[obj_id] = ImageResolution(
-                kind="failed", object_id=obj_id, rel_path=None, alt=None
-            )
-            ctx.counts.images_failed += 1
-            continue
-
+    for image_index, (obj_id, content_uri) in enumerate(content_uri_map.items()):
         _resolve_one_image(
             file_id, obj_id, image_index, content_uri, doc_slug, components,
             md5_to_rel_path, resolutions, images_manifest, ctx

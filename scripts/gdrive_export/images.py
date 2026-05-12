@@ -64,41 +64,29 @@ class CompressedImage:
 def extract_inline_objects(doc: dict[str, Any]) -> dict[str, str]:
     """Return a map of objectId → contentUri from a Docs API document dict.
 
-    Traverses body.content in order to build a list of objectIds in document order,
-    used by md_rewrite for positional remapping (OQ-2: n-th image in Markdown =
-    n-th inlineObject encountered in document traversal order).
+    Merges both inlineObjects and positionedObjects. Real-world Docs corpora
+    place most images in positionedObjects (anchored); inlineObjects are rare.
     """
-    inline_objs: dict[str, Any] = doc.get("inlineObjects", {})
     result: dict[str, str] = {}
-    for obj_id, obj in inline_objs.items():
-        props = obj.get("inlineObjectProperties", {})
+    _extract_from_container(doc.get("inlineObjects", {}), "inlineObjectProperties", result)
+    _extract_from_container(
+        doc.get("positionedObjects", {}), "positionedObjectProperties", result
+    )
+    return result
+
+
+def _extract_from_container(
+    container: dict[str, Any],
+    props_key: str,
+    result: dict[str, str],
+) -> None:
+    """Extract objectId → contentUri entries from an inlineObjects or positionedObjects dict."""
+    for obj_id, obj in container.items():
+        props = obj.get(props_key, {})
         embedded = props.get("embeddedObject", {})
         uri = embedded.get("imageProperties", {}).get("contentUri", "")
         if uri:
             result[obj_id] = uri
-    return result
-
-
-def ordered_inline_object_ids(doc: dict[str, Any]) -> list[str]:
-    """Return objectIds in document body traversal order (paragraph element order).
-
-    Used by md_rewrite to map n-th image position in Markdown export to the
-    n-th objectId encountered in the Docs API body (OQ-2 resolution).
-    """
-    ids: list[str] = []
-    inline_objs: dict[str, Any] = doc.get("inlineObjects", {})
-    for structural_element in doc.get("body", {}).get("content", []):
-        paragraph = structural_element.get("paragraph")
-        if paragraph is None:
-            continue
-        for element in paragraph.get("elements", []):
-            inline_obj_element = element.get("inlineObjectElement")
-            if inline_obj_element is None:
-                continue
-            obj_id = inline_obj_element.get("inlineObjectId", "")
-            if obj_id and obj_id in inline_objs:
-                ids.append(obj_id)
-    return ids
 
 
 def compress_image(raw: bytes, src_mime: str, source_id: str, image_index: int) -> CompressedImage:

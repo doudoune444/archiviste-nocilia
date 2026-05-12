@@ -42,17 +42,44 @@ def _default_png() -> tuple[bytes, str]:
 def _build_doc_response(
     file_id: str,
     doc_inline_objects: dict[str, dict[str, Any]],
+    doc_bodies: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build a minimal Docs API document dict from the inline_objects spec."""
+    """Build a minimal Docs API document dict for testing.
+
+    Text from doc_bodies is split into paragraphs; inline object elements are
+    appended after. This mirrors what render_doc_markdown expects.
+    """
     inline_objs = doc_inline_objects.get(file_id, {})
-    body_content = [
-        {
+    body_content: list[dict[str, Any]] = []
+
+    # Add text paragraphs from doc_bodies (if any).
+    raw_text: str = (doc_bodies or {}).get(file_id, "")
+    for line in raw_text.splitlines():
+        if line.startswith("# "):
+            style = "HEADING_1"
+            text = line[2:]
+        elif line.startswith("## "):
+            style = "HEADING_2"
+            text = line[3:]
+        else:
+            style = "NORMAL_TEXT"
+            text = line
+        if text:
+            body_content.append({
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": style},
+                    "elements": [{"textRun": {"content": text}}],
+                }
+            })
+
+    # Append inline object paragraphs.
+    for obj_id in inline_objs:
+        body_content.append({
             "paragraph": {
                 "elements": [{"inlineObjectElement": {"inlineObjectId": obj_id}}]
             }
-        }
-        for obj_id in inline_objs
-    ]
+        })
+
     return {
         "documentId": file_id,
         "inlineObjects": inline_objs,
@@ -102,7 +129,7 @@ def _attach_side_effects(
     def _get_document(file_id: str) -> dict[str, Any]:
         if file_id in export_errors:
             raise export_errors[file_id]
-        return _build_doc_response(file_id, doc_inline_objects)
+        return _build_doc_response(file_id, doc_inline_objects, doc_bodies)
 
     def _download_image(content_uri: str) -> tuple[bytes, str]:
         if content_uri in image_errors:
@@ -1127,12 +1154,13 @@ class TestGdocImageDownload:
 
     def test_md_contains_relative_sidecar_path(self, tmp_path: Path) -> None:
         # AC-4: .md references sidecar path without / or ./ prefix.
+        # The renderer produces image refs from doc_inline_objects, not doc_bodies.
         lore_root = tmp_path / "lore"
         state_path = tmp_path / "state.json"
         uri = "https://lh3.googleusercontent.com/img1"
         client = _make_drive_client(
             files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
-            doc_bodies={"doc1": f"![alt]({uri})\n"},
+            doc_bodies={"doc1": "# Title\n"},
             doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
         )
         _run(client, lore_root, state_path)
@@ -1142,7 +1170,6 @@ class TestGdocImageDownload:
         # Must contain relative sidecar path, not the googleusercontent URL.
         assert "googleusercontent.com" not in body
         assert "my-doc.images/" in body
-        assert "![]" not in body or "![alt]" in body  # alt preserved
 
 
 class TestGdocImageDedup:
@@ -1537,32 +1564,115 @@ class TestGdocUnchangedPermute:
         assert summary.unchanged == 1
 
 
-class TestGdocLargeBase64BodyDoesNotTripCap:
-    """1 MiB cap must be checked AFTER rewrite_image_refs strips inline base64.
+def _make_positioned_object(content_uri: str) -> dict[str, Any]:
+    """Return a minimal Docs API positionedObject dict."""
+    return {
+        "positionedObjectProperties": {
+            "embeddedObject": {
+                "imageProperties": {"contentUri": content_uri}
+            }
+        }
+    }
 
-    Regression: pre-fix, body_raw from Drive markdown export with base64 data-URIs
-    would exceed 1 MiB on image-heavy docs and fail — exactly the ING-014 use case.
+
+class TestGdocPositionedObjects:
+    """Positioned images (anchored) extracted and rendered — core ING-014 refactor.
+
+    Drive files.export(text/markdown) cannot see positionedObjects; the Docs API
+    tree renderer handles them. Real-world corpus: 0 inlineObjects across 25 docs.
     """
 
-    def test_base64_inline_body_succeeds_after_image_extraction(
-        self, tmp_path: Path
-    ) -> None:
+    def test_positioned_object_extracted_and_written(self, tmp_path: Path) -> None:
+        # AC-1 refactor: positionedObject image downloaded, written to sidecar.
         lore_root = tmp_path / "lore"
         state_path = tmp_path / "state.json"
-        uri = "https://lh3.googleusercontent.com/img_huge"
-        # Body raw > 1 MiB via inline base64 placeholder; body post-rewrite tiny.
-        huge_base64 = "A" * (2 * 1024 * 1024)
-        body_raw = f"# Doc\n![alt](data:image/png;base64,{huge_base64})\n"
+        uri = "https://lh3.googleusercontent.com/pos1"
+        png = _make_png_bytes()
+
+        # Build doc with a positionedObject (no inlineObjects).
+        def _get_doc_with_positioned(file_id: str) -> dict[str, Any]:
+            return {
+                "documentId": file_id,
+                "inlineObjects": {},
+                "positionedObjects": {"kix.pos": _make_positioned_object(uri)},
+                "body": {"content": [
+                    {"paragraph": {
+                        "elements": [{"textRun": {"content": "Doc text"}}],
+                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    }}
+                ]},
+            }
+
         client = _make_drive_client(
             files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
-            doc_bodies={"doc1": body_raw},
-            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
-            image_payloads={uri: (_make_png_bytes(), "image/png")},
         )
-        # rewrite_image_refs maps the n-th ![](url) to the n-th objectId; here both = 1.
+        client.get_document.side_effect = _get_doc_with_positioned
+        client.download_image.return_value = (png, "image/png")
+
         summary, _ = _run(client, lore_root, state_path)
         assert summary.errors == 0
-        assert (lore_root / "my-doc.md").exists()
+        sidecar = lore_root / "my-doc.images"
+        assert sidecar.exists()
+        assert len(list(sidecar.iterdir())) == 1
+        assert summary.images_written == 1
+
+    def test_positioned_object_ref_in_markdown(self, tmp_path: Path) -> None:
+        # AC-4 + refactor: .md body includes sidecar path for positioned image.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/pos_ref"
+        png = _make_png_bytes()
+
+        def _get_doc(file_id: str) -> dict[str, Any]:
+            return {
+                "documentId": file_id,
+                "inlineObjects": {},
+                "positionedObjects": {"kix.p": _make_positioned_object(uri)},
+                "body": {"content": []},
+            }
+
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+        )
+        client.get_document.side_effect = _get_doc
+        client.download_image.return_value = (png, "image/png")
+
+        _run(client, lore_root, state_path)
+        content = (lore_root / "my-doc.md").read_text(encoding="utf-8")
+        fm_end = content.index("\n---\n", 4) + 5
+        body = content[fm_end:]
+        assert "my-doc.images/" in body
+
+    def test_rendered_body_over_1mib_triggers_error(self, tmp_path: Path) -> None:
+        # 1 MiB cap: a doc whose rendered text exceeds 1 MiB → error, no file written.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        big_text = "x" * (1024 * 1024 + 100)
+
+        def _get_big_doc(file_id: str) -> dict[str, Any]:
+            return {
+                "documentId": file_id,
+                "body": {"content": [
+                    {"paragraph": {
+                        "elements": [{"textRun": {"content": big_text}}],
+                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    }}
+                ]},
+            }
+
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "Big Doc", _DOC_MIME)],
+        )
+        client.get_document.side_effect = _get_big_doc
+
+        summary, logs = _run(client, lore_root, state_path)
+        assert summary.errors == 1
+        assert not (lore_root / "big-doc.md").exists()
+        error_logs = [
+            lg for lg in logs
+            if lg.get("event") == "gdrive_sync.file" and lg.get("status") == "error"
+        ]
+        assert any("1 MiB" in lg.get("reason", "") for lg in error_logs)
 
 
 class TestGdocOversizedIntegration:

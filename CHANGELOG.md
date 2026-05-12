@@ -7,6 +7,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- fix(gdrive_export): render gdocs from Docs API tree instead of Drive markdown export — handles positionedObjects + bypasses Drive 10 MiB export cap (ING-014 follow-up)
+
 ### Added
 - Repo scaffolding (CLAUDE.md, .claude/ agents + commands, specs/, docs/, gateway/, workers/, eval/, infra/)
 - Workflow Claude Code : architect / implementer / reviewer / eval-runner / debugger sub-agents

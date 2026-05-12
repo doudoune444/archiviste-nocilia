@@ -23,7 +23,6 @@ from gdrive_export.images import (
     compress_image,
     compute_image_path,
     extract_inline_objects,
-    ordered_inline_object_ids,
     rename_sidecar,
 )
 
@@ -74,12 +73,12 @@ def _make_large_incompressible_png() -> bytes:
 
 
 class TestExtractInlineObjects:
-    """Unit tests for extract_inline_objects + ordered_inline_object_ids."""
+    """Unit tests for extract_inline_objects — inlineObjects and positionedObjects."""
 
     def test_empty_doc(self) -> None:
         assert extract_inline_objects({}) == {}
 
-    def test_single_object(self) -> None:
+    def test_single_inline_object(self) -> None:
         doc = {
             "inlineObjects": {
                 "kix.abc": {
@@ -96,7 +95,7 @@ class TestExtractInlineObjects:
         result = extract_inline_objects(doc)
         assert result == {"kix.abc": "https://lh3.googleusercontent.com/img1"}
 
-    def test_object_without_uri_is_excluded(self) -> None:
+    def test_inline_object_without_uri_is_excluded(self) -> None:
         doc: dict[str, Any] = {
             "inlineObjects": {
                 "kix.abc": {
@@ -108,51 +107,67 @@ class TestExtractInlineObjects:
         }
         assert extract_inline_objects(doc) == {}
 
-    def test_ordered_inline_object_ids_body_traversal(self) -> None:
-        # AC-1/OQ-2: objectIds ordered by document body traversal.
+    def test_positioned_object_extracted(self) -> None:
+        # Core refactor: positionedObjects are also extracted.
         doc = {
-            "inlineObjects": {"kix.a": {}, "kix.b": {}, "kix.c": {}},
-            "body": {
-                "content": [
-                    {
-                        "paragraph": {
-                            "elements": [
-                                {"inlineObjectElement": {"inlineObjectId": "kix.a"}},
-                                {"textRun": {"content": "text"}},
-                                {"inlineObjectElement": {"inlineObjectId": "kix.b"}},
-                            ]
+            "positionedObjects": {
+                "kix.pos1": {
+                    "positionedObjectProperties": {
+                        "embeddedObject": {
+                            "imageProperties": {
+                                "contentUri": "https://lh3.googleusercontent.com/pos1"
+                            }
                         }
-                    },
-                    {
-                        "paragraph": {
-                            "elements": [
-                                {"inlineObjectElement": {"inlineObjectId": "kix.c"}},
-                            ]
-                        }
-                    },
-                ]
-            },
+                    }
+                }
+            }
         }
-        assert ordered_inline_object_ids(doc) == ["kix.a", "kix.b", "kix.c"]
+        result = extract_inline_objects(doc)
+        assert result == {"kix.pos1": "https://lh3.googleusercontent.com/pos1"}
 
-    def test_ordered_excludes_unknown_ids(self) -> None:
-        # objectId in body but not in inlineObjects → excluded.
+    def test_positioned_object_without_uri_excluded(self) -> None:
+        doc: dict[str, Any] = {
+            "positionedObjects": {
+                "kix.pos1": {
+                    "positionedObjectProperties": {
+                        "embeddedObject": {}
+                    }
+                }
+            }
+        }
+        assert extract_inline_objects(doc) == {}
+
+    def test_merged_inline_and_positioned(self) -> None:
+        # Both containers contribute to the result.
         doc = {
-            "inlineObjects": {"kix.a": {}},
-            "body": {
-                "content": [
-                    {
-                        "paragraph": {
-                            "elements": [
-                                {"inlineObjectElement": {"inlineObjectId": "kix.a"}},
-                                {"inlineObjectElement": {"inlineObjectId": "kix.unknown"}},
-                            ]
+            "inlineObjects": {
+                "kix.inline": {
+                    "inlineObjectProperties": {
+                        "embeddedObject": {
+                            "imageProperties": {
+                                "contentUri": "https://lh3.googleusercontent.com/i1"
+                            }
                         }
-                    },
-                ]
+                    }
+                }
+            },
+            "positionedObjects": {
+                "kix.pos": {
+                    "positionedObjectProperties": {
+                        "embeddedObject": {
+                            "imageProperties": {
+                                "contentUri": "https://lh3.googleusercontent.com/p1"
+                            }
+                        }
+                    }
+                }
             },
         }
-        assert ordered_inline_object_ids(doc) == ["kix.a"]
+        result = extract_inline_objects(doc)
+        assert result == {
+            "kix.inline": "https://lh3.googleusercontent.com/i1",
+            "kix.pos": "https://lh3.googleusercontent.com/p1",
+        }
 
 
 # ---------------------------------------------------------------------------

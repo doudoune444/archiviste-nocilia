@@ -206,27 +206,34 @@ class DriveClient:
         return bytes(content), content_type
 
     def verify_extra_scopes(self) -> None:
-        """AC-15: fail-fast if SA lacks spreadsheets.readonly or presentations.readonly.
+        """Fail-fast if SA lacks spreadsheets / presentations / documents readonly scopes.
 
-        Probes Sheets API with a bogus ID; expects 404 (found scope, no such file)
-        or raises SystemExit on 403 insufficient scope.
-        LOW-3: unexpected HTTP codes (502, network errors) are re-raised so boot
-        fail-fast triggers visibly rather than silently passing scope validation.
+        Probes Sheets and Docs APIs with bogus IDs; 404 = scope OK, 403 insufficient
+        scope = exit 1. Unexpected HTTP codes (5xx, network) re-raised so boot fails
+        visibly rather than silently passing scope validation.
         """
+        self._probe_scope(
+            self._sheets_service.spreadsheets().get(spreadsheetId="__probe__"),
+            "spreadsheets.readonly and presentations.readonly",
+        )
+        self._probe_scope(
+            self._docs_service.documents().get(documentId="__probe__"),
+            "documents.readonly",
+        )
+
+    def _probe_scope(self, request: Any, missing_scope_label: str) -> None:
+        """Execute *request*; exit 1 on 403 insufficient scope, return on 404."""
         try:
-            self._sheets_service.spreadsheets().get(spreadsheetId="__probe__").execute()
+            request.execute()
         except HttpError as exc:
             if exc.status_code == _HTTP_FORBIDDEN and _is_insufficient_scope(exc):
-                msg = (
-                    "gdrive scope missing: spreadsheets.readonly and "
-                    "presentations.readonly required"
+                print(  # noqa: T201
+                    f"gdrive scope missing: {missing_scope_label} required",
+                    file=sys.stderr,
                 )
-                print(msg, file=sys.stderr)  # noqa: T201
                 sys.exit(1)
             if exc.status_code == _HTTP_NOT_FOUND:
-                # 404 = probe success (scope OK, spreadsheet not found — expected)
                 return
-            # Unexpected HTTP error (5xx, network) — re-raise so boot fails visibly.
             raise DriveApiError(
                 f"scope_probe_failed: {exc.status_code}", exc.status_code
             ) from exc

@@ -325,12 +325,6 @@ def _process_gdoc(
 
     body_raw = normalize_body(ctx.drive_client.export_gdoc_markdown(file_id))
 
-    if len(body_raw.encode("utf-8")) > _ONE_MIB:
-        ctx.counts.errors += 1
-        _log_file(file_id, str(local_path), "would_error" if ctx.dry_run else "error",
-                  reason="exported size exceeds 1 MiB cap")
-        return
-
     doc_slug = local_path.stem
     # AC-12: rename sidecar BEFORE processing images so images are written to the
     # correct (new) sidecar dir, not the old one, avoiding double-create conflict.
@@ -342,6 +336,15 @@ def _process_gdoc(
     )
 
     body = rewrite_image_refs(body_raw, obj_ids_ordered, resolutions, file_id)
+
+    # Cap checked AFTER image extraction — body_raw inlines images as base64 and
+    # routinely exceeds 1 MiB on image-heavy docs (the whole ING-014 use case);
+    # body post-rewrite contains only sidecar refs, so the cap reflects real text size.
+    if len(body.encode("utf-8")) > _ONE_MIB:
+        ctx.counts.errors += 1
+        _log_file(file_id, str(local_path), "would_error" if ctx.dry_run else "error",
+                  reason="exported size exceeds 1 MiB cap")
+        return
     new_sig = f"sha256:{hashlib.sha256(body.encode('utf-8')).hexdigest()}"
     new_body_hash = compute_body_hash(body)
     now = _now_iso()

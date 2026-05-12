@@ -411,21 +411,29 @@ class TestDownloadImage:
 
 
 class TestScopeProbe:
-    """AC-15 ING-011: verify_extra_scopes exits on 403 insufficient scope."""
+    """AC-15 ING-011/ING-014: verify_extra_scopes exits on 403 insufficient scope."""
+
+    @staticmethod
+    def _docs_svc_404() -> MagicMock:
+        svc = MagicMock()
+        svc.documents.return_value.get.return_value.execute.side_effect = HttpError(
+            resp=_fake_resp(404), content=b""
+        )
+        return svc
 
     def test_404_probe_success(self) -> None:
-        # AC-15: 404 = scope present, spreadsheet not found (expected)
-        # LOW-7: use from_services factory
+        # AC-15: 404 from both Sheets and Docs = scopes present (expected)
         sheets_svc = MagicMock()
         sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
             HttpError(resp=_fake_resp(404), content=b"")
         )
-        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
-        # Should not raise or exit
+        client = DriveClient.from_services(
+            MagicMock(), sheets_svc, MagicMock(), docs_service=self._docs_svc_404()
+        )
         client.verify_extra_scopes()
 
     def test_403_insufficient_scope_exits(self, capsys: Any) -> None:
-        # AC-15: 403 with reason insufficientPermissions → sys.exit(1)
+        # AC-15: 403 with reason insufficientPermissions on sheets → sys.exit(1)
         sheets_svc = MagicMock()
         sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
             HttpError(
@@ -435,11 +443,34 @@ class TestScopeProbe:
                 }).encode(),
             )
         )
-        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
+        client = DriveClient.from_services(
+            MagicMock(), sheets_svc, MagicMock(), docs_service=self._docs_svc_404()
+        )
         with pytest.raises(SystemExit) as exc_info:
             client.verify_extra_scopes()
         assert exc_info.value.code == 1
         assert "gdrive scope missing" in capsys.readouterr().err
+
+    def test_docs_403_insufficient_scope_exits(self, capsys: Any) -> None:
+        # ING-014: 403 on documents.get → sys.exit(1) with docs scope label
+        sheets_svc = MagicMock()
+        sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
+            HttpError(resp=_fake_resp(404), content=b"")
+        )
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.side_effect = HttpError(
+            resp=_fake_resp(403),
+            content=json.dumps({
+                "error": {"errors": [{"reason": "insufficientPermissions"}]}
+            }).encode(),
+        )
+        client = DriveClient.from_services(
+            MagicMock(), sheets_svc, MagicMock(), docs_service=docs_svc
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            client.verify_extra_scopes()
+        assert exc_info.value.code == 1
+        assert "documents.readonly" in capsys.readouterr().err
 
     def test_unexpected_5xx_raises_drive_api_error(self) -> None:
         # LOW-3: unexpected HTTP errors (5xx) are re-raised so boot fail-fast
@@ -448,7 +479,9 @@ class TestScopeProbe:
         sheets_svc.spreadsheets.return_value.get.return_value.execute.side_effect = (
             HttpError(resp=_fake_resp(503), content=b"Service Unavailable")
         )
-        client = DriveClient.from_services(MagicMock(), sheets_svc, MagicMock())
+        client = DriveClient.from_services(
+            MagicMock(), sheets_svc, MagicMock(), docs_service=self._docs_svc_404()
+        )
         with pytest.raises(DriveApiError) as exc_info:
             client.verify_extra_scopes()
         assert exc_info.value.status_code == 503

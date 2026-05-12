@@ -1537,6 +1537,34 @@ class TestGdocUnchangedPermute:
         assert summary.unchanged == 1
 
 
+class TestGdocLargeBase64BodyDoesNotTripCap:
+    """1 MiB cap must be checked AFTER rewrite_image_refs strips inline base64.
+
+    Regression: pre-fix, body_raw from Drive markdown export with base64 data-URIs
+    would exceed 1 MiB on image-heavy docs and fail — exactly the ING-014 use case.
+    """
+
+    def test_base64_inline_body_succeeds_after_image_extraction(
+        self, tmp_path: Path
+    ) -> None:
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img_huge"
+        # Body raw > 1 MiB via inline base64 placeholder; body post-rewrite tiny.
+        huge_base64 = "A" * (2 * 1024 * 1024)
+        body_raw = f"# Doc\n![alt](data:image/png;base64,{huge_base64})\n"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": body_raw},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_payloads={uri: (_make_png_bytes(), "image/png")},
+        )
+        # rewrite_image_refs maps the n-th ![](url) to the n-th objectId; here both = 1.
+        summary, _ = _run(client, lore_root, state_path)
+        assert summary.errors == 0
+        assert (lore_root / "my-doc.md").exists()
+
+
 class TestGdocOversizedIntegration:
     """AC-3c end-to-end: oversized image through sync → placeholder + counter + log."""
 

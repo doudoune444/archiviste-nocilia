@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from gdrive_export.docs_md_renderer import render_doc_markdown
 from gdrive_export.drive_client import DriveApiError, DriveClient
 from gdrive_export.frontmatter_merge import FrontmatterMergeError
 from gdrive_export.gsheet_renderer import (
@@ -25,6 +26,16 @@ from gdrive_export.gsheet_renderer import (
     resolve_tab_collisions,
 )
 from gdrive_export.gslide_renderer import render_presentation_markdown
+from gdrive_export.images import (
+    ImageOversizedError,
+    ImageUndecodableError,
+    cleanup_orphans,
+    compress_image,
+    compute_image_path,
+    extract_inline_objects,
+    rename_sidecar,
+)
+from gdrive_export.md_rewrite import ImageResolution
 from gdrive_export.normalize import normalize_body
 from gdrive_export.paths import resolve_local_path
 from gdrive_export.rename import rename_local_file
@@ -54,6 +65,9 @@ class SummaryCounts:
     archived: int = 0
     unchanged: int = 0
     errors: int = 0
+    images_written: int = 0
+    images_failed: int = 0
+    orphans_removed: int = 0
 
 
 @dataclass
@@ -258,6 +272,7 @@ def _archive_entry(
         last_exported_at=entry.last_exported_at,
         body_hash=entry.body_hash,
         archived_at=archived_at,
+        images=entry.images,
     )
     counts.archived += 1
     _log_file(state_key, str(local_path), "archived")
@@ -302,23 +317,46 @@ def _process_gdoc(
     existing: StateEntry | None,
     ctx: SyncContext,
 ) -> None:
-    """Export a Google Doc and write/update local .md."""
-    body = normalize_body(ctx.drive_client.export_gdoc_markdown(file_id))
+    """Export a Google Doc and write/update local .md, including image sidecar (AC-1..AC-15).
+
+    Uses the Docs API document tree (body.content + positionedObjects) directly,
+    bypassing Drive files.export(text/markdown) which has its own 10 MiB cap and
+    cannot see positionedObjects images.
+    """
+    # AC-1: always invoke Docs API for every gdoc (uniform, no fast-path).
+    doc = ctx.drive_client.get_document(file_id)
+    content_uri_map = extract_inline_objects(doc)
+
+    doc_slug = local_path.stem
+    # AC-12: rename sidecar BEFORE processing images so images are written to the
+    # correct (new) sidecar dir, not the old one, avoiding double-create conflict.
+    if existing is not None and Path(existing.local_path) != local_path and not ctx.dry_run:
+        rename_sidecar(Path(existing.local_path), local_path, file_id)
+
+    resolutions, images_manifest = _process_doc_images(
+        file_id, doc_slug, components, content_uri_map, local_path, ctx
+    )
+
+    body = normalize_body(render_doc_markdown(doc, resolutions, file_id))
 
     if len(body.encode("utf-8")) > _ONE_MIB:
         ctx.counts.errors += 1
         _log_file(file_id, str(local_path), "would_error" if ctx.dry_run else "error",
                   reason="exported size exceeds 1 MiB cap")
         return
-
     new_sig = f"sha256:{hashlib.sha256(body.encode('utf-8')).hexdigest()}"
     new_body_hash = compute_body_hash(body)
     now = _now_iso()
     drive_path = "/".join([*components, name])
 
+    # AC-9: unchanged iff content_signature AND images manifest both unchanged.
     is_rename = existing is not None and Path(existing.local_path) != local_path
-    if existing is not None and existing.content_signature == new_sig and not is_rename:
-        # AC-11: unchanged content and path — no rewrite.
+    images_unchanged = (
+        existing is not None
+        and set(existing.images.keys()) == set(images_manifest.keys())
+    )
+    content_unchanged = existing is not None and existing.content_signature == new_sig
+    if content_unchanged and images_unchanged and not is_rename and existing is not None:
         ctx.new_state[file_id] = existing
         ctx.counts.unchanged += 1
         _log_file(file_id, str(local_path), "would_unchanged" if ctx.dry_run else "unchanged")
@@ -326,21 +364,204 @@ def _process_gdoc(
 
     status = _gdoc_status_and_rename(file_id, local_path, existing, ctx.counts, ctx.dry_run)
 
+    sidecar_dir = local_path.parent / f"{doc_slug}.images"
     if not ctx.dry_run:
+        # AC-10: cleanup orphaned images after writing new ones (images were written
+        # inside _process_doc_images / _compress_and_register).
+        orphans = cleanup_orphans(
+            sidecar_dir, set(images_manifest.keys()), file_id,
+            dry_run=False, lore_root=ctx.lore_root,
+        )
+        ctx.counts.orphans_removed += orphans
         existing_fm = _read_existing_frontmatter(local_path)
         _check_local_drift_before_write(file_id, local_path, existing, new_body_hash)
         _write_gdoc(local_path, name, file_id, drive_path, now, body, existing_fm)
         ctx.new_state[file_id] = StateEntry(
             local_path=str(local_path), content_signature=new_sig,
             last_exported_at=now, body_hash=new_body_hash, archived_at=None,
+            images=images_manifest,
         )
     else:
         ctx.new_state[file_id] = existing or StateEntry(
             local_path=str(local_path), content_signature=new_sig,
             last_exported_at=now, body_hash=new_body_hash, archived_at=None,
+            images=images_manifest,
         )
+        # Dry-run: AC-14 — images_written is not incremented (no download → unknown outcome).
+        # AC-10: count orphans that would be removed.
+        if sidecar_dir.exists():
+            existing_manifest = existing.images if existing is not None else {}
+            ctx.counts.orphans_removed += sum(
+                1 for md5 in existing_manifest if md5 not in images_manifest
+            )
 
     _log_file(file_id, str(local_path), status)
+
+
+
+def _process_doc_images(
+    file_id: str,
+    doc_slug: str,
+    components: list[str],
+    content_uri_map: dict[str, str],
+    local_path: Path,
+    ctx: SyncContext,
+) -> tuple[dict[str, ImageResolution], dict[str, str]]:
+    """Download, compress, and build resolution map + images manifest for one gdoc.
+
+    Returns (resolutions, images_manifest):
+    - resolutions: objectId → ImageResolution (used by docs_md_renderer)
+    - images_manifest: md5_hex_12 → POSIX rel_path (used by StateEntry.images)
+    """
+    resolutions: dict[str, ImageResolution] = {}
+    images_manifest: dict[str, str] = {}
+    # Intra-doc dedup: md5 → already-resolved rel_path (AC-5).
+    md5_to_rel_path: dict[str, str] = {}
+
+    for image_index, (obj_id, content_uri) in enumerate(content_uri_map.items()):
+        _resolve_one_image(
+            file_id, obj_id, image_index, content_uri, doc_slug, components,
+            md5_to_rel_path, resolutions, images_manifest, ctx
+        )
+
+    return resolutions, images_manifest
+
+
+def _resolve_one_image(
+    file_id: str,
+    obj_id: str,
+    image_index: int,
+    content_uri: str,
+    doc_slug: str,
+    components: list[str],
+    md5_to_rel_path: dict[str, str],
+    resolutions: dict[str, ImageResolution],
+    images_manifest: dict[str, str],
+    ctx: SyncContext,
+) -> None:
+    """Download + compress one image; update resolutions and manifest in place."""
+    if ctx.dry_run:
+        # AC-14: no downloads in dry-run.  Counter NOT incremented here — we cannot
+        # know whether a real download+compress would succeed or fail without running it.
+        # Dry-run summary therefore reports would_images_written=0 (conservative).
+        resolutions[obj_id] = ImageResolution(
+            kind="ok", object_id=obj_id,
+            rel_path=f"{doc_slug}.images/dryrun-{image_index:04d}.png", alt=None
+        )
+        return
+
+    try:
+        raw, content_type = ctx.drive_client.download_image(content_uri)
+    except DriveApiError as exc:
+        status_code = exc.status_code
+        _log_image_failed(file_id, obj_id, f"http_{status_code}")
+        resolutions[obj_id] = ImageResolution(
+            kind="failed", object_id=obj_id, rel_path=None, alt=None
+        )
+        ctx.counts.images_failed += 1
+        return
+    except OSError as exc:
+        # Covers socket.timeout (OSError subclass) and ssl.SSLError (OSError subclass).
+        # Non-OSError network errors (e.g. httplib2.ServerNotFoundError) propagate up.
+        reason = "timeout" if "timed out" in str(exc).lower() else f"network_error:{exc.errno}"
+        _log_image_failed(file_id, obj_id, reason)
+        resolutions[obj_id] = ImageResolution(
+            kind="failed", object_id=obj_id, rel_path=None, alt=None
+        )
+        ctx.counts.images_failed += 1
+        return
+
+    _compress_and_register(
+        file_id, obj_id, image_index, raw, content_type, doc_slug, components,
+        md5_to_rel_path, resolutions, images_manifest, ctx
+    )
+
+
+def _compress_and_register(
+    file_id: str,
+    obj_id: str,
+    image_index: int,
+    raw: bytes,
+    content_type: str,
+    doc_slug: str,
+    components: list[str],
+    md5_to_rel_path: dict[str, str],
+    resolutions: dict[str, ImageResolution],
+    images_manifest: dict[str, str],
+    ctx: SyncContext,
+) -> None:
+    """Compress one image and register in manifest + resolution map."""
+    try:
+        compressed = compress_image(raw, content_type, file_id, image_index)
+    except ImageOversizedError as exc:
+        _log({
+            "event": "gdrive_sync.image_oversized",
+            "source_id": file_id,
+            "object_id": obj_id,
+            "image_index": image_index,
+            "bytes_after_compression": exc.bytes_after_compression,
+        })
+        resolutions[obj_id] = ImageResolution(
+            kind="oversized", object_id=obj_id, rel_path=None, alt=None
+        )
+        ctx.counts.images_failed += 1
+        return
+    except ImageUndecodableError as exc:
+        ct = content_type
+        if "unsupported content type" in str(exc):
+            reason = f"unsupported_content_type:{ct}"
+        else:
+            reason = "undecodable"
+        _log_image_failed(file_id, obj_id, reason)
+        resolutions[obj_id] = ImageResolution(
+            kind="failed", object_id=obj_id, rel_path=None, alt=None
+        )
+        ctx.counts.images_failed += 1
+        return
+
+    for evt in compressed.log_events:
+        _log(evt)
+
+    md5 = compressed.md5_hex_12
+
+    # AC-5: intra-doc dedup.
+    if md5 in md5_to_rel_path:
+        rel_path = md5_to_rel_path[md5]
+        resolutions[obj_id] = ImageResolution(
+            kind="ok", object_id=obj_id, rel_path=rel_path, alt=None
+        )
+        return
+
+    try:
+        image_path = compute_image_path(
+            ctx.lore_root, components, doc_slug, md5, compressed.ext_final
+        )
+    except ValueError as exc:
+        _log_image_failed(file_id, obj_id, f"path_error:{exc}")
+        resolutions[obj_id] = ImageResolution(
+            kind="failed", object_id=obj_id, rel_path=None, alt=None
+        )
+        ctx.counts.images_failed += 1
+        return
+
+    try:
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(compressed.bytes_final)
+    except OSError as exc:
+        _log_image_failed(file_id, obj_id, f"write_failed:{exc.errno}")
+        resolutions[obj_id] = ImageResolution(
+            kind="failed", object_id=obj_id, rel_path=None, alt=None
+        )
+        ctx.counts.images_failed += 1
+        return
+
+    rel_path = f"{doc_slug}.images/{md5}.{compressed.ext_final}"
+    md5_to_rel_path[md5] = rel_path
+    images_manifest[md5] = str(image_path.relative_to(ctx.lore_root).as_posix())
+    resolutions[obj_id] = ImageResolution(
+        kind="ok", object_id=obj_id, rel_path=rel_path, alt=None
+    )
+    ctx.counts.images_written += 1
 
 
 def _fetch_tab_content(
@@ -593,6 +814,7 @@ def _gdoc_status_and_rename(
         counts.renamed += 1
         if not dry_run:
             rename_local_file(old_path, local_path)
+            # Note: sidecar rename is done before image processing in _process_gdoc (AC-12).
         return f"{prefix}renamed" if not dry_run else f"{prefix}rename"
     counts.updated += 1
     return f"{prefix}updated" if not dry_run else f"{prefix}update"
@@ -779,6 +1001,15 @@ def _read_existing_frontmatter(local_path: Path) -> str | None:
         return None
 
 
+def _log_image_failed(source_id: str, object_id: str, reason: str) -> None:
+    _log({
+        "event": "gdrive_sync.image_failed",
+        "source_id": source_id,
+        "object_id": object_id,
+        "reason": reason,
+    })
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -809,10 +1040,16 @@ def _log_summary(counts: SummaryCounts, duration_ms: int, dry_run: bool) -> None
               "would_created": counts.created, "would_updated": counts.updated,
               "would_renamed": counts.renamed, "would_archived": counts.archived,
               "would_unchanged": counts.unchanged, "would_errors": counts.errors,
+              "would_images_written": counts.images_written,
+              "would_images_failed": counts.images_failed,
+              "would_orphans_removed": counts.orphans_removed,
               "duration_ms": duration_ms})
     else:
         _log({"event": "gdrive_sync.summary", "total": counts.total,
               "created": counts.created, "updated": counts.updated,
               "renamed": counts.renamed, "archived": counts.archived,
               "unchanged": counts.unchanged, "errors": counts.errors,
+              "images_written": counts.images_written,
+              "images_failed": counts.images_failed,
+              "orphans_removed": counts.orphans_removed,
               "duration_ms": duration_ms})

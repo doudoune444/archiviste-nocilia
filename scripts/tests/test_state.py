@@ -134,6 +134,67 @@ class TestAtomicSave:
         )
 
 
+class TestStateEntryImages:
+    """AC-8: images field round-trip and lazy upgrade."""
+
+    def test_images_field_round_trip(self, tmp_path: Path) -> None:
+        state_file = tmp_path / "state.json"
+        entry = StateEntry(
+            local_path="lore/doc.md",
+            content_signature="sha256:abc",
+            last_exported_at="2026-05-12T00:00:00Z",
+            body_hash="xyz",
+            archived_at=None,
+            images={"abc123def456": "sub/doc.images/abc123def456.png"},
+        )
+        save_state(state_file, {"id1": entry})
+        loaded = load_state(state_file)
+        assert loaded["id1"].images == {"abc123def456": "sub/doc.images/abc123def456.png"}
+
+    def test_images_absent_loads_as_empty_dict(self, tmp_path: Path) -> None:
+        # Lazy upgrade: existing state without images field → {}.
+        state_file = tmp_path / "state.json"
+        raw = json.dumps({
+            "id1": {
+                "local_path": "lore/doc.md",
+                "content_signature": "sha256:abc",
+                "last_exported_at": "2026-05-12T00:00:00Z",
+                "body_hash": "xyz",
+                "archived_at": None,
+                # No "images" key — simulates pre-ING-014 state.
+            }
+        })
+        state_file.write_text(raw, encoding="utf-8")
+        loaded = load_state(state_file)
+        assert loaded["id1"].images == {}
+
+    def test_default_images_is_empty_dict(self) -> None:
+        entry = StateEntry(
+            local_path="x", content_signature="y",
+            last_exported_at="z", body_hash="h", archived_at=None,
+        )
+        assert entry.images == {}
+
+    def test_images_in_sorted_json_after_body_hash(self, tmp_path: Path) -> None:
+        # AC-8: 'images' key appears after 'body_hash' in sorted JSON output.
+        state_file = tmp_path / "state.json"
+        entry = StateEntry(
+            local_path="lore/doc.md",
+            content_signature="sha256:abc",
+            last_exported_at="2026-05-12T00:00:00Z",
+            body_hash="xyz",
+            archived_at=None,
+            images={"abc123def456": "doc.images/abc123def456.png"},
+        )
+        save_state(state_file, {"id1": entry})
+        content = state_file.read_text(encoding="utf-8")
+        parsed = json.loads(content)
+        keys = list(parsed["id1"].keys())
+        assert keys.index("images") > keys.index("body_hash"), (
+            "AC-8: 'images' must appear after 'body_hash' in sorted JSON"
+        )
+
+
 class TestComputeBodyHash:
     def test_deterministic(self) -> None:
         assert compute_body_hash("hello") == compute_body_hash("hello")

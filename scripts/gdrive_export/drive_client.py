@@ -1,7 +1,8 @@
-"""Google Drive API v3 wrapper.
+"""Google Drive API v3 + Docs API v1 wrapper.
 
 Provides list_folder_recursive, export_gdoc_markdown, download_png,
-get_spreadsheet_tabs, get_sheet_values, get_presentation, verify_extra_scopes.
+get_document, download_image, get_spreadsheet_tabs, get_sheet_values,
+get_presentation, verify_extra_scopes.
 Timeout: 30s per HTTP call (AC-18 / security.md A04).
 Drive API imports authorized here by conftest.py firewall (ING-013).
 """
@@ -29,6 +30,9 @@ _LIST_FIELDS = "nextPageToken, files(id, name, mimeType, parents, md5Checksum)"
 _PAGE_SIZE = 1000
 _HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
+_HTTP_TIMEOUT_S = 30
+_HTTP_OK_MIN = 200
+_HTTP_OK_MAX = 300
 
 
 class DriveApiError(Exception):
@@ -43,11 +47,13 @@ class DriveClient:
     """Thin wrapper around the Drive v3 API service (read-only)."""
 
     def __init__(self, credentials: Credentials) -> None:
-        http = httplib2.Http(timeout=30)
+        http = httplib2.Http(timeout=_HTTP_TIMEOUT_S)
         authorized_http = google_auth_httplib2.AuthorizedHttp(credentials, http)
         self._service = build("drive", "v3", http=authorized_http)
         self._sheets_service = build("sheets", "v4", http=authorized_http)
         self._slides_service = build("slides", "v1", http=authorized_http)
+        self._docs_service = build("docs", "v1", http=authorized_http)
+        self._authorized_http = authorized_http
 
     @classmethod
     def from_services(
@@ -55,15 +61,21 @@ class DriveClient:
         drive_service: Any,
         sheets_service: Any,
         slides_service: Any,
+        docs_service: Any = None,
+        authorized_http: Any = None,
     ) -> DriveClient:
         """Construct a DriveClient from pre-built API service objects.
 
         LOW-7: test-only factory that avoids accessing private attributes directly.
+        docs_service and authorized_http are optional for backward compat with
+        existing tests that do not exercise Docs API or download_image.
         """
         instance = object.__new__(cls)
         instance._service = drive_service
         instance._sheets_service = sheets_service
         instance._slides_service = slides_service
+        instance._docs_service = docs_service
+        instance._authorized_http = authorized_http
         return instance
 
     def list_folder_recursive(
@@ -154,35 +166,82 @@ class DriveClient:
             ) from exc
         return resp
 
-    def verify_extra_scopes(self) -> None:
-        """AC-15: fail-fast if SA lacks spreadsheets.readonly or presentations.readonly.
+    def get_document(self, file_id: str) -> dict[str, Any]:
+        """Fetch a Google Doc structure via the Docs API v1 documents.get (AC-1).
 
-        Probes Sheets API with a bogus ID; expects 404 (found scope, no such file)
-        or raises SystemExit on 403 insufficient scope.
-        LOW-3: unexpected HTTP codes (502, network errors) are re-raised so boot
-        fail-fast triggers visibly rather than silently passing scope validation.
+        Returns the full document dict including inlineObjects.
+        Raises DriveApiError on HTTP error (e.g. 403 scope missing, 404 not found).
         """
         try:
-            self._sheets_service.spreadsheets().get(spreadsheetId="__probe__").execute()
+            resp: dict[str, Any] = (
+                self._docs_service.documents().get(documentId=file_id).execute()
+            )
         except HttpError as exc:
             if exc.status_code == _HTTP_FORBIDDEN and _is_insufficient_scope(exc):
                 msg = (
-                    "gdrive scope missing: spreadsheets.readonly and "
-                    "presentations.readonly required"
+                    "gdrive docs scope missing: enable "
+                    "https://www.googleapis.com/auth/documents.readonly on the service account"
                 )
                 print(msg, file=sys.stderr)  # noqa: T201
                 sys.exit(1)
+            raise DriveApiError(
+                f"docs_get_failed: {exc.status_code}", exc.status_code
+            ) from exc
+        return resp
+
+    def download_image(self, content_uri: str) -> tuple[bytes, str]:
+        """Download an image from a googleusercontent.com URI (AC-2).
+
+        Uses the authorized HTTP transport (same SA credentials, timeout 30s).
+        Returns (payload_bytes, content_type).
+        Raises DriveApiError on non-2xx HTTP status or network error.
+        """
+        resp, content = self._authorized_http.request(content_uri, method="GET")
+        # httplib2 Response supports both attribute and dict access for headers.
+        status = int(resp["status"] if isinstance(resp, dict) else resp.status)
+        if not (_HTTP_OK_MIN <= status < _HTTP_OK_MAX):
+            raise DriveApiError(f"image_download_failed: {status}", status)
+        raw_ct: str = resp.get("content-type", "application/octet-stream")
+        content_type: str = raw_ct.split(";", maxsplit=1)[0].strip()
+        return bytes(content), content_type
+
+    def verify_extra_scopes(self) -> None:
+        """Fail-fast if SA lacks spreadsheets / presentations / documents readonly scopes.
+
+        Probes Sheets and Docs APIs with bogus IDs; 404 = scope OK, 403 insufficient
+        scope = exit 1. Unexpected HTTP codes (5xx, network) re-raised so boot fails
+        visibly rather than silently passing scope validation.
+        """
+        self._probe_scope(
+            self._sheets_service.spreadsheets().get(spreadsheetId="__probe__"),
+            "spreadsheets.readonly and presentations.readonly",
+        )
+        self._probe_scope(
+            self._docs_service.documents().get(documentId="__probe__"),
+            "documents.readonly",
+        )
+
+    def _probe_scope(self, request: Any, missing_scope_label: str) -> None:
+        """Execute *request*; exit 1 on 403 insufficient scope, return on 404."""
+        try:
+            request.execute()
+        except HttpError as exc:
+            if exc.status_code == _HTTP_FORBIDDEN and _is_insufficient_scope(exc):
+                print(  # noqa: T201
+                    f"gdrive scope missing: {missing_scope_label} required",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             if exc.status_code == _HTTP_NOT_FOUND:
-                # 404 = probe success (scope OK, spreadsheet not found — expected)
                 return
-            # Unexpected HTTP error (5xx, network) — re-raise so boot fails visibly.
             raise DriveApiError(
                 f"scope_probe_failed: {exc.status_code}", exc.status_code
             ) from exc
 
     def export_gdoc_markdown(self, file_id: str) -> str:
-        """Export a Google Doc as Markdown text.
+        """Export a Google Doc as Markdown text via Drive files.export.
 
+        Kept for potential non-gdoc callers. gdoc sync uses get_document instead.
         Raises DriveApiError on HTTP error (AC-15/16).
         """
         try:

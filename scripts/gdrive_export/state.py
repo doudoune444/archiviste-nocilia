@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
@@ -22,6 +22,7 @@ class StateEntry:
     last_exported_at: str
     body_hash: str
     archived_at: str | None
+    images: dict[str, str] = field(default_factory=dict)
 
 
 def compute_body_hash(body: str) -> str:
@@ -58,6 +59,7 @@ def load_state(path: Path) -> dict[str, StateEntry]:
                 last_exported_at=entry["last_exported_at"],
                 body_hash=entry["body_hash"],
                 archived_at=entry.get("archived_at"),
+                images=entry.get("images", {}),
             )
         except KeyError as exc:
             raise StateCorruptedError(

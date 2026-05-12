@@ -1,16 +1,18 @@
-"""End-to-end integration tests for gdrive_export.sync — AC-2/3/6/8/9/10/11/12/13/14/15/16/17/20."""
+"""End-to-end integration tests for gdrive_export.sync — AC-1..AC-18 (ING-014 extension)."""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import googleapiclient.errors as gae
+import PIL.Image
 import pytest
 import yaml
 
@@ -28,32 +30,48 @@ _SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 _SLIDES_MIME = "application/vnd.google-apps.presentation"
 
 
-def _make_drive_client(
-    files: list[dict[str, Any]],
-    doc_bodies: dict[str, str] | None = None,
-    png_bodies: dict[str, bytes] | None = None,
-    export_errors: dict[str, Exception] | None = None,
-    sheet_tabs: dict[str, list[dict[str, Any]]] | None = None,
-    sheet_values: dict[str, dict[str, list[list[str]]]] | None = None,
-    presentations: dict[str, dict[str, Any]] | None = None,
-) -> MagicMock:
-    """Return a mock DriveClient configured with the given file list and content."""
-    if doc_bodies is None:
-        doc_bodies = {}
-    if png_bodies is None:
-        png_bodies = {}
-    if export_errors is None:
-        export_errors = {}
-    if sheet_tabs is None:
-        sheet_tabs = {}
-    if sheet_values is None:
-        sheet_values = {}
-    if presentations is None:
-        presentations = {}
+def _default_png() -> tuple[bytes, str]:
+    """Return a small valid PNG payload for use as default image download."""
+    img = PIL.Image.new("RGB", (10, 10), color=(100, 100, 100))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue(), "image/png"
 
-    client = MagicMock()
-    client.list_folder_recursive.return_value = files
-    client.verify_extra_scopes.return_value = None
+
+def _build_doc_response(
+    file_id: str,
+    doc_inline_objects: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a minimal Docs API document dict from the inline_objects spec."""
+    inline_objs = doc_inline_objects.get(file_id, {})
+    body_content = [
+        {
+            "paragraph": {
+                "elements": [{"inlineObjectElement": {"inlineObjectId": obj_id}}]
+            }
+        }
+        for obj_id in inline_objs
+    ]
+    return {
+        "documentId": file_id,
+        "inlineObjects": inline_objs,
+        "body": {"content": body_content},
+    }
+
+
+def _attach_side_effects(
+    client: MagicMock,
+    doc_bodies: dict[str, str],
+    png_bodies: dict[str, bytes],
+    export_errors: dict[str, Exception],
+    sheet_tabs: dict[str, list[dict[str, Any]]],
+    sheet_values: dict[str, dict[str, list[list[str]]]],
+    presentations: dict[str, dict[str, Any]],
+    doc_inline_objects: dict[str, dict[str, Any]],
+    image_payloads: dict[str, tuple[bytes, str]],
+    image_errors: dict[str, Exception],
+) -> None:
+    """Wire side-effect closures onto a mock DriveClient."""
 
     def _export(file_id: str) -> str:
         if file_id in export_errors:
@@ -80,11 +98,55 @@ def _make_drive_client(
             raise export_errors[file_id]
         return presentations.get(file_id, {"slides": []})
 
+    def _get_document(file_id: str) -> dict[str, Any]:
+        if file_id in export_errors:
+            raise export_errors[file_id]
+        return _build_doc_response(file_id, doc_inline_objects)
+
+    def _download_image(content_uri: str) -> tuple[bytes, str]:
+        if content_uri in image_errors:
+            raise image_errors[content_uri]
+        if content_uri in image_payloads:
+            return image_payloads[content_uri]
+        return _default_png()
+
     client.export_gdoc_markdown.side_effect = _export
     client.download_png.side_effect = _download
     client.get_spreadsheet_tabs.side_effect = _get_tabs
     client.get_sheet_values.side_effect = _get_values
     client.get_presentation.side_effect = _get_presentation
+    client.get_document.side_effect = _get_document
+    client.download_image.side_effect = _download_image
+
+
+def _make_drive_client(
+    files: list[dict[str, Any]],
+    doc_bodies: dict[str, str] | None = None,
+    png_bodies: dict[str, bytes] | None = None,
+    export_errors: dict[str, Exception] | None = None,
+    sheet_tabs: dict[str, list[dict[str, Any]]] | None = None,
+    sheet_values: dict[str, dict[str, list[list[str]]]] | None = None,
+    presentations: dict[str, dict[str, Any]] | None = None,
+    doc_inline_objects: dict[str, dict[str, Any]] | None = None,
+    image_payloads: dict[str, tuple[bytes, str]] | None = None,
+    image_errors: dict[str, Exception] | None = None,
+) -> MagicMock:
+    """Return a mock DriveClient configured with the given file list and content."""
+    client = MagicMock()
+    client.list_folder_recursive.return_value = files
+    client.verify_extra_scopes.return_value = None
+    _attach_side_effects(
+        client,
+        doc_bodies=doc_bodies or {},
+        png_bodies=png_bodies or {},
+        export_errors=export_errors or {},
+        sheet_tabs=sheet_tabs or {},
+        sheet_values=sheet_values or {},
+        presentations=presentations or {},
+        doc_inline_objects=doc_inline_objects or {},
+        image_payloads=image_payloads or {},
+        image_errors=image_errors or {},
+    )
     return client
 
 
@@ -951,3 +1013,460 @@ class TestWholeWorkbookDeletion:
             assert fm.get("archived_at") is not None
 
         assert summary.archived == 2  # AC-7: both tabs archived
+
+
+# ---------------------------------------------------------------------------
+# ING-014: gdoc image extraction tests
+# ---------------------------------------------------------------------------
+
+
+def _make_png_bytes(width: int = 10, height: int = 10) -> bytes:
+    """Return minimal valid PNG bytes."""
+    img = PIL.Image.new("RGB", (width, height), color=(100, 50, 25))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _make_inline_object(content_uri: str) -> dict[str, Any]:
+    """Return a minimal Docs API inlineObject dict."""
+    return {
+        "inlineObjectProperties": {
+            "embeddedObject": {
+                "imageProperties": {"contentUri": content_uri}
+            }
+        }
+    }
+
+
+class TestGdocDocsApiCall:
+    """AC-1/AC-13: get_document called for every gdoc including those without images."""
+
+    def test_get_document_called_for_gdoc(self, tmp_path: Path) -> None:
+        # AC-1: get_document invoked for each gdoc.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": "# Title\n"},
+        )
+        _run(client, lore_root, state_path)
+        client.get_document.assert_called_once_with("doc1")
+
+    def test_get_document_not_called_for_png(self, tmp_path: Path) -> None:
+        # AC-13: get_document never called for native PNG files.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        client = _make_drive_client(
+            files=[_file_entry("img1", "photo", _PNG_MIME, md5="aabb")],
+            png_bodies={"img1": _make_png_bytes()},
+        )
+        _run(client, lore_root, state_path)
+        client.get_document.assert_not_called()
+
+    def test_gdoc_without_images_has_empty_manifest(self, tmp_path: Path) -> None:
+        # AC-13: gdoc without inlineObjects → images={} in state.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": "# Title\nNo images here.\n"},
+        )
+        _run(client, lore_root, state_path)
+        state = load_state(state_path)
+        assert state["doc1"].images == {}
+
+    def test_gdoc_without_images_body_unchanged(self, tmp_path: Path) -> None:
+        # AC-13: gdoc without images → .md body == normalize_body(export).
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": "# Title\n\nContent here.\n"},
+        )
+        _run(client, lore_root, state_path)
+        content = (lore_root / "my-doc.md").read_text(encoding="utf-8")
+        fm_end = content.index("\n---\n", 4) + 5
+        body = content[fm_end:]
+        assert "# Title" in body
+        assert "Content here." in body
+
+
+class TestGdocImageDownload:
+    """AC-2: download authenticated, AC-3: image written with md5[:12] filename."""
+
+    def test_image_written_to_sidecar(self, tmp_path: Path) -> None:
+        # AC-2/AC-3: image downloaded and written to sidecar dir.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        png = _make_png_bytes()
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![alt]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_payloads={uri: (png, "image/png")},
+        )
+        _run(client, lore_root, state_path)
+        sidecar = lore_root / "my-doc.images"
+        assert sidecar.exists()
+        files = list(sidecar.iterdir())
+        assert len(files) == 1
+        assert re.match(r"^[0-9a-f]{12}\.(png|jpg)$", files[0].name)
+
+    def test_md_contains_relative_sidecar_path(self, tmp_path: Path) -> None:
+        # AC-4: .md references sidecar path without / or ./ prefix.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![alt]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _run(client, lore_root, state_path)
+        content = (lore_root / "my-doc.md").read_text(encoding="utf-8")
+        fm_end = content.index("\n---\n", 4) + 5
+        body = content[fm_end:]
+        # Must contain relative sidecar path, not the googleusercontent URL.
+        assert "googleusercontent.com" not in body
+        assert "my-doc.images/" in body
+        assert "![]" not in body or "![alt]" in body  # alt preserved
+
+
+class TestGdocImageDedup:
+    """AC-5: two inlineObjects same MD5 → one file, two refs."""
+
+    def test_dedup_same_md5(self, tmp_path: Path) -> None:
+        # AC-5: two objects with same binary → 1 file on disk, 2 refs in .md.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri_a = "https://lh3.googleusercontent.com/imgA"
+        uri_b = "https://lh3.googleusercontent.com/imgB"
+        same_png = _make_png_bytes()
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri_a})\n\n![b]({uri_b})\n"},
+            doc_inline_objects={
+                "doc1": {
+                    "kix.a": _make_inline_object(uri_a),
+                    "kix.b": _make_inline_object(uri_b),
+                }
+            },
+            image_payloads={uri_a: (same_png, "image/png"), uri_b: (same_png, "image/png")},
+        )
+        _run(client, lore_root, state_path)
+        sidecar = lore_root / "my-doc.images"
+        assert len(list(sidecar.iterdir())) == 1  # AC-5: dedup
+
+
+class TestGdocImageFailures:
+    """AC-7: various failure modes → placeholder, counter, processing continues."""
+
+    def test_http_error_gives_placeholder(self, tmp_path: Path) -> None:
+        # AC-7: HTTP 500 → placeholder #image-failed-<objectId>.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img_fail"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![alt]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_errors={uri: DriveApiError("server error", 500)},
+        )
+        summary, run_logs = _run(client, lore_root, state_path)
+        assert summary.images_failed == 1
+        content = (lore_root / "my-doc.md").read_text(encoding="utf-8")
+        assert "#image-failed-kix.a" in content
+        img_fail_logs = [lg for lg in run_logs if lg.get("event") == "gdrive_sync.image_failed"]
+        assert len(img_fail_logs) == 1
+
+    def test_unsupported_content_type_placeholder(self, tmp_path: Path) -> None:
+        # AC-7: Content-Type not in MIME map → placeholder.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img_bmp"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![alt]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_payloads={uri: (b"BM\x00\x00garbage", "image/bmp")},
+        )
+        summary, _logs = _run(client, lore_root, state_path)
+        assert summary.images_failed == 1
+        content = (lore_root / "my-doc.md").read_text(encoding="utf-8")
+        assert "#image-failed-kix.a" in content
+
+    def test_processing_continues_after_failed_image(self, tmp_path: Path) -> None:
+        # AC-7: after image failure, other docs still processed.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/fail"
+        client = _make_drive_client(
+            files=[
+                _file_entry("doc1", "Fail Doc", _DOC_MIME),
+                _file_entry("doc2", "OK Doc", _DOC_MIME),
+            ],
+            doc_bodies={
+                "doc1": f"![alt]({uri})\n",
+                "doc2": "# Good\n",
+            },
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_errors={uri: DriveApiError("err", 500)},
+        )
+        summary, _ = _run(client, lore_root, state_path)
+        assert (lore_root / "ok-doc.md").exists()
+        assert summary.images_failed == 1
+        assert summary.errors == 0  # doc-level errors separate from image_failed
+
+
+class TestGdocUnchangedSignature:
+    """AC-9: unchanged iff content_signature AND images manifest both unchanged."""
+
+    def test_unchanged_when_both_same(self, tmp_path: Path) -> None:
+        # AC-9: run2 with same content + same images → unchanged.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        png = _make_png_bytes()
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_payloads={uri: (png, "image/png")},
+        )
+        _run(client, lore_root, state_path)
+        md_mtime = (lore_root / "my-doc.md").stat().st_mtime
+
+        summary, _ = _run(client, lore_root, state_path)
+        assert summary.unchanged == 1
+        assert (lore_root / "my-doc.md").stat().st_mtime == md_mtime
+
+    def test_updated_when_image_replaced(self, tmp_path: Path) -> None:
+        # AC-9: run2 with same body but different image MD5 → updated.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        png_v1 = _make_png_bytes(10, 10)
+        png_v2 = _make_png_bytes(20, 20)
+
+        client1 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_payloads={uri: (png_v1, "image/png")},
+        )
+        _run(client1, lore_root, state_path)
+
+        client2 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_payloads={uri: (png_v2, "image/png")},
+        )
+        summary, _ = _run(client2, lore_root, state_path)
+        assert summary.updated == 1
+
+
+class TestGdocOrphanCleanup:
+    """AC-10: orphaned sidecar images removed after run."""
+
+    def test_orphan_removed_when_image_deleted(self, tmp_path: Path) -> None:
+        # AC-10: run1 has 2 images; run2 removes one → 1 orphan removed.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri_a = "https://lh3.googleusercontent.com/imgA"
+        uri_b = "https://lh3.googleusercontent.com/imgB"
+        png = _make_png_bytes()
+
+        client1 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri_a})\n![b]({uri_b})\n"},
+            doc_inline_objects={
+                "doc1": {
+                    "kix.a": _make_inline_object(uri_a),
+                    "kix.b": _make_inline_object(uri_b),
+                }
+            },
+            image_payloads={
+                uri_a: (png, "image/png"),
+                uri_b: (_make_png_bytes(20, 20), "image/png"),
+            },
+        )
+        _run(client1, lore_root, state_path)
+        sidecar = lore_root / "my-doc.images"
+        assert len(list(sidecar.iterdir())) == 2
+
+        # Run 2: only image A remains.
+        client2 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri_a})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri_a)}},
+            image_payloads={uri_a: (png, "image/png")},
+        )
+        summary, logs = _run(client2, lore_root, state_path)
+        assert len(list(sidecar.iterdir())) == 1
+        orphan_logs = [lg for lg in logs if lg.get("event") == "gdrive_sync.image_orphan_removed"]
+        assert len(orphan_logs) == 1
+        assert summary.orphans_removed == 1
+
+    def test_sidecar_dir_removed_when_all_images_gone(self, tmp_path: Path) -> None:
+        # AC-10: after all images removed, sidecar dir is deleted.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img"
+
+        client1 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _run(client1, lore_root, state_path)
+        assert (lore_root / "my-doc.images").exists()
+
+        # Run 2: no images.
+        client2 = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": "# No images\n"},
+        )
+        _run(client2, lore_root, state_path)
+        assert not (lore_root / "my-doc.images").exists()
+
+
+class TestGdocRenameSidecar:
+    """AC-12: rename sidecar directory when gdoc is renamed."""
+
+    def test_sidecar_renamed_with_doc(self, tmp_path: Path) -> None:
+        # AC-12: gdoc renamed → sidecar dir renamed alongside .md.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+
+        client1 = _make_drive_client(
+            files=[_file_entry("doc1", "Old Name", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _run(client1, lore_root, state_path)
+        assert (lore_root / "old-name.images").exists()
+
+        client2 = _make_drive_client(
+            files=[_file_entry("doc1", "New Name", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _, logs = _run(client2, lore_root, state_path)
+        assert (lore_root / "new-name.images").exists()
+        assert not (lore_root / "old-name.images").exists()
+        rename_logs = [lg for lg in logs if lg.get("event") == "gdrive_sync.images_dir_renamed"]
+        assert len(rename_logs) == 1
+
+
+class TestGdocDryRunImages:
+    """AC-14: --dry-run skips image downloads, writes, orphan cleanup."""
+
+    def test_dry_run_no_image_writes(self, tmp_path: Path) -> None:
+        # AC-14: dry-run → no image binaries written.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _run(client, lore_root, state_path, dry_run=True)
+        # No sidecar dir should exist.
+        assert not (lore_root / "my-doc.images").exists()
+
+    def test_dry_run_no_image_downloads(self, tmp_path: Path) -> None:
+        # AC-14: dry-run → download_image never called.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _run(client, lore_root, state_path, dry_run=True)
+        client.download_image.assert_not_called()
+
+    def test_dry_run_summary_has_would_images_fields(self, tmp_path: Path) -> None:
+        # AC-15: dry-run summary has would_images_written/failed/orphans_removed.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _, logs = _run(client, lore_root, state_path, dry_run=True)
+        summary_logs = [lg for lg in logs if lg.get("event") == "gdrive_sync.summary"]
+        assert len(summary_logs) == 1
+        sl = summary_logs[0]
+        assert "would_images_written" in sl
+        assert "would_images_failed" in sl
+        assert "would_orphans_removed" in sl
+
+
+class TestSummaryImageFields:
+    """AC-15: summary log has images_written, images_failed, orphans_removed."""
+
+    def test_summary_has_image_fields(self, tmp_path: Path) -> None:
+        # AC-15: non-dry-run summary includes images_written, images_failed, orphans_removed.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": "# No images\n"},
+        )
+        _, logs = _run(client, lore_root, state_path)
+        summary_logs = [lg for lg in logs if lg.get("event") == "gdrive_sync.summary"]
+        assert len(summary_logs) == 1
+        sl = summary_logs[0]
+        assert "images_written" in sl
+        assert "images_failed" in sl
+        assert "orphans_removed" in sl
+
+    def test_images_written_counted_correctly(self, tmp_path: Path) -> None:
+        # AC-15: images_written == number of image binaries written.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        summary, _ = _run(client, lore_root, state_path)
+        assert summary.images_written == 1
+
+    def test_images_failed_counted_correctly(self, tmp_path: Path) -> None:
+        # AC-15: images_failed counts HTTP errors.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img_fail"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+            image_errors={uri: DriveApiError("err", 500)},
+        )
+        summary, _ = _run(client, lore_root, state_path)
+        assert summary.images_failed == 1
+
+    def test_images_state_entry_persisted(self, tmp_path: Path) -> None:
+        # AC-8: state.images persisted after run.
+        lore_root = tmp_path / "lore"
+        state_path = tmp_path / "state.json"
+        uri = "https://lh3.googleusercontent.com/img1"
+        client = _make_drive_client(
+            files=[_file_entry("doc1", "My Doc", _DOC_MIME)],
+            doc_bodies={"doc1": f"![a]({uri})\n"},
+            doc_inline_objects={"doc1": {"kix.a": _make_inline_object(uri)}},
+        )
+        _run(client, lore_root, state_path)
+        state = load_state(state_path)
+        assert state["doc1"].images != {}  # AC-8: manifest not empty

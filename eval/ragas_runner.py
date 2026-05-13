@@ -24,7 +24,7 @@ import structlog
 from eval.baseline_skip import should_skip_gate_b
 from eval.clients import EntryError, GenerateClient, RetrieveClient
 from eval.gates import apply_gate_a, apply_gate_b
-from eval.loader import load_golden_set
+from eval.loader import GoldenEntry, load_golden_set
 from eval.metrics import (
     aggregate_breakdown,
     compute_context_recall_structural,
@@ -39,6 +39,7 @@ log = structlog.get_logger()
 
 DEFAULT_GOLDEN_SET = Path("specs/golden_qa.jsonl")
 DEFAULT_OUTPUT_DIR = Path("eval/runs")
+ERROR_RATE_THRESHOLD = 0.10
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -67,7 +68,7 @@ def _get_git_sha(repo_path: Path) -> str:
             timeout=5,
         )
         return result.stdout.strip()
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return "unknown"
 
 
@@ -75,7 +76,7 @@ def _check_workers_reachable(workers_url: str) -> bool:
     try:
         resp = httpx.get(f"{workers_url}/healthz", timeout=5.0)
         return resp.is_success
-    except Exception:
+    except (httpx.HTTPError, OSError):
         return False
 
 
@@ -104,6 +105,8 @@ def _run_entry_offline(
 
     chunks = response.chunks
     entry_result.retrieved_contexts = [c.source_path for c in chunks]
+    # Store chunk texts for keyword overlap check against retrieved content (not stub answer).
+    entry_result.retrieved_chunk_texts = [c.text for c in chunks]
     stub_chunks = [StubChunk(source_path=c.source_path, text=c.text) for c in chunks]
     keywords = entry_result.ground_truth.split() if entry_result.ground_truth else []
     entry_result.answer = build_stub_answer(keywords, stub_chunks)
@@ -144,8 +147,15 @@ def _compute_entry_metrics(
     entry_result: EntryResult,
     expected_keywords: list[str],
     expected_contexts: list[str],
+    is_offline: bool,
 ) -> None:
-    """Fill entry_result.metrics with deterministic metrics."""
+    """Fill entry_result.metrics with deterministic metrics.
+
+    In offline mode, keyword_overlap_rate is computed against retrieved chunk texts
+    (not the stub answer) to avoid the tautological self-match: the stub answer
+    always contains the keywords, making the metric a no-op. Measuring against
+    chunk texts gives a genuine signal about retrieval quality.
+    """
     if entry_result.status != "ok" or entry_result.answer is None:
         entry_result.metrics = {
             "keyword_overlap_rate": None,
@@ -153,7 +163,12 @@ def _compute_entry_metrics(
         }
         return
 
-    overlap = compute_keyword_overlap(entry_result.answer, expected_keywords)
+    if is_offline:
+        # Check keywords against retrieved chunk texts to avoid self-match with stub answer.
+        chunk_corpus = " ".join(entry_result.retrieved_chunk_texts)
+        overlap = compute_keyword_overlap(chunk_corpus, expected_keywords)
+    else:
+        overlap = compute_keyword_overlap(entry_result.answer, expected_keywords)
     entry_result.metrics["keyword_overlap_rate"] = 1.0 if overlap else 0.0
 
     if entry_result.mode == "canon":
@@ -187,12 +202,142 @@ def _build_run(
     )
 
 
-def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915
+def _run_all_entries(
+    golden_entries: list[GoldenEntry],
+    runner_mode: Literal["live", "offline"],
+    retrieve_client: RetrieveClient,
+    generate_client: GenerateClient,
+) -> tuple[list[EntryResult], int]:
+    """Execute pipeline for all entries; return results and error count."""
+    entry_results: list[EntryResult] = []
+    error_count = 0
+    is_offline = runner_mode == "offline"
+
+    for golden in golden_entries:
+        request_id = str(uuid.uuid4())
+        entry = EntryResult(
+            id=golden.id,
+            mode=golden.mode,
+            question=golden.question,
+            status="ok",
+            request_id=request_id,
+            ground_truth=" ".join(golden.expected_answer_keywords),
+        )
+        if is_offline:
+            _run_entry_offline(entry, retrieve_client)
+        else:
+            _run_entry_live(entry, retrieve_client, generate_client)
+        _compute_entry_metrics(
+            entry, golden.expected_answer_keywords, golden.expected_contexts, is_offline
+        )
+        if entry.status != "ok":
+            error_count += 1
+        log.info("eval_entry", id=entry.id, mode=entry.mode, status=entry.status)
+        entry_results.append(entry)
+
+    return entry_results, error_count
+
+
+def _resolve_ragas_metrics(
+    runner_mode: Literal["live", "offline"],
+    entry_results: list[EntryResult],
+) -> dict[str, float | None]:
+    """Return Ragas metrics for live mode; null-filled dict for offline."""
+    if runner_mode == "live":
+        canon_ok = [e for e in entry_results if e.mode == "canon" and e.status == "ok"]
+        return compute_ragas_metrics(canon_ok)
+    return {
+        "faithfulness": None,
+        "answer_relevancy": None,
+        "context_precision": None,
+        "context_recall": None,
+    }
+
+
+def _handle_auto_create_baseline(
+    baseline_path: Path,
+    run: RunFile,
+    runner_mode: str,
+    ragas_metrics: dict[str, float | None],
+    gate_a_passed: bool,
+) -> int:
+    """Write run as new baseline and emit PASS (no baseline yet). Returns exit code."""
+    error_rate = run.totals.errors / run.totals.entries if run.totals.entries > 0 else 0.0
+    if error_rate > ERROR_RATE_THRESHOLD:
+        sys.stderr.write(
+            f"cannot bootstrap baseline: error rate {error_rate * 100:.1f}% exceeds 10%\n"
+        )
+        return 1
+    write_run(baseline_path, run)
+    sys.stdout.write(
+        json.dumps(
+            {
+                "event": "eval_summary",
+                "mode_runner": runner_mode,
+                "totals": {
+                    "entries": run.totals.entries,
+                    "ok": run.totals.ok,
+                    "errors": run.totals.errors,
+                },
+                "metrics": ragas_metrics,
+                "gate_a": {"passed": gate_a_passed},
+                "gate_b": {"passed": True, "skipped": True, "skip_reason": "no baseline yet"},
+                "verdict": "PASS (no baseline yet)",
+            }
+        )
+        + "\n"
+    )
+    return 0
+
+
+def _emit_summary_and_exit(
+    runner_mode: str,
+    run: RunFile,
+    ragas_metrics: dict[str, float | None],
+    breakdown: dict[str, object],
+    baseline_run: dict[str, object] | None,
+    repo_path: Path,
+) -> int:
+    """Apply gates, emit eval_summary JSON, return exit code."""
+    gate_a = apply_gate_a(ragas_metrics, runner_mode)
+
+    skip_gate_b = baseline_run is not None and should_skip_gate_b(repo_path)
+    if skip_gate_b:
+        log.info("gate_b_skipped", reason="baseline_bump_commit")
+
+    effective_baseline = None if skip_gate_b else baseline_run
+    gate_b = apply_gate_b(ragas_metrics, breakdown, effective_baseline, runner_mode)
+
+    error_rate = run.totals.errors / run.totals.entries if run.totals.entries > 0 else 0.0
+    error_rate_exceeded = error_rate > ERROR_RATE_THRESHOLD
+    if error_rate_exceeded:
+        sys.stderr.write(f"error rate {error_rate * 100:.1f}% exceeds 10% threshold\n")
+
+    summary = {
+        "event": "eval_summary",
+        "mode_runner": runner_mode,
+        "totals": {"entries": run.totals.entries, "ok": run.totals.ok, "errors": run.totals.errors},
+        "metrics": ragas_metrics,
+        "gate_a": {"passed": gate_a.passed, "violations": gate_a.violations},
+        "gate_b": {
+            "passed": gate_b.passed,
+            "skipped": gate_b.skipped,
+            "violations": gate_b.violations,
+        },
+    }
+    sys.stdout.write(json.dumps(summary) + "\n")
+    log.info("eval_summary", **{k: v for k, v in summary.items() if k != "event"})
+
+    if not gate_a.passed or not gate_b.passed or error_rate_exceeded:
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns exit code."""
     args = _parse_args(argv)
     runner_mode: Literal["live", "offline"] = args.mode
     workers_url: str = args.workers_url
-
     started_at = datetime.datetime.now(datetime.UTC).isoformat()
     repo_path = Path(__file__).parent.parent
 
@@ -212,57 +357,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915
         DEFAULT_OUTPUT_DIR
         / f"{datetime.datetime.now(datetime.UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     )
-
     baseline_run = _load_baseline(args.baseline)
-
     retrieve_client = RetrieveClient(base_url=workers_url)
     generate_client = GenerateClient(base_url=workers_url)
 
-    entry_results: list[EntryResult] = []
-    error_count = 0
-
-    for golden in golden_entries:
-        request_id = str(uuid.uuid4())
-        entry = EntryResult(
-            id=golden.id,
-            mode=golden.mode,
-            question=golden.question,
-            status="ok",
-            request_id=request_id,
-            ground_truth=" ".join(golden.expected_answer_keywords),
-        )
-
-        if runner_mode == "offline":
-            _run_entry_offline(entry, retrieve_client)
-        else:
-            _run_entry_live(entry, retrieve_client, generate_client)
-
-        _compute_entry_metrics(
-            entry, golden.expected_answer_keywords, golden.expected_contexts
-        )
-
-        if entry.status != "ok":
-            error_count += 1
-
-        log.info("eval_entry", id=entry.id, mode=entry.mode, status=entry.status)
-        entry_results.append(entry)
-
+    entry_results, error_count = _run_all_entries(
+        golden_entries, runner_mode, retrieve_client, generate_client
+    )
     total_entries = len(entry_results)
-    ok_count = total_entries - error_count
     breakdown = aggregate_breakdown(entry_results)
-
-    canon_ok_entries = [e for e in entry_results if e.mode == "canon" and e.status == "ok"]
-    if runner_mode == "live":
-        ragas_metrics = compute_ragas_metrics(canon_ok_entries)
-    else:
-        ragas_metrics = {
-            "faithfulness": None,
-            "answer_relevancy": None,
-            "context_precision": None,
-            "context_recall": None,
-        }
-
-    totals = RunTotals(entries=total_entries, ok=ok_count, errors=error_count)
+    ragas_metrics = _resolve_ragas_metrics(runner_mode, entry_results)
+    totals = RunTotals(entries=total_entries, ok=total_entries - error_count, errors=error_count)
     git_sha = _get_git_sha(repo_path)
     run = _build_run(
         runner_mode, started_at, git_sha, totals, breakdown, ragas_metrics, entry_results
@@ -270,67 +375,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915
     write_run(output_path, run)
 
     gate_a = apply_gate_a(ragas_metrics, runner_mode)
-
     if args.baseline is not None and baseline_run is None:
-        write_run(args.baseline, run)
-        verdict = "PASS (no baseline yet)"
-        sys.stdout.write(
-            json.dumps(
-                {
-                    "event": "eval_summary",
-                    "mode_runner": runner_mode,
-                    "totals": {
-                        "entries": total_entries,
-                        "ok": ok_count,
-                        "errors": error_count,
-                    },
-                    "metrics": ragas_metrics,
-                    "gate_a": {"passed": gate_a.passed},
-                    "gate_b": {
-                        "passed": True,
-                        "skipped": True,
-                        "skip_reason": "no baseline yet",
-                    },
-                    "verdict": verdict,
-                }
-            )
-            + "\n"
-        )
-        return 0
-
-    skip_gate_b = baseline_run is not None and should_skip_gate_b(repo_path)
-    if skip_gate_b:
-        log.info("gate_b_skipped", reason="baseline_bump_commit")
-
-    effective_baseline = None if skip_gate_b else baseline_run
-    gate_b = apply_gate_b(ragas_metrics, breakdown, effective_baseline, runner_mode)
-
-    error_rate = error_count / total_entries if total_entries > 0 else 0.0
-    error_rate_threshold = 0.10
-    error_rate_exceeded = error_rate > error_rate_threshold
-    if error_rate_exceeded:
-        sys.stderr.write(
-            f"error rate {error_rate * 100:.1f}% exceeds 10% threshold\n"
+        return _handle_auto_create_baseline(
+            args.baseline, run, runner_mode, ragas_metrics, gate_a.passed
         )
 
-    summary = {
-        "event": "eval_summary",
-        "mode_runner": runner_mode,
-        "totals": {"entries": total_entries, "ok": ok_count, "errors": error_count},
-        "metrics": ragas_metrics,
-        "gate_a": {"passed": gate_a.passed, "violations": gate_a.violations},
-        "gate_b": {
-            "passed": gate_b.passed,
-            "skipped": gate_b.skipped,
-            "violations": gate_b.violations,
-        },
-    }
-    sys.stdout.write(json.dumps(summary) + "\n")
-    log.info("eval_summary", **{k: v for k, v in summary.items() if k != "event"})
-
-    if not gate_a.passed or not gate_b.passed or error_rate_exceeded:
-        return 1
-    return 0
+    return _emit_summary_and_exit(
+        runner_mode, run, ragas_metrics, breakdown, baseline_run, repo_path
+    )
 
 
 if __name__ == "__main__":

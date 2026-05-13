@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -34,6 +33,8 @@ class EntryResult:
     citations: list[str] = field(default_factory=list)
     request_id: str = ""
     ground_truth: str | None = None
+    # Transient: retrieved chunk texts for offline keyword overlap (not serialized to run file).
+    retrieved_chunk_texts: list[str] = field(default_factory=list, repr=False)
 
 
 @dataclass
@@ -70,20 +71,11 @@ def _collect_secret_values() -> list[str]:
     return secrets
 
 
-def _redact_string(text: str, secrets: list[str]) -> str:
-    """Replace secret values in text with [REDACTED]."""
+def _redact_raw(raw: str, secrets: list[str]) -> str:
+    """Replace all occurrences of secret values in a serialized JSON string (AC-16)."""
     for secret in secrets:
-        text = text.replace(secret, "[REDACTED]")
-    return text
-
-
-def _redact_entry(entry_dict: dict[str, object], secrets: list[str]) -> dict[str, object]:
-    """Redact secrets from a serialized entry dict."""
-    redacted = dict(entry_dict)
-    answer = redacted.get("answer")
-    if isinstance(answer, str):
-        redacted["answer"] = _redact_string(answer, secrets)
-    return redacted
+        raw = raw.replace(secret, "[REDACTED]")
+    return raw
 
 
 def _build_run_dict(run: RunFile) -> dict[str, object]:
@@ -118,14 +110,10 @@ def _build_run_dict(run: RunFile) -> dict[str, object]:
 
 
 def write_run(path: Path, run: RunFile) -> None:
-    """Serialize RunFile to JSON with secret redaction (AC-16)."""
+    """Serialize RunFile to JSON with secret redaction applied before write (AC-16)."""
     secrets = _collect_secret_values()
     run_dict = _build_run_dict(run)
-
-    raw = json.dumps(run_dict, indent=2, ensure_ascii=False)
-    for secret in secrets:
-        if secret:
-            raw = raw.replace(re.escape(secret) if False else secret, "[REDACTED]")
-
+    raw = json.dumps(run_dict, indent=2, ensure_ascii=False, sort_keys=True)
+    raw = _redact_raw(raw, secrets)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(raw, encoding="utf-8")

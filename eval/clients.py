@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 import httpx
@@ -49,7 +49,6 @@ class RetrieveClient:
 
     base_url: str
     timeout: float = RETRIEVE_TIMEOUT_SECONDS
-    _extra_headers: dict[str, str] = field(default_factory=dict, repr=False)
 
     def search(
         self,
@@ -57,7 +56,7 @@ class RetrieveClient:
         request_id: str,
     ) -> RetrieveResponse | EntryError:
         """Call POST /v1/retrieve and return chunks or an EntryError."""
-        headers = {"X-Request-Id": request_id, **self._extra_headers}
+        headers = {"X-Request-Id": request_id}
         try:
             resp = httpx.post(
                 f"{self.base_url}/v1/retrieve",
@@ -93,7 +92,6 @@ class GenerateClient:
 
     base_url: str
     timeout: float = GENERATE_TIMEOUT_SECONDS
-    _extra_headers: dict[str, str] = field(default_factory=dict, repr=False)
 
     def generate(
         self,
@@ -102,7 +100,7 @@ class GenerateClient:
         contexts: list[str] | None = None,
     ) -> GenerateResponse | EntryError:
         """Call POST /v1/generate and return answer or an EntryError."""
-        headers = {"X-Request-Id": request_id, **self._extra_headers}
+        headers = {"X-Request-Id": request_id}
         payload: dict[str, object] = {"query": query, "top_k": RETRIEVE_TOP_K}
         if contexts is not None:
             payload["contexts"] = contexts

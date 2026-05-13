@@ -36,20 +36,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: baseline-skip-check
         id: baseline_skip
         run: |
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
           COMMIT_MSG=$(git show -s --format=%s "$HEAD_SHA")
-          CHANGED_FILES=$(git diff --name-only "${HEAD_SHA}^" "${HEAD_SHA}" || echo "")
+          # Use merge-base to inspect full PR diff, not just the last commit.
+          # This prevents hiding malicious commits behind a final baseline-bump.
+          MERGE_BASE=$(git merge-base origin/main "$HEAD_SHA" || git rev-parse "${HEAD_SHA}^")
+          CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" "$HEAD_SHA" || echo "")
           echo "commit_msg=$COMMIT_MSG"
           echo "changed_files=$CHANGED_FILES"
           if echo "$COMMIT_MSG" | grep -qi "^chore(eval): bump baseline$" && \
              [ "$CHANGED_FILES" = "eval/baseline.json" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Gate B skipped: baseline bump commit."
+            echo "Gate B skipped: baseline bump commit (full PR diff = eval/baseline.json only)."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi

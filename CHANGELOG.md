@@ -10,6 +10,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 - fix(gdrive_export): render gdocs from Docs API tree instead of Drive markdown export — handles positionedObjects + bypasses Drive 10 MiB export cap (ING-014 follow-up)
 
 ### Added
+
+- **EVAL-001** : Ragas runner golden_qa (46 entrées 4 modes), gates A/B (absolue live + no-regression bidir), workflow CI offline + dispatch live, baseline.json versionné humain-only. Modules: `eval/loader.py`, `eval/stub_llm.py`, `eval/metrics.py`, `eval/gates.py`, `eval/clients.py`, `eval/run_writer.py`, `eval/baseline_skip.py`. CI fixture sanitisée `eval/fixtures/ci_smoke_qa.jsonl` (8 entrées, 4 modes, non-spoilers). **LOC waiver** : 989 LOC Python prod vs cap 300 — voir [ADR-0008](docs/adr/0008-eval-001-loc-waiver.md). Waiver ad-hoc, non-réutilisable sans nouvel ADR. Plan hypothèse 1 (split EVAL-001a/b) reste activable post-review si reviewer demande.
 - Repo scaffolding (CLAUDE.md, .claude/ agents + commands, specs/, docs/, gateway/, workers/, eval/, infra/)
 - Workflow Claude Code : architect / implementer / reviewer / eval-runner / debugger sub-agents
 - Slash commands : /ticket /plan /impl /review /eval /debug /ship

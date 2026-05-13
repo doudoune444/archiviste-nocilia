@@ -1,0 +1,25 @@
+{
+  "mode": "offline",
+  "started_at": "2026-05-01T10:00:00Z",
+  "finished_at": "2026-05-01T10:01:00Z",
+  "git_sha": "def456",
+  "runner_mode": "offline",
+  "totals": {"entries": 2, "ok": 2, "errors": 0},
+  "breakdown_by_mode": {
+    "canon": {
+      "entries": 2,
+      "keyword_overlap_rate": 0.7,
+      "context_recall_structural": 0.6
+    },
+    "off_topic": {"entries": 0, "keyword_overlap_rate": null},
+    "lore_gap": {"entries": 0, "keyword_overlap_rate": null},
+    "mystery": {"entries": 0, "keyword_overlap_rate": null}
+  },
+  "metrics": {
+    "faithfulness": null,
+    "answer_relevancy": null,
+    "context_precision": null,
+    "context_recall": null
+  },
+  "entries": []
+}

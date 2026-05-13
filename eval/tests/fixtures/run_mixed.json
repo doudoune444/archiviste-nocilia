@@ -1,0 +1,44 @@
+{
+  "mode": "offline",
+  "started_at": "2026-05-13T10:00:00Z",
+  "finished_at": "2026-05-13T10:01:00Z",
+  "git_sha": "abc123",
+  "runner_mode": "offline",
+  "totals": {"entries": 3, "ok": 3, "errors": 0},
+  "breakdown_by_mode": {
+    "canon": {
+      "entries": 1,
+      "keyword_overlap_rate": 1.0,
+      "context_recall_structural": 0.5
+    },
+    "off_topic": {"entries": 1, "keyword_overlap_rate": 0.0},
+    "lore_gap": {"entries": 1, "keyword_overlap_rate": 0.5},
+    "mystery": {"entries": 0, "keyword_overlap_rate": null}
+  },
+  "metrics": {
+    "faithfulness": null,
+    "answer_relevancy": null,
+    "context_precision": null,
+    "context_recall": null
+  },
+  "entries": [
+    {
+      "id": "q001", "mode": "canon", "status": "ok",
+      "metrics": {"keyword_overlap_rate": 1.0, "context_recall_structural": 0.5},
+      "retrieved_contexts": ["intro_p01"],
+      "answer": "archiviste nocilia"
+    },
+    {
+      "id": "q002", "mode": "off_topic", "status": "ok",
+      "metrics": {"keyword_overlap_rate": 0.0},
+      "retrieved_contexts": [],
+      "answer": "I don't know"
+    },
+    {
+      "id": "q003", "mode": "lore_gap", "status": "ok",
+      "metrics": {"keyword_overlap_rate": 0.5},
+      "retrieved_contexts": ["meta_p01"],
+      "answer": "founder"
+    }
+  ]
+}

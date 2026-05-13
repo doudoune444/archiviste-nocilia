@@ -2,22 +2,23 @@ name: RAG Eval
 
 on:
   pull_request:
-    paths:
-      - "workers/src/archiviste_workers/services/**"
-      - "workers/src/archiviste_workers/routers/retrieve.py"
-      - "workers/src/archiviste_workers/routers/generate.py"
-      - "specs/golden_qa.jsonl"
-      - "eval/**"
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      baseline:
+        description: "Path to baseline file (optional, defaults to eval/baseline.json)"
+        required: false
+        default: "eval/baseline.json"
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  ragas:
-    name: ragas vs baseline
+  offline:
+    name: eval offline (gate B no-regression)
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -26,18 +27,52 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: archiviste
         ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - name: baseline-skip-check
+        id: baseline_skip
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          COMMIT_MSG=$(git show -s --format=%s "$HEAD_SHA")
+          CHANGED_FILES=$(git diff --name-only "${HEAD_SHA}^" "${HEAD_SHA}" || echo "")
+          echo "commit_msg=$COMMIT_MSG"
+          echo "changed_files=$CHANGED_FILES"
+          if echo "$COMMIT_MSG" | grep -qi "^chore(eval): bump baseline$" && \
+             [ "$CHANGED_FILES" = "eval/baseline.json" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Gate B skipped: baseline bump commit."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - run: pip install uv
+      - name: install uv
+        run: pip install uv
 
-      - name: sync workers
+      - name: sync workers deps
         working-directory: workers
         run: uv sync --all-extras
+
+      - name: sync eval deps
+        working-directory: eval
+        run: uv sync --all-extras
+
+      - name: create postgres extension
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d archiviste -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: seed minimal corpus
         run: uv run python eval/seed_test_corpus.py
@@ -46,38 +81,107 @@ jobs:
         working-directory: workers
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
-          for _ in {1..30}; do
+          for _ in $(seq 1 30); do
             curl -sf http://localhost:8000/healthz && break
             sleep 1
           done
 
-      - name: run ragas
+      - name: run eval offline
+        if: steps.baseline_skip.outputs.skip != 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           uv run python eval/ragas_runner.py \
-            --set specs/golden_qa.jsonl \
+            --mode offline \
+            --set eval/fixtures/ci_smoke_qa.jsonl \
             --baseline eval/baseline.json \
-            --output eval/runs/pr-${{ github.event.pull_request.number }}.json
+            --output eval/runs/pr.json
 
-      - name: comment results on PR
+      - name: upload eval artifact
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            const path = `eval/runs/pr-${{ github.event.pull_request.number }}.json`;
-            if (!fs.existsSync(path)) return;
-            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-            const body = `## RAG Eval results\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body,
-            });
+          name: eval-run-${{ github.event.pull_request.number }}
+          path: eval/runs/pr.json
+          if-no-files-found: ignore
+
+  live:
+    name: eval live (gate A absolute + gate B no-regression)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: archiviste
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install uv
+        run: pip install uv
+
+      - name: sync workers deps
+        working-directory: workers
+        run: uv sync --all-extras
+
+      - name: sync eval deps
+        working-directory: eval
+        run: uv sync --all-extras
+
+      - name: create postgres extension
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d archiviste -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: seed minimal corpus
+        run: uv run python eval/seed_test_corpus.py
+
+      - name: start workers
+        working-directory: workers
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8000/healthz && break
+            sleep 1
+          done
+
+      - name: run eval live
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LLM_PROVIDER: mistral
+          RAGAS_JUDGE_PROVIDER: openai
+          WORKERS_URL: http://localhost:8000
+        run: |
+          uv run python eval/ragas_runner.py \
+            --mode live \
+            --set specs/golden_qa.jsonl \
+            --baseline ${{ inputs.baseline }} \
+            --output eval/runs/live.json
+
+      - name: upload eval artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-run-live
+          path: eval/runs/live.json
+          if-no-files-found: ignore

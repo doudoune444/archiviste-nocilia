@@ -133,3 +133,52 @@ Lints + tests local : ruff green, mypy strict green (18 fichiers), pytest **46/4
 3. **Fix MED pass2 #3** : injecter sentinel dans `entry.answer` du test property et asserter `[REDACTED]` en sortie.
 
 Une fois ces 3 points adressés, verdict basculera vers APPROVE.
+
+---
+
+## Re-review pass 3 (2026-05-13)
+
+Re-passe adversariale après commits `bf774c3` (CI workflow fix), `887a123` (seed lore-dummy + hash embeddings), `59af39a` (test property sentinels), `41ebb7e` (README/plan notes).
+Lints + tests local : ruff green, mypy strict green (19 fichiers), pytest **55/55 green** (was 46/46). LOC prod eval/*.py ≈ 1158 net (1229 inserts - 71 deletes), aligned avec ADR-0008 waiver post-pass-2.
+
+### Verdict pass 3
+
+**APPROVE (avec réserves documentées)**.
+
+### Statut des findings pass 2
+
+| Finding pass 2 | Statut pass 3 | Vérification |
+|---|---|---|
+| HIGH pass2 #1 CI workflow | RÉSOLU | `eval.yml:75-83` applique migrations via `bash migrations/run.sh` (FOUND-002 runner officiel, valide les 0001/0002). `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/archiviste` exporté au step seed (ligne 87). Workers boot avec `LLM_PROVIDER=mistral`, `LLM_MODEL=mistral-small-latest`, `LLM_API_KEY=ci-placeholder` — accepté par `LlmConfig.from_env` (services/llm.py:56-64 vérifie non-empty uniquement, pas la validité). Job live reproduit le pattern (lignes 165-195). Sequence boot-postgres → migrations → seed → start-workers → eval correcte. |
+| HIGH pass2 #2 tautologie déplacée | RÉSOLU (avec documentation explicite) | `seed_test_corpus.py:40-79` : 4 templates lore-dummy (`_LORE_TEMPLATES`) — keywords embeddés dans une narrative, plus de `" ".join(keywords)`. `_hash_embedding` (lignes 82-103) SHA-256 → 1024 floats L2-normalisés, déterministe, non-zéro, différencié (test `test_hash_embedding_differentiated` pass). Tests `test_seed_corpus.py` (8 cas) couvrent : non-zero, deterministic, differentiated, normalised, narrative > bare-join, idempotence. **Réserve fondamentale acceptée** : la query est embeddée par bge-m3 (workers, retrieve/router.py:154), les chunks sont embeddés en SHA-256 → espaces vectoriels disjoints → top-k cosine = bruit pseudo-aléatoire. La gate B offline est donc une property check de tuyauterie ; le README + docstring + plan post-review note documentent explicitement cette limitation. Baseline canon = 0.0 + tolerance 0.05 → tout passe — Gate B offline trivialement PASS jusqu'à ce qu'un humain bump le baseline. C'est consistent avec AC-9 (PASS no baseline yet pattern) et explicitement scopé hors-EVAL-001 (ticket aval EVAL-002 mentionné). |
+| MED pass2 #3 redaction false-confidence | RÉSOLU | `test_runner_cli.py:157-211` injecte `sentinel_llm_token` dans `entry.answer` (mod 3 == 0), `sentinel_db_cred` dans `entry.answer` (mod 3 == 1), ou `sentinel_llm_token` dans `entry.citations` (mod 3 == 2). Assert positif `[REDACTED]` présent dans le run.json (ligne 211) pour les cas où sentinel injecté ; assert négatif sentinel absent. Test `test_secrets_not_leaked_in_run_file` (lignes 130-133) couvre aussi stdout/stderr (AC-16 spec 3 lieux). Si `_redact_raw` est commenté, le test échoue avec sentinel encore présent. |
+
+### Findings pass 3
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `eval/seed_test_corpus.py:76` + `eval.yml:90-107` | LOW | Réserve documentée : embedding mismatch bge-m3 / SHA-256 | Workers retrieve embed query via bge-m3 (`workers/src/archiviste_workers/retrieve/router.py:154`), chunks stockés avec embeddings SHA-256-pseudo (`seed_test_corpus.py:82-103`). Espace vectoriel disjoint → cosine quasi-aléatoire → top-k ranking = bruit. Conséquence runtime : `context_recall_structural` ≈ noise, `keyword_overlap_rate` ≈ noise. Combiné à `eval/baseline.json` canon `context_recall_structural=0.0 keyword_overlap_rate=0.0` + tolerance 0.05 (AC-11), Gate B offline est trivialement PASS pour toute valeur ≥ -0.05. Risque additionnel : bge-m3 ~2GB download au boot workers en CI → si pas de cache HF, soit ralentit (CI lent), soit timeout → `app.state.embedder=None` → 503 `embedder_unavailable` → runner marque 100% upstream_error → exit code 1 (mais c'est un fail-loud explicite, pas un gaming). | Accepté pour EVAL-001 : doc/README/plan/ADR explicitent que la gate B offline est une property check de tuyauterie phase 1. Ouvrir EVAL-002 pour seed bge-m3 réel + premier baseline non-trivial. Optionnel : cacher bge-m3 dans GitHub Actions cache pour stabiliser le boot CI. |
+| `eval/run_writer.py:81-109` | LOW | Field `question` non sérialisé | `_build_run_dict` lignes 96-108 ne sérialise pas `EntryResult.question` malgré sa présence dans le dataclass (line 28). AC-5 schéma cite `entries: [{id, mode, status, metrics: {...}, retrieved_contexts, answer}]` — `question` n'est pas listé en AC-5, donc strictement conforme, mais le champ est porté en mémoire pour rien. | Soit drop `question` du dataclass, soit l'ajouter au dict sérialisé (utile debug). Cosmétique. |
+| `eval/seed_test_corpus.py:167` | LOW | `except Exception` large | `except Exception` capture tout. Acceptable pour cleanup transactionnel mais préférer `except (psycopg2.Error, OSError)` (`.claude/rules/no-workaround.md` "Catching + swallowing"). Note : l'exception est re-raised, donc pas un swallow effectif. | Restreindre le type ou ajouter commentaire WHY justifiant le scope large. |
+
+### Spec coverage delta pass 3
+
+Tous les ACs couverts comme pass 2 ; AC-7 et AC-11 offline désormais réellement testables (seed produit narratives + embeddings non-zero), mais sémantiquement faible par limitation bge-m3 vs SHA-256 documentée. AC-13 + AC-14 workflow CI exécutable bout en bout.
+
+### Security delta pass 3
+
+- AC-16 redaction property test réel (sentinel injection + positive `[REDACTED]` assert) — protection effective vérifiée.
+- `LLM_API_KEY=ci-placeholder` en clair dans `eval.yml:100` — non-secret (placeholder explicite). OK.
+- Pas de nouvelle surface introduite.
+
+### LOC final
+
+Eval prod Python net : ~1158 LOC (1229 insertions - 71 deletions sur `eval/*.py` hors tests). ADR-0008 mentionne 1190 post-pass-1 ; consistent. Waiver justifié. ADR à actualiser au prochain bump si écart > 5%.
+
+### Recommandations post-merge
+
+1. Ouvrir EVAL-002 : seed corpus bge-m3 réel + cache HF Actions + premier baseline non-trivial (humain commit `chore(eval): bump baseline`).
+2. Cosmetic : drop `question` from `EntryResult` dataclass ou l'ajouter au schéma AC-5 + run dict.
+3. Restreindre `except Exception` dans `seed_test_corpus.py:167`.
+
+Aucun de ces 3 points n'est bloquant pour le merge EVAL-001. **APPROVE**.

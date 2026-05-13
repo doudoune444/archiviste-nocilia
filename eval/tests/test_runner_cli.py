@@ -1,13 +1,13 @@
-"""Integration CLI tests for eval/ragas_runner.py — AC-2, AC-9, AC-15, AC-16."""
+"""Integration CLI tests for eval/ragas_runner.py — AC-2, AC-4, AC-9, AC-15, AC-16."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
 from pathlib import Path
 
-import pytest
 from pytest_httpserver import HTTPServer
 
 EVAL_DIR = Path(__file__).parent.parent
@@ -131,3 +131,110 @@ def test_secrets_not_leaked_in_run_file(tmp_path: Path, httpserver: HTTPServer) 
     assert fake_api_key not in stderr, "API key leaked in stderr"
     assert "supersecretpwd" not in stdout, "DB password leaked in stdout"
     assert "supersecretpwd" not in stderr, "DB password leaked in stderr"
+
+
+# AC-16 property: 100 simulated write_run calls with secrets injected → 0 leaks in run file
+def test_secrets_redaction_property_100_runs(tmp_path: Path) -> None:
+    """AC-16 property: 100 write_run calls with injected env secrets must never leak them."""
+    import datetime
+
+    from eval.run_writer import EntryResult, RunFile, RunTotals, write_run
+
+    # Use high-entropy sentinel strings that are clearly test fixtures, not real secrets.
+    # Named without "key" suffix to avoid false positives from secret scanners.
+    sentinel_llm_token = "test-llm-token-xyz9999-prop"
+    sentinel_db_cred = "postgres://admin:prop-cred-fixture@dbhost/mydb"
+    sentinel_password = "prop-cred-fixture"
+
+    env_patch = {"LLM_API_KEY": sentinel_llm_token, "DATABASE_URL": sentinel_db_cred}
+
+    for i in range(100):
+        output_path = tmp_path / f"run_{i}.json"
+        entry = EntryResult(
+            id=f"e{i}",
+            mode="canon",
+            question="test?",
+            status="ok",
+            answer=f"answer {i}",
+            metrics={"keyword_overlap_rate": 1.0, "context_recall_structural": 0.5},
+        )
+        run = RunFile(
+            mode="offline",
+            started_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            git_sha="abc",
+            runner_mode="offline",
+            totals=RunTotals(entries=1, ok=1, errors=0),
+            breakdown_by_mode={"canon": {"entries": 1, "keyword_overlap_rate": 1.0}},
+            metrics={
+                "faithfulness": None, "answer_relevancy": None,
+                "context_precision": None, "context_recall": None,
+            },
+            entries=[entry],
+        )
+        old_env = {k: os.environ.get(k) for k in env_patch}
+        os.environ.update(env_patch)
+        try:
+            write_run(output_path, run)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        content = output_path.read_text(encoding="utf-8")
+        assert sentinel_llm_token not in content, f"run {i}: LLM token leaked in run file"
+        assert sentinel_password not in content, f"run {i}: DB credential leaked in run file"
+
+
+# AC-4 property: two consecutive offline runs on same fixture produce byte-identical run files
+# (modulo started_at / finished_at / git_sha).
+def test_offline_double_run_byte_identical(tmp_path: Path, httpserver: HTTPServer) -> None:
+    """AC-4: double offline run must produce SHA-256-identical payloads (deterministic)."""
+    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/v1/retrieve").respond_with_json({
+        "chunks": [
+            {"source_path": "intro_p01", "text": "archiviste nocilia intro text"},
+            {"source_path": "intro_p02", "text": "more nocilia lore text"},
+        ]
+    })
+
+    output1 = tmp_path / "run1.json"
+    output2 = tmp_path / "run2.json"
+
+    args = [
+        "--mode", "offline",
+        "--set", str(FIXTURES / "golden_valid.jsonl"),
+        "--workers-url", httpserver.url_for(""),
+    ]
+    code1, _, _ = _run_runner(args + ["--output", str(output1)])
+    code2, _, _ = _run_runner(args + ["--output", str(output2)])
+
+    assert code1 in (0, 1), f"run1 must exit 0 or 1, got {code1}"
+    assert code2 in (0, 1), f"run2 must exit 0 or 1, got {code2}"
+    assert output1.exists(), "run1 file must be written"
+    assert output2.exists(), "run2 file must be written"
+
+    data1 = json.loads(output1.read_text(encoding="utf-8"))
+    data2 = json.loads(output2.read_text(encoding="utf-8"))
+
+    # Remove non-deterministic fields before comparing (per AC-4 spec: "modulo timestamps")
+    for data in (data1, data2):
+        data.pop("started_at", None)
+        data.pop("finished_at", None)
+        data.pop("git_sha", None)
+        for entry in data.get("entries", []):
+            # request_id is uuid4 per run — intentionally non-deterministic (tracing)
+            entry.pop("request_id", None)
+
+    canonical1 = json.dumps(data1, sort_keys=True, ensure_ascii=False)
+    canonical2 = json.dumps(data2, sort_keys=True, ensure_ascii=False)
+
+    hash1 = hashlib.sha256(canonical1.encode()).hexdigest()
+    hash2 = hashlib.sha256(canonical2.encode()).hexdigest()
+
+    assert hash1 == hash2, (
+        f"Double offline run produced non-identical payloads.\n"
+        f"SHA-256 run1={hash1}\nSHA-256 run2={hash2}"
+    )

@@ -101,10 +101,19 @@ jobs:
         run: |
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
             > /tmp/uvicorn.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:8000/healthz && echo "workers up after ${i}s" && break
+          # bge-m3 (~2 GB) is downloaded from HF Hub on cold cache → boot may
+          # exceed 60 s. Wait up to 300 s, then dump uvicorn log and fail loud.
+          for i in $(seq 1 300); do
+            if curl -sf http://localhost:8000/healthz; then
+              echo "workers up after ${i}s"
+              exit 0
+            fi
             sleep 1
           done
+          echo "workers did not become healthy within 300 s"
+          echo "--- uvicorn log ---"
+          cat /tmp/uvicorn.log || true
+          exit 1
 
       - name: run eval offline
         if: steps.baseline_skip.outputs.skip != 'true'
@@ -189,10 +198,17 @@ jobs:
         run: |
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
             > /tmp/uvicorn.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:8000/healthz && echo "workers up after ${i}s" && break
+          for i in $(seq 1 300); do
+            if curl -sf http://localhost:8000/healthz; then
+              echo "workers up after ${i}s"
+              exit 0
+            fi
             sleep 1
           done
+          echo "workers did not become healthy within 300 s"
+          echo "--- uvicorn log ---"
+          cat /tmp/uvicorn.log || true
+          exit 1
 
       - name: run eval live
         env:

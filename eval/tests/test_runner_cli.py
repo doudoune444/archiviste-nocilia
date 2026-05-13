@@ -133,9 +133,15 @@ def test_secrets_not_leaked_in_run_file(tmp_path: Path, httpserver: HTTPServer) 
     assert "supersecretpwd" not in stderr, "DB password leaked in stderr"
 
 
-# AC-16 property: 100 simulated write_run calls with secrets injected → 0 leaks in run file
+# AC-16 property: 100 write_run calls with secrets actually injected into entry fields
+# → sentinels must be redacted in output (positive assertion on [REDACTED] present).
 def test_secrets_redaction_property_100_runs(tmp_path: Path) -> None:
-    """AC-16 property: 100 write_run calls with injected env secrets must never leak them."""
+    """AC-16 property: write_run must redact secrets that appear in serialised fields.
+
+    The sentinels are injected into entry.answer (a field that IS serialised) so that
+    _redact_raw has real work to do. If _redact_raw were commented out, the sentinel
+    would appear in the file and the assertion would fail — no false confidence.
+    """
     import datetime
 
     from eval.run_writer import EntryResult, RunFile, RunTotals, write_run
@@ -150,12 +156,25 @@ def test_secrets_redaction_property_100_runs(tmp_path: Path) -> None:
 
     for i in range(100):
         output_path = tmp_path / f"run_{i}.json"
+        # Inject sentinels into serialised fields so _redact_raw actually has something to replace.
+        # Vary placement across runs (answer / citations) to cover multiple field paths.
+        if i % 3 == 0:
+            answer_text = f"The api token is {sentinel_llm_token} according to the lore entry {i}."
+            citations: list[str] = []
+        elif i % 3 == 1:
+            answer_text = f"Connection via {sentinel_db_cred} was established for entry {i}."
+            citations = []
+        else:
+            answer_text = f"answer {i} without secret"
+            citations = [f"source with {sentinel_llm_token} in path"]
+
         entry = EntryResult(
             id=f"e{i}",
             mode="canon",
             question="test?",
             status="ok",
-            answer=f"answer {i}",
+            answer=answer_text,
+            citations=citations,
             metrics={"keyword_overlap_rate": 1.0, "context_recall_structural": 0.5},
         )
         run = RunFile(
@@ -184,8 +203,12 @@ def test_secrets_redaction_property_100_runs(tmp_path: Path) -> None:
                     os.environ[k] = v
 
         content = output_path.read_text(encoding="utf-8")
+        # Negative: sentinel must not appear in output.
         assert sentinel_llm_token not in content, f"run {i}: LLM token leaked in run file"
         assert sentinel_password not in content, f"run {i}: DB credential leaked in run file"
+        # Positive: redaction marker must appear for runs that injected a sentinel in a field.
+        if i % 3 != 2:
+            assert "[REDACTED]" in content, f"run {i}: expected [REDACTED] marker absent"
 
 
 # AC-4 property: two consecutive offline runs on same fixture produce byte-identical run files

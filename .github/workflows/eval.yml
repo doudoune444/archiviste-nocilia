@@ -72,22 +72,37 @@ jobs:
         working-directory: eval
         run: uv sync --all-extras
 
-      - name: create postgres extension
+      - name: apply migrations
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d archiviste -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/archiviste
+        run: |
+          psql -h localhost -U postgres -d archiviste \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+            -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+          MIGRATIONS_DIR=migrations bash migrations/run.sh
 
       - name: seed minimal corpus
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/archiviste
         run: uv run python eval/seed_test_corpus.py
 
       - name: start workers
         working-directory: workers
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+          GCS_BUCKET: archiviste-conversations-ci
+          GCS_EMULATOR_HOST: http://gcs.invalid
+          # Offline eval only calls /v1/retrieve — no real LLM call happens.
+          # Placeholders satisfy LlmClient.from_env fail-fast validation at boot.
+          LLM_PROVIDER: mistral
+          LLM_MODEL: mistral-small-latest
+          LLM_API_KEY: ci-placeholder
         run: |
-          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
-          for _ in $(seq 1 30); do
-            curl -sf http://localhost:8000/healthz && break
+          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/uvicorn.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8000/healthz && echo "workers up after ${i}s" && break
             sleep 1
           done
 
@@ -147,23 +162,35 @@ jobs:
         working-directory: eval
         run: uv sync --all-extras
 
-      - name: create postgres extension
+      - name: apply migrations
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d archiviste -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/archiviste
+        run: |
+          psql -h localhost -U postgres -d archiviste \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+            -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+          MIGRATIONS_DIR=migrations bash migrations/run.sh
 
       - name: seed minimal corpus
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/archiviste
         run: uv run python eval/seed_test_corpus.py
 
       - name: start workers
         working-directory: workers
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+          GCS_BUCKET: archiviste-conversations-ci
+          GCS_EMULATOR_HOST: http://gcs.invalid
+          LLM_PROVIDER: mistral
+          LLM_MODEL: mistral-small-latest
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
-          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
-          for _ in $(seq 1 30); do
-            curl -sf http://localhost:8000/healthz && break
+          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/uvicorn.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8000/healthz && echo "workers up after ${i}s" && break
             sleep 1
           done
 

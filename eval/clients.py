@@ -10,6 +10,9 @@ import httpx
 RETRIEVE_TIMEOUT_SECONDS = 60
 GENERATE_TIMEOUT_SECONDS = 60
 RETRIEVE_TOP_K = 5
+# Seed corpus uses default access_tier='public' (migrations/0002_schema.sql).
+# `anonymous` reads only `public` chunks → matches the eval seed.
+EVAL_USER_TIER = "anonymous"
 
 
 @dataclass(frozen=True)
@@ -60,7 +63,7 @@ class RetrieveClient:
         try:
             resp = httpx.post(
                 f"{self.base_url}/v1/retrieve",
-                json={"query": query, "top_k": RETRIEVE_TOP_K},
+                json={"query": query, "top_k": RETRIEVE_TOP_K, "user_tier": EVAL_USER_TIER},
                 headers=headers,
                 timeout=self.timeout,
             )
@@ -101,7 +104,11 @@ class GenerateClient:
     ) -> GenerateResponse | EntryError:
         """Call POST /v1/generate and return answer or an EntryError."""
         headers = {"X-Request-Id": request_id}
-        payload: dict[str, object] = {"query": query, "top_k": RETRIEVE_TOP_K}
+        payload: dict[str, object] = {
+            "query": query,
+            "top_k": RETRIEVE_TOP_K,
+            "user_tier": EVAL_USER_TIER,
+        }
         if contexts is not None:
             payload["contexts"] = contexts
         try:

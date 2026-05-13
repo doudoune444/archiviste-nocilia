@@ -113,6 +113,22 @@ Voir `specs/acceptance/EVAL-001.md` AC-1..AC-17 (verbatim, non recopié — limi
 - LOC réel proche du seuil 300 — split EVAL-001a/b reste l'issue de secours documentée.
 - Fixture CI `ci_smoke_qa.jsonl` doit rester représentatif (4 modes, schéma identique) sinon gate B offline donne faux positifs. Owner humain pour rafraîchir si schéma golden évolue.
 
+## Post-review notes (review pass 2, 2026-05-13)
+
+- **HIGH-A (CI workflow)**: Workflow now applies migrations via `bash migrations/run.sh` (official
+  runner, FOUND-002) before the seed step; `DATABASE_URL` exported at seed step; workers boot with
+  `LLM_PROVIDER=mistral LLM_MODEL=mistral-small-latest LLM_API_KEY=ci-placeholder` (offline eval
+  calls `/v1/retrieve` only — no real LLM call happens).
+- **HIGH-B (keyword_overlap_rate offline)**: Seed now uses lore-dummy narrative texts (keywords
+  embedded in narrative context) and hash-based pseudo-embeddings (SHA-256 of source_path,
+  1024-dim L2-normalised, deterministic). `keyword_overlap_rate` offline is documented as a
+  plumbing/integration check (seed→DB→retrieve pipeline), not semantic quality. Semantic quality
+  is gated via Ragas metrics in live mode. Future ticket EVAL-002 will introduce real bge-m3
+  embeddings for meaningful offline retrieval. See `eval/README.md` for full rationale.
+- **MED (redaction property test)**: Sentinels injected into `entry.answer` and `entry.citations`
+  (serialised fields). Test now asserts `[REDACTED]` is present (positive assertion) — if
+  `_redact_raw` were disabled the test would fail with the sentinel still in output.
+
 ## Out of scope
 - LLM-as-judge custom (eval-rubric maison)
 - Gates qualité sur `off_topic`, `lore_gap`, `mystery` (reporté EVAL-* aval)

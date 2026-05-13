@@ -89,3 +89,47 @@ Lecture détaillée des 8 modules production :
 8. Trim LOC ~50 (cleanup #3 + dead `_extra_headers` + factor `_post_json`).
 
 Une fois ces 8 points adressés, verdict basculera vers APPROVE.
+
+---
+
+## Re-review pass 2 (2026-05-13)
+
+Re-passe adversariale après commits `be85637` (fix HIGH 1-4 + main split), `9e900be` (tests MED-5 + AC-16 prop + AC-17 multi-commit), `3320468` (ADR/CHANGELOG).
+Lints + tests local : ruff green, mypy strict green (18 fichiers), pytest **46/46 green** (was 37/37). LOC prod = 1190 (vs 989 pass 1 ; +201 du fait du seed implem + tests).
+
+### Verdict pass 2
+
+**REQUEST_CHANGES** (reste 2 HIGH + 1 MED nouveaux ; HIGH-1/HIGH-2 réels résolus ; HIGH-3/HIGH-4 partiellement gamés ; nouveau bug bloquant en CI workflow).
+
+### Statut des findings pass 1
+
+| Finding | Statut | Vérification |
+|---|---|---|
+| HIGH-1 baseline schéma | RÉSOLU | `eval/baseline.json` contient désormais `mode`/`started_at`/`finished_at`/`git_sha`/`runner_mode`/`totals`/`breakdown_by_mode`{4 modes}/`metrics`{4 ragas null}/`entries`. `test_baseline_schema.py` (6 tests) valide la conformité. Note minor : `_note` field non-standard, harmless. |
+| HIGH-2 merge-base | RÉSOLU | `baseline_skip.py:49-71` utilise `git merge-base origin/main HEAD` ; workflow `fetch-depth: 0` ; test `test_should_not_skip_gate_b_multicommit_attack` (test_baseline_skip.py:91-99) confirme : `extra_module.py` + `baseline.json` dans full diff → `should_skip=False`. Fallback `HEAD^` (line 62) acceptable pour repo local sans `origin/main`. |
+| HIGH-3 keyword_overlap | **NON RÉSOLU (gaming v2)** | Voir Finding pass2 #1 ci-dessous. |
+| HIGH-4 redaction wiring | RÉSOLU partiellement | `_redact_raw` wired dans `write_run` (line 117) ; dead funcs `_redact_string`/`_redact_entry` + `if False else` supprimées ; `_extra_headers` retiré de `clients.py`. **MAIS** test property 100 runs (`test_secrets_redaction_property_100_runs`) ne fait pas fuiter — il instancie une `RunFile` sans secret dans aucun champ, donc `_redact_raw` n'a rien à remplacer et le test passe trivialement (false-confidence). Voir Finding pass2 #2. |
+| MED-5 byte-identical | RÉSOLU | `test_offline_double_run_byte_identical` invoque le runner deux fois via subprocess, retire `started_at`/`finished_at`/`git_sha`/`request_id`, hash SHA-256 → assert égal. `sort_keys=True` ajouté dans `write_run` ligne 116. Champs ignorés exhaustifs (vérifié : pas d'autre uuid/timestamp non-déterministe dans le run dict). |
+| MED-6 error-rate auto-create | RÉSOLU | `_handle_auto_create_baseline` (ragas_runner.py:265-270) check `error_rate > ERROR_RATE_THRESHOLD` AVANT `write_run`. |
+| LOC `main()` ≤ 40 | RÉSOLU | `main()` lignes 336-385 = 50 lignes brut, ~37 statements. Plus de `noqa: PLR0915`. Décomposé en `_run_all_entries`, `_resolve_ragas_metrics`, `_handle_auto_create_baseline`, `_emit_summary_and_exit`. |
+| LOW except Exception | RÉSOLU | `_get_git_sha` et `_check_workers_reachable` capturent désormais `(subprocess.CalledProcessError, FileNotFoundError, OSError)` et `(httpx.HTTPError, OSError)` respectivement. |
+
+### Findings pass 2
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `.github/workflows/eval.yml:75-92` + `eval/seed_test_corpus.py:96-98` | **HIGH** | CI workflow non fonctionnel — Gate B inopérante | Trois bugs combinés rendent l'eval offline CI inexécutable : (1) **Schéma DB absent** : workflow crée l'extension `vector` mais **n'applique aucune migration** (`migrations/0002_schema.sql` non lancé) → `INSERT INTO documents` du seed lèvera `relation "documents" does not exist`. ci.yml fait pareil mais schemathesis n'utilise que `/healthz`, donc passe. (2) **`DATABASE_URL` non set au seed step** (line 80-81) → seed_test_corpus.py:96-98 imprime "DATABASE_URL not set — skipping seed" et exit 0 silencieux. Aucun seed effectif. (3) **`LLM_API_KEY` non set au step `start workers`** (line 83-92) → `LlmClient.from_env()` lifespan (workers/main.py:64) lève `LlmConfigError("LLM_API_KEY missing or empty")` → uvicorn crash → `/healthz` jamais up → runner exit code 3 (`workers unreachable`) → CI rouge **non par régression eval mais par bug workflow**. Net : la gate B offline ne s'exécute jamais en CI. | (1) Ajouter step `psql ... -f migrations/0002_schema.sql` avant le seed (et `0001_*.sql` aussi). (2) Exporter `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/archiviste` (sync URL pour psycopg2) au step seed. (3) Exporter `LLM_PROVIDER=mistral` + `LLM_MODEL=mistral-small-latest` + `LLM_API_KEY=ci-placeholder` au step start workers (idem ci.yml:142-145). (4) Valider en local : `act -j offline` ou test e2e workflow manuel avant merge. |
+| `eval/ragas_runner.py:108-112,167-172` + `eval/seed_test_corpus.py:32-36` | **HIGH** | Tautologie HIGH-3 déplacée mais persistante | Le fix HIGH-3 change `compute_keyword_overlap(answer, keywords)` en `compute_keyword_overlap(chunk_corpus, keywords)` (ragas_runner.py:168-169). Mais `seed_test_corpus.py:33` injecte précisément `chunk_text = " ".join(keywords)` dans la DB pour chaque `expected_context`. Donc en CI offline : chunks retrieved = chunks dont `text == " ".join(expected_answer_keywords)` → `compute_keyword_overlap` retourne True systématiquement par construction du seed. **Le métrique a juste été déplacé du tautological self-match (answer→keywords) au seed-circular self-match (seed-injected chunk text→keywords).** Le `keyword_overlap_rate` mesure : "le seed a-t-il bien inséré les keywords dans les chunks ET ces chunks ont-ils été retrieved", PAS la qualité du retrieval réel d'un corpus production. De plus, l'embedding seed (`ZERO_EMBEDDING` = 1024 zéros) rend toutes les distances cosinus égales (NaN ou 0) → ordre top-k arbitraire (probable tie-break par `c.id ASC`), pas un signal sémantique. Gate B offline (AC-11 phrase 2 (b)) reste sans valeur informationnelle. | Option A (recommandée) : renommer le métrique `seed_alignment_rate` et **expliciter en spec/README** qu'il est un property check de tuyauterie (`seed→retrieve→runner`), pas une métrique de qualité ; documenter que la vraie gate qualité offline est `context_recall_structural`. Option B : faire diverger le chunk text du seed et des keywords (ex : `chunk_text = entry["question"] + " " + entry["id"]` au lieu de `" ".join(keywords)`) pour que `keyword_overlap_rate` mesure réellement "la question récupère les chunks qui contiennent les keywords" — mais alors le rate sera 0 stable (encore inutile sauf à enrichir le seed avec du vrai contenu). Option C : ouvrir un ticket aval EVAL-002 "real corpus seed for CI" et documenter dans `docs/blockers.md` que la gate B offline est aujourd'hui une *fumée*. |
+| `eval/tests/test_runner_cli.py:136-188` | **MED** | Test property AC-16 false-confidence | `test_secrets_redaction_property_100_runs` construit 100 `RunFile` à la main sans jamais injecter le sentinel `test-llm-token-xyz9999-prop` dans aucun champ de la `RunFile` (id/question/answer/citations sont tous des constantes safe `"answer {i}"`, etc). Le test asserte que le sentinel n'apparaît pas dans `run.json` — c'est vrai par construction du test, indépendamment de `_redact_raw`. Si on commentait `raw = _redact_raw(raw, secrets)` (ligne 117 de run_writer.py), le test continuerait à passer. Le property test ne couvre donc PAS la redaction effective. Test `test_secrets_not_leaked_in_run_file` (line 104-133) souffre du même biais : `httpserver` répond `{"chunks": [{"source_path": "intro_p01", "text": "some text"}]}`, aucun secret n'y apparaît. | Injecter le sentinel dans un champ réellement sérialisé : (a) ajouter `entry.answer = f"answer with {sentinel_llm_token} embedded"` avant `write_run` ; (b) asserter que `run.json` contient `[REDACTED]` (positive assertion) ET que le sentinel n'apparaît plus. Ou (c) mocker `httpserver` pour retourner un `chunks[0].text` contenant le sentinel, et asserter redaction post-write. Sans cela, AC-16 n'est pas testé. |
+
+### Verdict argumenté
+
+**REQUEST_CHANGES** : 2 HIGH bloquants subsistent (CI workflow inopérant + tautologie HIGH-3 déplacée), 1 MED (test redaction false-confidence). Les fixes HIGH-1, HIGH-2, MED-5, MED-6 sont **réels** (vérifiés en code + tests pass) ; HIGH-4 a un fix code correct mais une couverture test faible ; HIGH-3 a un fix code cosmétique. Le bug workflow CI est NOUVEAU (introduit par be85637 quand `seed_test_corpus.py` est passé de stub no-op à insert psycopg2 réel — mais sans wirer les pré-requis schema + env vars). C'est un cas typique d'introduction de fonctionnalité sans test end-to-end du chemin happy-path en CI.
+
+### Recommandations cleanup pass 2
+
+1. **Fix HIGH pass2 #1** : appliquer migrations + exporter `DATABASE_URL` au seed + exporter `LLM_PROVIDER`/`LLM_API_KEY=ci-placeholder` aux workers. Tester via `gh workflow run` sur une PR de cleanup.
+2. **Fix HIGH pass2 #2** : renommer `keyword_overlap_rate` offline ou diverger seed des keywords + ouvrir ticket EVAL-002 pour seed réaliste.
+3. **Fix MED pass2 #3** : injecter sentinel dans `entry.answer` du test property et asserter `[REDACTED]` en sortie.
+
+Une fois ces 3 points adressés, verdict basculera vers APPROVE.

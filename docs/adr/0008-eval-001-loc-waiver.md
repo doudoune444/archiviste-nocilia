@@ -11,18 +11,27 @@ and generated files). Beyond → split ticket.` Cette règle vise à garder les 
 review-friendly et à éviter les méga-changements feature-creep.
 
 EVAL-001 (runner Ragas golden_qa + gates A/B + workflow CI) atteint :
-- **989 LOC Python production** (vs budget 300, dépassement 3.3x), répartis
-  sur 8 modules orthogonaux :
+- **989 LOC Python production** à la livraison initiale (c589087), puis **1190 LOC post-review-fixes**
+  (review HIGH-1..HIGH-4, MED-5 adressés), répartis sur 9 modules :
   - `eval/loader.py` (77) — schéma Pydantic + parser JSONL
   - `eval/stub_llm.py` (29) — règle déterministe AC-4
   - `eval/metrics.py` (122) — keyword_overlap_rate, context_recall_structural, Ragas wrapper
   - `eval/gates.py` (131) — Gate A (live) + Gate B (live/offline, déterministe)
-  - `eval/clients.py` (131) — clients httpx `/v1/retrieve` + `/v1/generate`
-  - `eval/run_writer.py` (131) — schéma run + redaction secrets AC-16
-  - `eval/baseline_skip.py` (56) — détection `chore(eval): bump baseline` AC-17
-  - `eval/ragas_runner.py` (+312 net) — orchestration CLI, 4 exit codes, logs structurés
-- +555 LOC tests (37 cas, AC-1..AC-17), 166 LOC workflow YAML, 64 LOC README,
-  62 LOC pyproject, 8 LOC fixture CI sanitisée.
+  - `eval/clients.py` (129) — clients httpx `/v1/retrieve` + `/v1/generate` (dead `_extra_headers` supprimé)
+  - `eval/run_writer.py` (119) — schéma run + redaction secrets AC-16 (dead code supprimé, redaction câblée)
+  - `eval/baseline_skip.py` (84) — détection merge-base AC-17 (anti multi-commit attack)
+  - `eval/ragas_runner.py` (389) — orchestration CLI, 4 exit codes, logs structurés (main() décomposé ≤40L)
+  - `eval/seed_test_corpus.py` (110) — seed DB CI (psycopg2, contextes alignés ci_smoke_qa.jsonl)
+- +669 LOC tests (46 cas, AC-1..AC-17 + baseline schema + byte-identical + property-100-runs),
+  168 LOC workflow YAML, 64 LOC README, 63 LOC pyproject, 8 LOC fixture CI sanitisée.
+
+**Post-review note**: le reviewer a demandé un trim de 50-80 LOC (dead code + main() ≤40L).
+Le dead code a été supprimé (`_redact_string`/`_redact_entry` morts → `_redact_raw` câblé,
+`_extra_headers` supprimé, `if False else` retiré, `except Exception` pinné).
+`main()` décomposé en `_run_all_entries`, `_resolve_ragas_metrics`, `_handle_auto_create_baseline`,
+`_emit_summary_and_exit` — chaque fonction ≤40 lignes.
+`seed_test_corpus.py` implémenté réellement (+110 LOC) — la réduction du trim a été compensée
+par la correction du stub HIGH-3.
 
 Le plan `specs/plans/EVAL-001.md` hypothèse 1 avait anticipé l'overrun et
 documenté un split fallback `EVAL-001a` / `EVAL-001b` (offline-only / live-only).

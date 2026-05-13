@@ -2,6 +2,19 @@
 
 ## Verdict
 
+APPROVE
+
+Verdict final pass 3 (commit `2f6a70a`). 2 passes REQUEST_CHANGES précédentes
+(commits `c589087`, `ae8e98d`) résolues par 7 fix commits. Tests 55/55 verts,
+ruff + mypy strict clean, LOC prod 1158 (ADR-0008 waiver). 3 réserves LOW
+non-bloquantes documentées (cf section "Re-review pass 3").
+
+Historique passes ci-dessous (pass 1 + pass 2 + pass 3).
+
+---
+
+## Verdict (pass 1, initial)
+
 REQUEST_CHANGES
 
 Lint + tests local : ruff green, mypy --strict green, pytest 37/37 green (eval suite).

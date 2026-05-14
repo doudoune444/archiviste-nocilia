@@ -1,0 +1,8 @@
+{"id": "ci_canon_01", "mode": "canon", "question": "What is the Archiviste de Nocilia?", "expected_contexts": ["intro_p01", "intro_p02"], "expected_answer_keywords": ["archiviste", "nocilia"], "difficulty": "easy"}
+{"id": "ci_canon_02", "mode": "canon", "question": "Describe the Scriptorium of Nocilia.", "expected_contexts": ["meta_p01", "meta_p02"], "expected_answer_keywords": ["scriptorium", "lore"], "difficulty": "medium"}
+{"id": "ci_canon_03", "mode": "canon", "question": "What are the main factions in Nocilia?", "expected_contexts": ["lore_p01"], "expected_answer_keywords": ["faction", "nocilia"], "difficulty": "medium"}
+{"id": "ci_off_topic_01", "mode": "off_topic", "question": "What is the capital of France?", "expected_contexts": [], "expected_answer_keywords": ["paris"], "difficulty": "easy"}
+{"id": "ci_off_topic_02", "mode": "off_topic", "question": "Who wrote Hamlet?", "expected_contexts": [], "expected_answer_keywords": ["shakespeare"], "difficulty": "easy"}
+{"id": "ci_lore_gap_01", "mode": "lore_gap", "question": "Who was the founder of the Lost Archive?", "expected_contexts": ["gap_p01"], "expected_answer_keywords": [], "difficulty": "hard"}
+{"id": "ci_lore_gap_02", "mode": "lore_gap", "question": "What happened before the Great Silence?", "expected_contexts": [], "expected_answer_keywords": [], "difficulty": "hard"}
+{"id": "ci_mystery_01", "mode": "mystery", "question": "What lies beyond the Veil of Nocilia?", "expected_contexts": ["mystery_p01"], "expected_answer_keywords": [], "difficulty": "hard"}

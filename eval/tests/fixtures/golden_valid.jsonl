@@ -1,0 +1,4 @@
+{"id": "q001", "mode": "canon", "question": "What is the Archiviste?", "expected_contexts": ["intro_p01", "intro_p02"], "expected_answer_keywords": ["archiviste", "nocilia"]}
+{"id": "q002", "mode": "off_topic", "question": "What is the weather?", "expected_contexts": [], "expected_answer_keywords": ["unknown"]}
+{"id": "q003", "mode": "lore_gap", "question": "Who founded Nocilia?", "expected_contexts": ["meta_p01"], "expected_answer_keywords": ["founder"]}
+{"id": "q004", "mode": "mystery", "question": "What lies beyond the veil?", "expected_contexts": ["mystery_p01"], "expected_answer_keywords": ["unknown", "veil"]}

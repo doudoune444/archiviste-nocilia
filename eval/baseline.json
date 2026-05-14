@@ -1,7 +1,39 @@
 {
-  "faithfulness": 0.0,
-  "answer_relevancy": 0.0,
-  "context_precision": 0.0,
-  "context_recall": 0.0,
-  "_note": "Initialised at zero. First real eval run becomes the actual baseline (humain commits new values explicitly)."
+  "mode": "offline",
+  "started_at": "2026-05-13T00:00:00+00:00",
+  "finished_at": "2026-05-13T00:00:00+00:00",
+  "git_sha": "initial",
+  "runner_mode": "offline",
+  "totals": {
+    "entries": 0,
+    "ok": 0,
+    "errors": 0
+  },
+  "breakdown_by_mode": {
+    "canon": {
+      "entries": 0,
+      "keyword_overlap_rate": 0.0,
+      "context_recall_structural": 0.0
+    },
+    "off_topic": {
+      "entries": 0,
+      "keyword_overlap_rate": null
+    },
+    "lore_gap": {
+      "entries": 0,
+      "keyword_overlap_rate": null
+    },
+    "mystery": {
+      "entries": 0,
+      "keyword_overlap_rate": null
+    }
+  },
+  "metrics": {
+    "faithfulness": null,
+    "answer_relevancy": null,
+    "context_precision": null,
+    "context_recall": null
+  },
+  "entries": [],
+  "_note": "Bootstrap baseline (all-zeros). First real eval run committed by human becomes the actual baseline (chore(eval): bump baseline)."
 }

@@ -91,3 +91,9 @@ logs/
 
 # Google Drive sync runtime state — .json is versioned in git (ING-013 AC-5)
 scripts/.gdrive_state.json.bak
+
+# Corpus
+/lore/*
+
+# Golden Q/A set — contient des spoilers narratifs (repo public à venir)
+specs/golden_qa.jsonl

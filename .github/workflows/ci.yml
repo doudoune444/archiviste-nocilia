@@ -129,6 +129,14 @@ jobs:
           psql -h localhost -U postgres -d archiviste \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
+      - name: restore HF Hub cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-hub-${{ hashFiles('workers/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-hf-hub-
+
       - name: start workers
         working-directory: workers
         env:
@@ -147,14 +155,14 @@ jobs:
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
             > /tmp/uvicorn.log 2>&1 &
           echo $! > /tmp/uvicorn.pid
-          for i in {1..60}; do
+          for i in $(seq 1 300); do
             if curl -sf http://localhost:8000/healthz; then
               echo "workers up after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "workers failed to bind :8000 within 60s"
+          echo "workers did not become healthy within 300 s"
           echo "--- uvicorn log ---"
           cat /tmp/uvicorn.log || true
           echo "--- process status ---"

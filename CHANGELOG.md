@@ -7,6 +7,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- chore(ci): INFRA-001 align /healthz wait to 300 s + cache HF Hub (cold-cache fix) — `ci.yml` job `contract` now restores/saves `~/.cache/huggingface/hub` via `actions/cache@v4` (key `${{ runner.os }}-hf-hub-${{ hashFiles('workers/uv.lock') }}`); healthcheck wait loop extended to 300 iterations (warm-cache ≤ 60 s, cold-cache ≤ 300 s; 300 s chosen as ~×2 safety margin over empirical cold boot < 150 s for ~2 GiB BAAI/bge-m3 download + model load). `docker-compose.yml` service `workers` gains `start_period: 90s` so local warm-cache boots never transiently hit `unhealthy`. `eval.yml` deferred to EVAL-001 (PR #39 already rewrites it with the same pattern).
+
 - fix(gdrive_export): render gdocs from Docs API tree instead of Drive markdown export — handles positionedObjects + bypasses Drive 10 MiB export cap (ING-014 follow-up)
 
 ### Added

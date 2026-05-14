@@ -42,6 +42,14 @@ jobs:
       - name: seed minimal corpus
         run: uv run python eval/seed_test_corpus.py
 
+      - name: restore HF Hub cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-hub-${{ hashFiles('workers/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-hf-hub-
+
       - name: start workers
         working-directory: workers
         env:
@@ -49,11 +57,22 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 &
-          for _ in {1..30}; do
-            curl -sf http://localhost:8000/healthz && break
+          uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/uvicorn.log 2>&1 &
+          echo $! > /tmp/uvicorn.pid
+          for i in $(seq 1 300); do
+            if curl -sf http://localhost:8000/healthz; then
+              echo "workers up after ${i}s"
+              exit 0
+            fi
             sleep 1
           done
+          echo "workers did not become healthy within 300 s"
+          echo "--- uvicorn log ---"
+          cat /tmp/uvicorn.log || true
+          echo "--- process status ---"
+          ps -p "$(cat /tmp/uvicorn.pid)" || echo "uvicorn process exited"
+          exit 1
 
       - name: run ragas
         env:

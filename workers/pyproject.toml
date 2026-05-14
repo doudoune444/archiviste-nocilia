@@ -45,6 +45,7 @@ dev = [
     "schemathesis>=3.39",
     "ragas>=0.2",
     "datasets>=3.2",
+    "pytest-httpserver>=1.1",
     "pip-audit>=2.7",
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",

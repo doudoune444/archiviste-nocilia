@@ -1,0 +1,38 @@
+{
+  "mode": "offline",
+  "started_at": "2026-05-13T10:00:00Z",
+  "finished_at": "2026-05-13T10:01:00Z",
+  "git_sha": "abc123",
+  "runner_mode": "offline",
+  "totals": {"entries": 2, "ok": 2, "errors": 0},
+  "breakdown_by_mode": {
+    "canon": {
+      "entries": 2,
+      "keyword_overlap_rate": 1.0,
+      "context_recall_structural": 0.8
+    },
+    "off_topic": {"entries": 0, "keyword_overlap_rate": null},
+    "lore_gap": {"entries": 0, "keyword_overlap_rate": null},
+    "mystery": {"entries": 0, "keyword_overlap_rate": null}
+  },
+  "metrics": {
+    "faithfulness": null,
+    "answer_relevancy": null,
+    "context_precision": null,
+    "context_recall": null
+  },
+  "entries": [
+    {
+      "id": "q001", "mode": "canon", "status": "ok",
+      "metrics": {"keyword_overlap_rate": 1.0, "context_recall_structural": 0.8},
+      "retrieved_contexts": ["intro_p01"],
+      "answer": "archiviste nocilia intro text"
+    },
+    {
+      "id": "q002", "mode": "canon", "status": "ok",
+      "metrics": {"keyword_overlap_rate": 1.0, "context_recall_structural": 0.8},
+      "retrieved_contexts": ["intro_p02"],
+      "answer": "archiviste more text"
+    }
+  ]
+}

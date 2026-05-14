@@ -87,6 +87,14 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/archiviste
         run: uv --project eval run python -m eval.seed_test_corpus
 
+      - name: restore HF Hub cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-hub-${{ hashFiles('workers/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-hf-hub-
+
       - name: start workers
         working-directory: workers
         env:
@@ -185,6 +193,14 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/archiviste
         run: uv --project eval run python -m eval.seed_test_corpus
+
+      - name: restore HF Hub cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-hub-${{ hashFiles('workers/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-hf-hub-
 
       - name: start workers
         working-directory: workers

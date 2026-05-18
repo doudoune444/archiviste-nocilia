@@ -1,6 +1,52 @@
 # Review — INFRA-002c
 
-## Verdict
+## Round 2 (fix commit `936c4f4`)
+
+### Verdict R2
+APPROVE
+
+### Round 1 findings resolution
+
+| R1 finding | Severity | Status R2 | Evidence in fix |
+|---|---|---|---|
+| `deploy.yml:122` static `PREVIOUS=100` gateway | HIGH | RESOLVED | Lines 119-133 : `gcloud run revisions list --service=$GATEWAY_SERVICE --region=$REGION --sort-by=~metadata.creationTimestamp --limit=2 --format='value(metadata.name)' \| tail -1` puis `update-traffic --to-revisions="${PREVIOUS}=100"`. Résolution dynamique correcte (cf vérification ci-dessous). |
+| `deploy.yml:130` static `PREVIOUS=100` workers | HIGH | RESOLVED | Lines 135-149 : même pattern dynamique appliqué au service workers. |
+| `deploy.yml:90-92` smoke sans parsing JSON `.status` | HIGH | RESOLVED | Line 97 : `curl -sf --max-time 30 "${CANARY_URL}/healthz" \| jq -e '.status == "ok"'`. Le pipeline échoue si curl renvoie non-2xx (stdout vide → `jq -e` exit ≠ 0) OU si `.status != "ok"`. |
+| `rollback.md:12` propagation du myth `PREVIOUS=100` | HIGH | RESOLVED | rollback.md lines 7-23 : nouvelle section « Workflow auto-rollback » documente la résolution dynamique exacte (commande copiée verbatim de la spec AC-12 step 6). Note explicite « il n'existe pas de sentinel `PREVIOUS` côté gcloud ». |
+| `deploy.yml:75-78, 88-91` lookup révision via `--filter='metadata.name~canary'` | MED | RESOLVED | Lines 67-69 et 81-83 : remplacé par `gcloud run services describe <svc> --format='value(status.latestCreatedRevisionName)'`. Commentaire AC-12 step 3 explique pourquoi. |
+| `deploy.yml:124-131` `exit 1` explicite manquant | MED | RESOLVED | Lines 133 et 149 : `exit 1` ajouté en fin de chaque step rollback. Aligné avec spec AC-12 step 6 + failure-mode line 71. |
+| `deploy.yml` smoke workers absent — justification manquante | MED | RESOLVED | Lines 85-89 : commentaire documente `Workers ingress=internal: not directly curl-able from GHA runner — gateway /healthz exercises workers reachability via internal service call`. |
+| `deploy.yml` 3 secrets GHA non documentés | MED | RESOLVED | rollback.md lines 73-86 : table `GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`, `GCP_PROJECT_ID` avec source `terraform output` documentée. |
+| actionlint non vérifié localement | LOW | DEFERRED | Toujours non lancé localement (binaire indisponible sur Windows worktree). Couverture CI via `ci.yml` actionlint step (plan line 77) — vérification post-PR. |
+| `timeout-minutes` absent sur les steps `gcloud run deploy` | LOW | NOT ADDRESSED | Non corrigé. Non-bloquant (job-level fallback GHA = 360 min). Acceptable V1. |
+
+### Round 2 gaming / correctness checks
+
+| Check | Status | Evidence |
+|---|---|---|
+| Résolution N-1 réelle (pas `--limit=1`) | PASS | `--sort-by=~metadata.creationTimestamp --limit=2 \| tail -1` retourne bien N-1. `~` = tri descendant, top = canary fraîchement déployée (la plus récente), `tail -1` du résultat à 2 lignes = avant-dernière = révision promue précédente. Correct. |
+| `jq -e '.status == "ok"'` exit code propagé | PASS | Dernière commande du pipeline = jq, son exit code remonte au step. `set -e` (default GHA `bash -e`) abandonne sur exit ≠ 0. Pas besoin de `pipefail` explicite ici. |
+| `latestCreatedRevisionName` est la canary | PASS | `gcloud run deploy --no-traffic --tag canary` crée une nouvelle révision → devient `status.latestCreatedRevisionName` immédiatement. Pas de race sur push-to-main monothread. |
+| Rollback target ≠ canary fautive | PASS | À l'instant T du rollback, la canary EST la révision la plus récente (smoke échoue après deploy mais avant promote). `tail -1` de la liste à 2 lignes pointe donc bien sur l'avant-dernière = révision actuellement à 100 %. Correct. |
+| Hardcoded test values / sentinels | PASS | Aucun. `PREVIOUS` est une variable shell capturée dynamiquement, pas un sentinel statique. |
+| Out-of-scope changes | PASS | Diff R2 ne touche que `.github/workflows/deploy.yml`, `docs/runbook/rollback.md`, `CHANGELOG.md` — listés dans plan PR c. |
+| Diff total ≤ 300 LOC | PASS | 186 LOC additions (149 deploy.yml + 34 rollback.md + 3 CHANGELOG). |
+| Security R1 acquis | PASS | Aucune régression — toujours zéro `credentials_json`, zéro `GCP_SA_KEY`, WIF only, `--max-time 30`, tags immutables `${{ github.sha }}`. |
+
+### Spec coverage R2
+
+- AC-12 step 4 (smoke `curl -sf <canary-url>/healthz \| jq -e '.status == "ok"'`) : **PASS** — pipeline JSON exact comme spec line 36.
+- AC-12 step 6 (résolution dynamique + `exit 1`) : **PASS** — commande exacte spec line 38, plus `exit 1` final.
+- AC-13 (runbook 3 cmds + PITR + workflow auto-rollback documenté) : **PASS** — section ajoutée cohérente avec workflow.
+
+### Verdict final
+APPROVE — toutes les findings R1 HIGH+MED résolues, aucune nouvelle régression, deux LOW restantes acceptables (actionlint CI-side, timeout-minutes non-bloquant V1).
+
+---
+
+## Round 1
+
+### Verdict
 BLOCK
 
 ## Findings

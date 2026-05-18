@@ -13,6 +13,12 @@ set -euo pipefail
 CANONICAL_PORTS=(8080 8000 5432)
 CANONICAL_REGEX="^($(IFS='|'; echo "${CANONICAL_PORTS[*]}"))$"
 
+# Test sentinel ports — refused-by-default, used in gateway/tests/* to assert
+# unreachable-workers behaviour (cf. healthz_test.rs, chat_test.rs, static_test.rs).
+# Allowed in docs/specs/plans that mirror these test fixtures.
+TEST_SENTINEL_PORTS=(1)
+TEST_SENTINEL_REGEX="^($(IFS='|'; echo "${TEST_SENTINEL_PORTS[*]}"))$"
+
 # Files to scan: docs, specs, top-level markdown, .claude rules/agents/commands, CI workflows.
 # Excluded by design:
 #   - docker-compose.yml (the source)
@@ -61,7 +67,7 @@ for f in "${FILES[@]}"; do
     # Extract every port-like number in the matched line, but only from the matching contexts above
     while read -r port; do
       [[ -z "$port" ]] && continue
-      if ! [[ "$port" =~ $CANONICAL_REGEX ]]; then
+      if ! [[ "$port" =~ $CANONICAL_REGEX ]] && ! [[ "$port" =~ $TEST_SENTINEL_REGEX ]]; then
         echo "DRIFT  $f:$line_no  port=$port  (canonical: ${CANONICAL_PORTS[*]})"
         echo "       > $(echo "$content" | sed 's/^[[:space:]]*//')"
         FAIL=1

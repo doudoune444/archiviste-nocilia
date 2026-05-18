@@ -48,16 +48,19 @@ resource "google_cloud_run_domain_mapping" "archiviste_fr" {
   }
 }
 
-# TLS Full Strict + Bot Fight Mode + Security Level + Challenge TTL.
+# AC-8: TLS Full Strict + Bot Fight Mode ON + Security Level medium + Challenge TTL.
+# ssl = "strict" is the provider v4 value for Cloudflare "Full (strict)" mode.
+# bot_fight_mode = "on" requires Zone:Bot Management scope on the API token.
 resource "cloudflare_zone_settings_override" "nocilia_fr" {
   zone_id = data.cloudflare_zone.nocilia_fr.id
 
   settings {
-    ssl            = "full_strict"
-    security_level = "medium"
-    challenge_ttl  = 1800
-    brotli         = "on"
+    ssl              = "strict"
+    security_level   = "medium"
+    challenge_ttl    = 1800
+    brotli           = "on"
     always_use_https = "on"
+    bot_fight_mode   = "on"
   }
 }
 
@@ -81,7 +84,10 @@ resource "cloudflare_rate_limit" "archiviste_fr" {
   }
 }
 
-# 301 redirects: .com / .org / .eu / .net → https://archiviste.nocilia.fr/$1
+# AC-8: 4 × 301 redirects archiviste.nocilia.{com,org,eu,net} → https://archiviste.nocilia.fr/$1.
+# Cloudflare free plan quota = 3 Page Rules per zone.
+# .com / .org / .eu use cloudflare_page_rule (1 rule each, within quota).
+# .net uses cloudflare_ruleset http_request_dynamic_redirect (modern replacement, no Page Rule quota).
 resource "cloudflare_page_rule" "redirect_com" {
   zone_id  = data.cloudflare_zone.nocilia_com.id
   target   = "archiviste.nocilia.com/*"
@@ -121,15 +127,27 @@ resource "cloudflare_page_rule" "redirect_eu" {
   }
 }
 
-resource "cloudflare_page_rule" "redirect_net" {
-  zone_id  = data.cloudflare_zone.nocilia_net.id
-  target   = "archiviste.nocilia.net/*"
-  priority = 1
+# R2 mitigation: .net redirect via cloudflare_ruleset to avoid exceeding free-plan Page Rules quota (max 3).
+resource "cloudflare_ruleset" "redirect_net" {
+  zone_id     = data.cloudflare_zone.nocilia_net.id
+  name        = "Redirect archiviste.nocilia.net to .fr"
+  description = "301 archiviste.nocilia.net/* → https://archiviste.nocilia.fr/$1"
+  kind        = "zone"
+  phase       = "http_request_dynamic_redirect"
 
-  actions {
-    forwarding_url {
-      url         = "https://archiviste.nocilia.fr/$1"
-      status_code = 301
+  rules {
+    action = "redirect"
+    action_parameters {
+      from_value {
+        status_code = 301
+        target_url {
+          expression = "concat(\"https://archiviste.nocilia.fr\", http.request.uri.path)"
+        }
+        preserve_query_string = true
+      }
     }
+    expression  = "(http.host eq \"archiviste.nocilia.net\")"
+    description = "301 archiviste.nocilia.net → archiviste.nocilia.fr"
+    enabled     = true
   }
 }

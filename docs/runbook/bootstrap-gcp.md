@@ -1,5 +1,10 @@
 # Bootstrap GCP — INFRA-002 one-shot pre-conditions
 
+> **PR merge order (plan D-1): PR-a must be merged before PR-b.**
+> `cloudflare.tf` references `google_cloud_run_v2_service.gateway` (defined in PR-a `cloud_run.tf`).
+> `terraform validate` on PR-b standalone against `origin/main` will fail until PR-a is merged.
+> Merge sequence: **PR-a (Terraform core GCP) → PR-b (Cloudflare) → PR-c (GHA deploy) → PR-d (embedder)**.
+
 One-shot operator procedure. Run once before the first `terraform apply`. Never re-run unless
 rebuilding from scratch. All commands assume `gcloud` authenticated with Owner on the project.
 

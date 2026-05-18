@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     default_chat_model: str = "claude-3-5-sonnet-20241022"
 
     # GEN-001: LLM wrapper config-driven (AC-8/10).
+    # AC-10 INFRA-002: llm_api_key doubles as Mistral embed key (shared key, cf vision.md Q7).
+    # In prod the env var LLM_API_KEY is injected from Secret Manager MISTRAL_API_KEY.
     llm_provider: LlmProvider | None = None
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None

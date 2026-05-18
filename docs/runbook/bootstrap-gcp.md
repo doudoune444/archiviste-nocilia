@@ -40,11 +40,17 @@ gsutil versioning set on gs://archiviste-tf-state
 
 ## 4. Initialise and apply Terraform
 
+Cloud Run fails on first `terraform apply` if images do not exist in Artifact Registry yet
+(chicken-and-egg: Terraform creates the AR repo, GHA pushes real images, but GHA needs WIF
+from Terraform). Follow this three-step sequence to break the cycle:
+
+### 4a. Create the Artifact Registry repo only
+
 ```bash
 cd infra/terraform
 terraform init
-terraform plan -var-file=terraform.tfvars   # review before apply
-terraform apply -var-file=terraform.tfvars
+terraform apply -target=google_artifact_registry_repository.archiviste \
+  -var-file=terraform.tfvars
 ```
 
 `terraform.tfvars` is gitignored. Minimal example (never commit):
@@ -55,17 +61,12 @@ billing_account = "<BILLING_ACCOUNT_ID>"
 budget_email    = "owner@example.com"
 ```
 
-## 5. Push a placeholder image before first `terraform apply`
-
-Cloud Run fails on first `terraform apply` if the image `:<tag>` does not exist in Artifact
-Registry yet (chicken-and-egg: Terraform creates AR repo, GHA pushes real images, but GHA needs
-WIF from Terraform). Break the cycle by pushing a harmless placeholder image:
+### 4b. Push placeholder images
 
 ```bash
 # Target: europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/{gateway,workers}:latest
 gcloud auth configure-docker europe-west9-docker.pkg.dev
 
-# Push pause image as dummy gateway and workers
 docker pull gcr.io/google-containers/pause:3.9
 docker tag gcr.io/google-containers/pause:3.9 \
   europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/gateway:latest
@@ -76,10 +77,14 @@ docker tag gcr.io/google-containers/pause:3.9 \
 docker push europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/workers:latest
 ```
 
-Run `terraform apply -target=google_artifact_registry_repository.archiviste` first to create
-the AR repo, then push the placeholder, then run `terraform apply` (full).
+### 4c. Full apply
 
-## 6. Bootstrap MISTRAL_API_KEY secret version
+```bash
+terraform plan -var-file=terraform.tfvars   # review before apply
+terraform apply -var-file=terraform.tfvars
+```
+
+## 5. Bootstrap MISTRAL_API_KEY secret version
 
 Terraform creates the secret resource but NOT the version (version = operator secret, never
 in code or state). After `terraform apply`:
@@ -91,19 +96,45 @@ echo -n "<YOUR_MISTRAL_API_KEY>" | \
 
 This must happen BEFORE the first `deploy.yml` GHA run — workers boot fails without it.
 
-## 7. Bootstrap pgvector extension
+## 6. Bootstrap pgvector extension
 
-Cloud SQL `db-f1-micro` Postgres 16. After `terraform apply`:
+Cloud SQL `db-f1-micro` Postgres 16. First set the `postgres` superuser password (Cloud SQL
+auto-generates one; retrieve it from the GCP Console or set it explicitly):
+
+```bash
+gcloud sql users set-password postgres \
+  --instance=archiviste-db \
+  --password=<POSTGRES_SUPERUSER_PASSWORD>
+```
+
+Then connect and activate the extension:
 
 ```bash
 gcloud sql connect archiviste-db --user=postgres --database=archiviste
 ```
 
-Then inside psql:
+Inside psql:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
+
+## 7. Verify IAM database authentication
+
+Cloud Run v2 uses the integrated Cloud SQL Auth Proxy (declared via `volumes.cloud_sql_instance`
++ annotation `run.googleapis.com/cloudsql-instances`). Verify that the proxy supports IAM
+authentication for the runtime SA before the first `deploy.yml` run:
+
+```bash
+# Connect as the IAM SA user (requires roles/cloudsql.instanceUser granted by Terraform)
+gcloud sql connect archiviste-db \
+  --user=archiviste-runtime@<PROJECT_ID>.iam \
+  --database=archiviste
+```
+
+If this fails with `pg_authentication_failed`, the integrated proxy may not support
+`--auto-iam-authn` for this Cloud Run v2 configuration. In that case, raise a blocker — see
+`docs/blockers.md`. Do NOT proceed with `deploy.yml` until the connection succeeds.
 
 ## 8. Verify apply
 

@@ -32,9 +32,14 @@ resource "google_project_iam_member" "gha_deploy" {
 }
 
 # --- archiviste-runtime roles (project-wide, excluding storage) ---
+# roles/cloudsql.instanceUser is required for IAM DB authentication (CLOUD_IAM_SERVICE_ACCOUNT
+# user type). Without it, the Cloud SQL Auth Proxy rejects the token exchange even when
+# roles/cloudsql.client (network access) is present.
+# Ref: https://cloud.google.com/sql/docs/postgres/add-manage-iam-users#grant-db-instance-user
 locals {
   runtime_project_roles = [
     "roles/cloudsql.client",
+    "roles/cloudsql.instanceUser",
     "roles/secretmanager.secretAccessor",
   ]
 }

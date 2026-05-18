@@ -125,7 +125,7 @@ components:
 
     RetrievedChunk:
       type: object
-      required: [chunk_id, document_id, source_path, ord, text, score]
+      required: [chunk_id, document_id, source_path, ord, text, score, access_tier]
       properties:
         chunk_id:
           type: string
@@ -144,6 +144,13 @@ components:
           type: number
           minimum: 0
           maximum: 1
+        access_tier:
+          type: string
+          enum: [public, members, author_only]
+          description: |
+            ACL tier of the source document (mirror of `documents.access_tier`).
+            Consumed by GEN-005 post-retrieval filter for Mode 4 mystery routing.
+            Added in GEN-005 (drift D-2: replaces SQL-side `WHERE access_tier = ANY($2)` filter from RET-001).
 
     RetrieveError:
       type: object

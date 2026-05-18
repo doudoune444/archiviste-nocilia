@@ -1,0 +1,132 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: build → push → canary → smoke → promote
+    runs-on: ubuntu-latest
+    env:
+      REGION: europe-west9
+      GATEWAY_SERVICE: archiviste-gateway
+      WORKERS_SERVICE: archiviste-workers
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      # AC-11: WIF auth — zero JSON key secrets, OIDC only.
+      - name: authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: configure docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # AC-12 step 1-2: build and push images tagged with git SHA.
+      - name: build and push gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: gateway
+          file: infra/docker/gateway.Dockerfile
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/gateway:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: build and push workers
+        uses: docker/build-push-action@v6
+        with:
+          context: workers
+          file: infra/docker/workers.Dockerfile
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/workers:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # AC-12 step 3: deploy canary revisions with --no-traffic.
+      - name: deploy gateway canary (no traffic)
+        id: deploy_gateway
+        run: |
+          gcloud run deploy ${{ env.GATEWAY_SERVICE }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/gateway:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --no-traffic \
+            --tag canary \
+            --quiet
+          echo "revision=$(gcloud run revisions list \
+            --service=${{ env.GATEWAY_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --filter='metadata.name~canary' \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=1 \
+            --format='value(metadata.name)')" >> "$GITHUB_OUTPUT"
+
+      - name: deploy workers canary (no traffic)
+        id: deploy_workers
+        run: |
+          gcloud run deploy ${{ env.WORKERS_SERVICE }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/workers:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --no-traffic \
+            --tag canary \
+            --quiet
+          echo "revision=$(gcloud run revisions list \
+            --service=${{ env.WORKERS_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --filter='metadata.name~canary' \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=1 \
+            --format='value(metadata.name)')" >> "$GITHUB_OUTPUT"
+
+      # AC-12 step 4: smoke test via tagged canary URL (bypasses Cloudflare DNS).
+      - name: smoke test canary gateway
+        id: smoke
+        run: |
+          CANARY_URL=$(gcloud run revisions describe ${{ steps.deploy_gateway.outputs.revision }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.url)')
+          echo "Smoke URL: ${CANARY_URL}"
+          curl -sf --max-time 30 "${CANARY_URL}/healthz"
+
+      # AC-12 step 5: promote 100% on smoke success.
+      - name: promote gateway to 100%
+        if: success()
+        run: |
+          gcloud run services update-traffic ${{ env.GATEWAY_SERVICE }} \
+            --to-revisions=${{ steps.deploy_gateway.outputs.revision }}=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      - name: promote workers to 100%
+        if: success()
+        run: |
+          gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
+            --to-revisions=${{ steps.deploy_workers.outputs.revision }}=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      # AC-12 step 6: rollback on smoke failure.
+      - name: rollback gateway on smoke failure
+        if: failure() && steps.smoke.conclusion == 'failure'
+        run: |
+          gcloud run services update-traffic ${{ env.GATEWAY_SERVICE }} \
+            --to-revisions=PREVIOUS=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      - name: rollback workers on smoke failure
+        if: failure() && steps.smoke.conclusion == 'failure'
+        run: |
+          gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
+            --to-revisions=PREVIOUS=100 \
+            --region ${{ env.REGION }} \
+            --quiet

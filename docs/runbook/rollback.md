@@ -4,7 +4,16 @@ Procédure de rollback manuel après auto-rollback échoué OU bug détecté
 post-promote 100 %. Référencée par `docs/vision.md` § Cible deploy V1 beta
 et `docs/adr/0003-terraform-deferred.md` § Activation 2026-05-18.
 
-## Détection
+## Workflow auto-rollback
+
+`.github/workflows/deploy.yml` déclenche un rollback automatique si le smoke test
+`curl -sf <canary-url>/healthz` échoue après `gcloud run deploy --no-traffic --tag canary`.
+Dans ce cas le workflow :
+1. Exécute `gcloud run services update-traffic --to-revisions=PREVIOUS=100` sur gateway ET workers.
+2. Sort avec `exit 1` (run GHA marqué failed — notification email GitHub par défaut).
+La révision défaillante reste taggée `canary` mais ne reçoit aucun trafic.
+
+## Détection (post-promote)
 
 - Cloudflare analytics : spike 5xx > 1 % sur 5 min.
 - Langfuse error rate > 5 % sur 10 min.

@@ -68,7 +68,7 @@ Justification : le provider phase MVP peut tomber, exploser en prix, ou être su
 | LLM generation MVP | `mistral-small-latest` via Mistral API | EU host (RGPD bonus vitrine), excellente qualité FR, ~0,10 € / ~0,30 € par M tok. Cheap pour itérer. |
 | LLM intent classifier MVP | `mistral-small-latest` (single provider) | Simplifie phase 1. Split en Haiku/Mistral si besoin perf coût plus tard. |
 | Provider abstraction | LangChain `ChatModel` interface + wrapper config-driven | Swap provider sans changement code. |
-| Embeddings | `BAAI/bge-m3` self-host via `sentence-transformers` | Multilingue FR/EN, 568M params, CPU acceptable phase MVP. Fallback `paraphrase-multilingual-MiniLM-L12-v2` si latence trop haute. |
+| Embeddings | `mistral-embed` via Mistral API (dim 1024) | Multilingue FR/EN, EU host (RGPD), même provider que LLM (1 secret partagé), pas de modèle 568M dans container Cloud Run scale-to-zero. Dim 1024 identique BGE-M3 → zéro migration DB. Fallback `BAAI/bge-m3` self-host documenté (même dim) si vendor concentration problématique V2. |
 | Vector DB | Postgres + pgvector | Déjà en infra (FOUND-002). |
 | Auth phase MVP | Aucune. `user_tier="anonymous"` hardcodé gateway → workers | Pipeline RAG testable sans complexité auth. SEC-001 plus tard. |
 | Frontend MVP | Page HTML+CSS+JS vanilla servie par la gateway (`gateway/static/`) via `tower-http::ServeDir`. `conversation_id` UUIDv4 généré côté client + `localStorage`. Aucune build step, aucune dépendance JS tierce phase 1. | Vertical slice ≤ 300 LOC, same-origin = zéro CORS, 1 container Cloud Run, pas de supply chain npm. Cf. [`adr/0005-frontend-vanilla-served-by-gateway.md`](adr/0005-frontend-vanilla-served-by-gateway.md). |
@@ -104,17 +104,76 @@ Justification : le provider phase MVP peut tomber, exploser en prix, ou être su
 
 ### Déjà livré (résumé)
 
-Backend chat round-trip end-to-end fonctionnel : ingestion `lore/*.md` → retrieve top-K pgvector → generate mode 1 canon (Mistral Small) → forward gateway `/v1/chat` → workers `/v1/generate` → persistence conversation Markdown GCS + index Postgres. Tickets mergés : FOUND-003, ING-001, RET-001, GEN-001, GEN-002, ING-003.
+Backend chat round-trip end-to-end + UI chat publique + Ragas eval CI. Pipeline : ingestion `lore/*.md` (+ GDrive sync export) → retrieve top-K pgvector → generate mode 1 canon (Mistral Small) → gateway `/v1/chat` → workers `/v1/generate` → persistence conversation Markdown GCS + index Postgres. Chat HTML servi par gateway (`static/`). Tickets mergés : FOUND-003, ING-001/003/010/011/012/013/014, RET-001, GEN-001/002, UI-001, EVAL-001, INFRA-001.
 
-État : API curl-able, pas encore d'UI publique.
+État : application curl-able + page chat fonctionnelle en local. Pas encore déployée publiquement.
+
+### Cible deploy V1 beta
+
+Stack vitrine grande entreprise — full GCP managed + IaC. Région **europe-west9** (Paris, RGPD résidence FR).
+
+- **Cloud Run** gateway 256 MB + workers 512 MB, scale-to-zero. Domain mapping europe-west9.
+- **Cloud SQL** Postgres 16 + extension `vector`, `db-f1-micro` + 10 GB. Auth Proxy sidecar Unix socket (pas de VPC connector).
+- **GCS** bucket `archiviste-conversations`, uniform bucket-level access, lifecycle TTL 30j.
+- **Secret Manager** — 1 secret partagé `MISTRAL_API_KEY` (LLM + embed même provider).
+- **Cloudflare** front (free tier) — DNS, TLS Full Strict, Bot Fight Mode, 1 rule rate-limit 100 req/min/IP. Remplace Redis sliding window pour V1.
+- **Domaine** `archiviste.nocilia.fr` (`.fr` primary + 301 redirects depuis `.com` / `.org` / `.eu` / `.net` via Cloudflare Page Rules).
+- **Terraform** — IaC complet (ADR-0003 réactivé : `infra/terraform/` source de vérité).
+- **GHA deploy** — Workload Identity Federation (zéro JSON key), build → push Artifact Registry → deploy canary 0 % traffic → smoke test → promote 100 % ou auto-rollback `gcloud run services update-traffic --to-revisions=PREVIOUS=100`.
+- **IAM** — 1 SA deploy `gha-deploy@` (`run.admin`, `artifactregistry.writer`, `cloudsql.client`, `secretmanager.secretAccessor`, `iam.serviceAccountUser`) + 1 SA runtime partagé `archiviste-runtime@` (`cloudsql.client`, `secretmanager.secretAccessor`, `storage.objectAdmin` bucket-scoped). OIDC trust strict : `attribute.repository == 'doudoune444/archiviste-nocilia' && attribute.ref == 'refs/heads/main'`.
+- **Cloudflare tuning** — Bot Fight Mode ON, Security Level Medium, Challenge Passage 30 min, pas de Turnstile V1.
+- **Rollback** — runbook `docs/runbook/rollback.md` (3 commandes gcloud). DB safety net = Cloud SQL PITR backup automatique 7j.
+
+**Pas en V1** : Redis / Memorystore, VPC connector, app-level cost-guard, sliding window rate-limit, observabilité full (uptime checks + log-based metrics + alert policies multiples).
+
+Budget estimé V1 : **~15-18 €/mois** (Cloud SQL ~11 €, Cloud Run gateway ~1 €, workers ~2-3 €, Mistral API ~1-2 €, misc <1 €, Cloudflare 0 €). Alert budget GCP €50/mois → email.
+
+### Décisions V1 beta (Q1-Q16)
+
+| # | Sujet | Décision | Raison |
+|---|---|---|---|
+| Q1 | Stack | Cloud Run + Cloud SQL + Cloudflare | Vitrine max grande entreprise, full managed, free tier généreux. |
+| Q2 | Région GCP | europe-west9 Paris | RGPD résidence FR, latence audience FR. |
+| Q3 | Headers sécurité | SEC-003 ticket séparé | HSTS / CSP / nosniff / Referrer-Policy hors INFRA-002 pour PR ≤ 300 LOC. |
+| Q4 | Observabilité V1 | Budget alert seul + Langfuse free | Skip uptime checks / log-metrics / alerts multiples → OBS-001 V2. |
+| Q5 | Domaine | `archiviste.nocilia.fr` | Subdomain branding univers, `.fr` primary + 301 redirects autres TLDs. |
+| Q6 | Cloud Run sizing | Gateway 256 MB / workers 512 MB scale-to-zero | Cold start acceptable (~3 s gateway, ~5 s workers sans modèle bundlé). |
+| Q7 | Embeddings | Mistral `mistral-embed` (dim 1024) | EU host, même provider que LLM, dim 1024 identique BGE-M3 = zéro migration DB. Fallback BGE-M3 self-host documenté. |
+| Q8 | Cost-guard | Cap Mistral console (V1) | Suffit pour beta, app-level fallback chain = SEC-010 V2. |
+| Q9 | Rate-limit | Cloudflare rule 100 req/min/IP | Free tier, remplace Redis sliding window. SEC-002 = V2. |
+| Q10 | Redis | Aucun V1 | Memorystore ~30 €/mois + VPC connector ~10 €/mois = 40 €/mois injustifié beta. |
+| Q11 | Cloud SQL access | Auth Proxy sidecar Unix socket | Pas de VPC connector requis, IAM auth. |
+| Q12 | GCS lifecycle | TTL 30 j sur conversations | Beta = rétention minimale, ajustable post-feedback. |
+| Q13 | IaC | Terraform activé | ADR-0003 réactivé, `infra/terraform/` source de vérité. |
+| Q14 | GHA auth | Workload Identity Federation | Zéro JSON key SA, OIDC trust repo + branch `main`. |
+| Q15 | Deploy strategy | Canary 0 % traffic + smoke test + auto-rollback | Cloud Run traffic split natif, zéro coût. |
+| Q16 | Eval gate CI deploy | A min : smoke test post-deploy auto + Ragas live manuel | Eval CI offline reste gate PR, live = artefact vitrine on-demand. |
+| Q17 | WIF / IAM scope | 1 SA deploy + 1 SA runtime partagé, OIDC trust repo + `main` | V1 fast. Split runtime SA = V2 quand SEC-001 atterrit. |
+| Q18 | Rollback | Runbook 3 cmds `gcloud run services update-traffic` + PITR Cloud SQL | Beta = pas de SLA, détection manuelle suffit, PITR backup gratuit `db-f1-micro` 7j. |
+| Q19 | Cloudflare bot/security | Bot Fight Mode ON, Security Level Medium, Challenge 30 min | Free tier, zéro friction utilisateurs légitimes. Turnstile = V2 si trafic bot anormal. |
+| Q20 | Ordre attaque final | 9 tickets V1 (ship-able #2 INFRA-002) + V2 list (SEC-002 / SEC-010 / OBS-001 / ING-015) | Vertical slice ≤ 300 LOC chacun, V1 fast / V2 ~1 semaine après. |
 
 ### Ordre d'attaque à partir de maintenant
 
-1. **UI-001** — Chat page MVP servie par gateway (vanilla HTML+JS+CSS, `conversation_id` UUIDv4 en `localStorage`, fetch `/v1/chat`). Premier ship public démontrable. Cf. [`adr/0005-frontend-vanilla-served-by-gateway.md`](adr/0005-frontend-vanilla-served-by-gateway.md).
-2. **Corpus + golden_qa réels** — tâche auteur (hors-ticket code) : remplir `lore/*.md` avec contenu canon réel + écrire `specs/golden_qa.jsonl` cohérent (≥ 30 entrées couvrant les 4 modes). Pré-requis EVAL-001.
-3. **EVAL-001** — Ragas runner sur golden_qa (faithfulness, answer_relevancy, context_precision/recall).
+Beta ship-able après **#2**. Ordre conçu pour minimiser risque public (Cloudflare rate-limit + cap Mistral console AVANT exposition, hardening app-level V2).
 
-Modes 2/3/4 (off-topic, lore-gap, mystère), ACL, GDrive sync, auth, cache, dashboard auteur → après ce skeleton.
+1. **Corpus + golden_qa réels** — tâche auteur (hors-ticket code) : `lore/*.md` contenu canon + `specs/golden_qa.jsonl` ≥ 30 entrées 4 modes. ✅ déjà 46 entrées, à raffiner selon corpus final.
+2. **INFRA-002 deploy GCP beta** — Terraform Cloud Run + Cloud SQL + GCS + Secret Manager + Cloudflare. Embedder switch BGE-M3 → `mistral-embed`. GHA `deploy.yml` WIF + canary + smoke + auto-rollback. **Premier ship public** sur `https://archiviste.nocilia.fr`.
+3. **SEC-003 security headers** — HSTS / CSP / X-Content-Type-Options / Referrer-Policy via tower middleware gateway. Quick win post-deploy.
+4. **GEN-003 Mode 2 off-topic** — refus poli quand intent classifier renvoie `off_topic`. Polish UX immédiatement visible chat.
+5. **GEN-004 Mode 3 lore-gap + ticket** — retrieval < threshold → "noté pour archives" + création ticket auto (table `tickets`, dedup cosine ≥ 0.85). Différenciateur core produit.
+6. **UI-002 dashboard auteur tickets** — page liste tickets lore-gap + liens conversations GCS signed URL. Ferme boucle feedback auteur.
+7. **SEC-001 auth tiers** — JWT + `anonymous` (fingerprint) / `member` (signup) / `author`. Pré-requis Mode 4 ACL + dashboard auteur sécurisé.
+8. **GEN-005 Mode 4 mystère + ACL** — filtrage post-retrieval sur `access_tier`, réponse mystérieuse (timing constant) si `acl_blocked`. Feature 4 modes complète.
+9. **OPS-001 load tests 100/500 users** — k6 scripts + rapport SLO (p95 < 3 s, gateway overhead < 80 ms). Trophy portfolio scaling.
+
+**V2 (post-beta, ~1 semaine après)** :
+- **SEC-002** rate-limit app-level `tower_governor` + Redis sliding window (si trafic justifie Memorystore).
+- **SEC-010** cost-guard app-level + fallback chain Claude → Mistral → Gemini Flash.
+- **OBS-001** full observability — uptime checks + log-based metrics + alert policies + OTel → Cloud Logging.
+- **ING-015** finalisation GDrive sync automatisé (ING-010/011/012/014 déjà partiellement livré).
+
+Pas en scope V1 + V2 : génération images, multi-univers, mobile native.
 
 Référence détaillée externe (53 tickets, plan v3) :
 `D:\projet-flamme-doudoune\career-ops\reports\projet-lore-rag-tickets.md`.

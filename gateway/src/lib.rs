@@ -102,6 +102,9 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
     img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; \
     base-uri 'none'; form-action 'self'";
 
+/// HSTS value: 1-year max-age, includeSubDomains, preload eligibility (SEC-003 AC-1 / A02).
+const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains; preload";
+
 /// Build the gateway router with all routes wired and shared state attached.
 pub fn router(state: Arc<AppState>) -> Router {
     // `/v1/chat` sub-router with body limit + error-handler middleware.
@@ -123,7 +126,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(static_router)
         .layer(middleware::from_fn(attach_request_id))
         .with_state(state)
-        // AC-6 / AC-17: 4 security headers applied router-wide (static + API).
+        // SEC-003 / AC-1 / A02: 5 security headers applied router-wide (static + API).
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static(HSTS_VALUE),
+        ))
         .layer(SetResponseHeaderLayer::if_not_present(
             axum::http::header::HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),

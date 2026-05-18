@@ -21,6 +21,7 @@ gcloud services enable \
   iamcredentials.googleapis.com \
   cloudresourcemanager.googleapis.com \
   billingbudgets.googleapis.com \
+  cloudbilling.googleapis.com \
   compute.googleapis.com \
   storage.googleapis.com \
   serviceusage.googleapis.com \
@@ -54,7 +55,31 @@ billing_account = "<BILLING_ACCOUNT_ID>"
 budget_email    = "owner@example.com"
 ```
 
-## 5. Bootstrap MISTRAL_API_KEY secret version
+## 5. Push a placeholder image before first `terraform apply`
+
+Cloud Run fails on first `terraform apply` if the image `:<tag>` does not exist in Artifact
+Registry yet (chicken-and-egg: Terraform creates AR repo, GHA pushes real images, but GHA needs
+WIF from Terraform). Break the cycle by pushing a harmless placeholder image:
+
+```bash
+# Target: europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/{gateway,workers}:latest
+gcloud auth configure-docker europe-west9-docker.pkg.dev
+
+# Push pause image as dummy gateway and workers
+docker pull gcr.io/google-containers/pause:3.9
+docker tag gcr.io/google-containers/pause:3.9 \
+  europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/gateway:latest
+docker push europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/gateway:latest
+
+docker tag gcr.io/google-containers/pause:3.9 \
+  europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/workers:latest
+docker push europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/workers:latest
+```
+
+Run `terraform apply -target=google_artifact_registry_repository.archiviste` first to create
+the AR repo, then push the placeholder, then run `terraform apply` (full).
+
+## 6. Bootstrap MISTRAL_API_KEY secret version
 
 Terraform creates the secret resource but NOT the version (version = operator secret, never
 in code or state). After `terraform apply`:
@@ -66,7 +91,7 @@ echo -n "<YOUR_MISTRAL_API_KEY>" | \
 
 This must happen BEFORE the first `deploy.yml` GHA run — workers boot fails without it.
 
-## 6. Bootstrap pgvector extension
+## 7. Bootstrap pgvector extension
 
 Cloud SQL `db-f1-micro` Postgres 16. After `terraform apply`:
 
@@ -80,7 +105,7 @@ Then inside psql:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-## 7. Verify apply
+## 8. Verify apply
 
 ```bash
 gcloud run services describe archiviste-gateway --region=europe-west9
@@ -92,7 +117,7 @@ gcloud iam service-accounts list
 gcloud billing budgets list --billing-account=<BILLING_ACCOUNT_ID>
 ```
 
-## 8. Post-apply: add GITHUB_ACTIONS_SA_WIF to GitHub Actions secrets
+## 9. Post-apply: add GITHUB_ACTIONS_SA_WIF to GitHub Actions secrets
 
 Required by `deploy.yml`:
 

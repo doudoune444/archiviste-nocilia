@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
-    embedding_model: str = "BAAI/bge-m3"
+    # AC-10 INFRA-002: default is "mistral-embed". BAAI/bge-m3 self-host = V2 (cf vision.md Q7).
+    # Note: main.py constructs Embedder() without this field — the constant DEFAULT_MODEL_NAME
+    # in embedder.py is the single source of truth for the model name.
+    embedding_model: str = "mistral-embed"
     default_chat_model: str = "claude-3-5-sonnet-20241022"
 
     # GEN-001: LLM wrapper config-driven (AC-8/10).

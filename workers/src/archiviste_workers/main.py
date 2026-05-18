@@ -44,12 +44,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gcs_storage = storage
     app.state.conversation_repo = ConversationRepository(pool)
 
-    # RET-001 AC-6: load embedder once at startup; failure leaves state=None (AC-13).
-    # Catch broad Exception: model download / OOM / file IO can surface various
-    # exception classes from sentence-transformers; we never want to crash the boot.
+    # AC-10 INFRA-002: Embedder() uses DEFAULT_MODEL_NAME ("mistral-embed") — do NOT
+    # pass settings.embedding_model (stale "BAAI/bge-m3" default). Credentials are
+    # picked up from MISTRAL_API_KEY / LLM_API_KEY env automatically.
+    # Narrow except: only I/O and value errors are expected at construction time
+    # (bad env, unreachable endpoint). Auth errors (401) surface at first call, not here.
     try:
-        app.state.embedder = Embedder(settings.embedding_model)
-    except Exception as exc:
+        app.state.embedder = Embedder()
+    except (ValueError, OSError) as exc:
         logger.warning("embedder_unavailable", error_type=type(exc).__name__)
         app.state.embedder = None
 

@@ -10,6 +10,7 @@ import json
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from pydantic import SecretStr
 from pytest_httpserver import HTTPServer
 from werkzeug import Request, Response
 
@@ -40,7 +41,7 @@ def embedder(httpserver: HTTPServer) -> Embedder:
     httpserver.expect_request("/v1/embeddings", method="POST").respond_with_handler(
         _make_embed_handler()
     )
-    return Embedder(api_key="test-key", base_url=httpserver.url_for(""))
+    return Embedder(api_key=SecretStr("test-key"), base_url=httpserver.url_for(""))
 
 
 @given(

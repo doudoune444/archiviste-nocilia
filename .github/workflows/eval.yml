@@ -136,7 +136,7 @@ jobs:
 
       - name: upload eval artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-run-${{ github.event.pull_request.number }}
           path: eval/runs/pr.json
@@ -242,7 +242,7 @@ jobs:
 
       - name: upload eval artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-run-live
           path: eval/runs/live.json

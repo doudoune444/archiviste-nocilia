@@ -2,13 +2,18 @@
 
 Uses `langchain_mistralai.MistralAIEmbeddings` (mistral-embed, dim 1024).
 Fallback BAAI/bge-m3 self-host = V2 (cf vision.md Q7).
+
+CI offline mode: set `EMBEDDER_PROVIDER=fake` to use FakeEmbedder (no API call).
+Production default: `EMBEDDER_PROVIDER=mistral` (requires MISTRAL_API_KEY).
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Final
 
+import numpy as np
 from langchain_mistralai import MistralAIEmbeddings
 from pydantic import SecretStr
 
@@ -19,6 +24,11 @@ DEFAULT_BATCH_SIZE: Final = 32
 # security.md A04: 30 s hard cap on external calls. Mirrors LLM_TIMEOUT_S in services/llm.py.
 EMBED_TIMEOUT_S: Final = 30
 _EMBED_MAX_RETRIES: Final = 3
+
+EMBEDDER_PROVIDER_ENV: Final = "EMBEDDER_PROVIDER"
+_PROVIDER_MISTRAL: Final = "mistral"
+_PROVIDER_FAKE: Final = "fake"
+_VALID_PROVIDERS: Final = frozenset({_PROVIDER_MISTRAL, _PROVIDER_FAKE})
 
 
 def default_batch_size() -> int:
@@ -97,3 +107,63 @@ class Embedder:
                 msg = f"expected embedding dim {EMBEDDING_DIM}, got {len(vector)}"
                 raise RuntimeError(msg)
         return vectors
+
+
+class FakeEmbedder:
+    """Deterministic embedder for CI offline eval — no API call, no credentials required.
+
+    CI-only: opt-in via EMBEDDER_PROVIDER=fake. Never used as a silent fallback.
+    Algorithm: SHA-256 digest of text → uint32 seed → numpy RNG → float32 vector
+    L2-normalised to unit length. Same text always yields the same vector.
+    """
+
+    _MODEL_NAME: Final = "fake-embedder-ci"
+
+    @property
+    def model_name(self) -> str:
+        return self._MODEL_NAME
+
+    def encode_batch(self, texts: list[str], batch_size: int) -> list[list[float]]:
+        """Return deterministic unit vectors of length EMBEDDING_DIM for each text."""
+        if not texts:
+            return []
+        if batch_size <= 0:
+            msg = f"batch_size must be > 0, got {batch_size}"
+            raise ValueError(msg)
+        return [self._encode_one(text) for text in texts]
+
+    def _encode_one(self, text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode()).digest()
+        # Use the first 4 bytes as a uint32 seed — deterministic per text.
+        seed = int.from_bytes(digest[:4], byteorder="big")
+        rng = np.random.default_rng(seed)
+        vector = rng.standard_normal(EMBEDDING_DIM).astype(np.float32)
+        norm: float = float(np.linalg.norm(vector))
+        # norm == 0 is theoretically impossible for a 1024-dim gaussian, but guard it.
+        if norm == 0.0:
+            vector[0] = np.float32(1.0)
+            norm = 1.0
+        normalised: list[float] = (vector / norm).tolist()
+        return normalised
+
+
+def build_embedder(provider: str | None = None) -> Embedder | FakeEmbedder:
+    """Factory that reads EMBEDDER_PROVIDER and returns the correct embedder.
+
+    Valid values: "mistral" (default, requires MISTRAL_API_KEY) or "fake" (CI only).
+    Any other value raises ValueError immediately at boot (fail-fast).
+    """
+    raw = (
+        provider
+        if provider is not None
+        else os.environ.get(EMBEDDER_PROVIDER_ENV, _PROVIDER_MISTRAL)
+    )
+    if raw not in _VALID_PROVIDERS:
+        msg = (
+            f"{EMBEDDER_PROVIDER_ENV}={raw!r} is not a valid provider. "
+            f"Valid values: {sorted(_VALID_PROVIDERS)}"
+        )
+        raise ValueError(msg)
+    if raw == _PROVIDER_FAKE:
+        return FakeEmbedder()
+    return Embedder()

@@ -106,19 +106,21 @@ jobs:
           LLM_PROVIDER: mistral
           LLM_MODEL: mistral-small-latest
           LLM_API_KEY: ci-placeholder
+          # CI offline: use deterministic FakeEmbedder — no Mistral API key needed.
+          # Opt-in explicit; production always uses EMBEDDER_PROVIDER=mistral (default).
+          EMBEDDER_PROVIDER: fake
         run: |
           uv run uvicorn archiviste_workers.main:app --host 0.0.0.0 --port 8000 \
             > /tmp/uvicorn.log 2>&1 &
-          # bge-m3 (~2 GB) is downloaded from HF Hub on cold cache → boot may
-          # exceed 60 s. Wait up to 300 s, then dump uvicorn log and fail loud.
-          for i in $(seq 1 300); do
+          # FakeEmbedder has no model download; boot is fast. Wait up to 60 s.
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:8000/healthz; then
               echo "workers up after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "workers did not become healthy within 300 s"
+          echo "workers did not become healthy within 60 s"
           echo "--- uvicorn log ---"
           cat /tmp/uvicorn.log || true
           exit 1

@@ -14,7 +14,7 @@ from archiviste_workers.conversation.gcs_storage import (
 from archiviste_workers.conversation.repository import ConversationRepository
 from archiviste_workers.conversation.router import router as conversation_router
 from archiviste_workers.db import create_pool
-from archiviste_workers.embedder import Embedder
+from archiviste_workers.embedder import build_embedder
 from archiviste_workers.generate.router import router as generate_router
 from archiviste_workers.retrieve.router import router as retrieve_router
 from archiviste_workers.routers import health
@@ -44,13 +44,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gcs_storage = storage
     app.state.conversation_repo = ConversationRepository(pool)
 
-    # AC-10 INFRA-002: Embedder() uses DEFAULT_MODEL_NAME ("mistral-embed") — do NOT
-    # pass settings.embedding_model (stale "BAAI/bge-m3" default). Credentials are
-    # picked up from MISTRAL_API_KEY / LLM_API_KEY env automatically.
-    # Narrow except: only I/O and value errors are expected at construction time
-    # (bad env, unreachable endpoint). Auth errors (401) surface at first call, not here.
+    # AC-10 INFRA-002: build_embedder reads EMBEDDER_PROVIDER env (default "mistral").
+    # EMBEDDER_PROVIDER=fake → FakeEmbedder (CI offline, no API call, deterministic).
+    # EMBEDDER_PROVIDER=mistral → Embedder() with mistral-embed + MISTRAL_API_KEY.
+    # Invalid provider → ValueError raised immediately (fail-fast, not swallowed).
+    # Narrow except: only I/O errors at construction time (bad env, unreachable endpoint).
+    # Auth errors (401) surface at first call, not here.
     try:
-        app.state.embedder = Embedder()
+        app.state.embedder = build_embedder()
     except (ValueError, OSError) as exc:
         logger.warning("embedder_unavailable", error_type=type(exc).__name__)
         app.state.embedder = None

@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **SEC-003**: gateway HSTS header + full coverage of 5 baseline security headers across all routes (success, error, 404, 405, body-limit 400). Adds `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` via `SetResponseHeaderLayer::if_not_present` router-wide. Completes A02/A05 baseline per `.claude/rules/security.md`.
+
 - **INFRA-002d CI fix**: Add `EMBEDDER_PROVIDER=fake` mode — `FakeEmbedder` (SHA-256-seeded, L2-normalised, 1024-dim, deterministic, no API call) resolves CI offline eval regression where missing `MISTRAL_API_KEY` caused 8/8 `upstream_error`. `build_embedder()` factory reads `EMBEDDER_PROVIDER` env (`"mistral"` default, `"fake"` CI-only); invalid values raise `ValueError` fail-fast. `eval.yml` offline job sets `EMBEDDER_PROVIDER: fake`; boot timeout reduced 300→60 s (no model download). Tests: `test_embedder_fake.py` (determinism, dim, L2, distinct vectors), `test_main_lifespan.py` (fake provider → FakeEmbedder, invalid → None).
 
 - **INFRA-002 PR-d (review fixes)**: Fix 2 HIGH + 2 MED findings from INFRA-002d review — (HIGH-1) `main.py` calls `Embedder()` instead of `Embedder(settings.embedding_model)` to use the correct `DEFAULT_MODEL_NAME="mistral-embed"` default; `except Exception` narrowed to `(ValueError, OSError)` to prevent silent swallow of API errors; (HIGH-2) `Embedder.api_key` param changed from `str | None` to `SecretStr | None` (security.md A09); (MED-3) `EMBED_TIMEOUT_S=30` constant added and passed to `MistralAIEmbeddings`; (MED-4) `max_retries=3` passed to `MistralAIEmbeddings`; `settings.embedding_model` default updated to `"mistral-embed"`; tests: `test_api_key_env_pickup`, `test_client_has_timeout_and_retries`, `test_default_model_name_is_mistral_embed` (runtime assertion), `test_lifespan_embedder_model_is_mistral_embed` (regression AC-10).
@@ -18,6 +22,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 - fix(gdrive_export): render gdocs from Docs API tree instead of Drive markdown export — handles positionedObjects + bypasses Drive 10 MiB export cap (ING-014 follow-up)
 
 ### Added
+
+- **GEN-003**: Mode 2 off_topic — intent classifier (LLM zero-shot, fail-open canon) + branche refus poli in-world ; `query_log.intent` renseigné (`'in_domain'` ou `'off_topic'`) ; timeout dédié 5 s classifier ; agrégation usage/cost des deux appels LLM.
 
 - **EVAL-001 (review fixes pass 2 — HIGH-A, HIGH-B, MED)**: Fix CI workflow — apply migrations via official `migrations/run.sh` before seed, export `DATABASE_URL` at seed step, add `LLM_PROVIDER/LLM_MODEL/LLM_API_KEY=ci-placeholder` to workers offline (offline eval uses `/v1/retrieve` only — no real LLM call); fix seed corpus tautology — lore-dummy narrative texts with keywords embedded in context + hash-based pseudo-embeddings (SHA-256, 1024-dim L2-normalised, non-zero, differentiated); document `keyword_overlap_rate` offline as plumbing/integration check in README; fix redaction property test — sentinels injected into `entry.answer`/`entry.citations` (serialised fields), positive assertion on `[REDACTED]` present. Tests: 55/55 green (+9 new seed corpus tests).
 - **EVAL-001 (review fixes HIGH-1..HIGH-4, MED-5)**: Fix `baseline.json` schema to full RunFile AC-17 schema; fix AC-17 bypass via merge-base PR diff inspection (anti multi-commit attack); wire `_redact_raw` in `write_run` (dead redaction removed); fix tautological `keyword_overlap_rate` offline (now scores against retrieved chunk texts, not stub answer); implement real `seed_test_corpus.py` with psycopg2 insert; add `test_baseline_schema.py` (6 tests), AC-4 byte-identical double-run CLI test, AC-16 property-100-runs redaction test; decompose `main()` ≤40 lines; remove `_extra_headers` dead field; pin `except (CalledProcessError,OSError)`. 46 tests green. **LOC post-trim** : voir [ADR-0008](docs/adr/0008-eval-001-loc-waiver.md).

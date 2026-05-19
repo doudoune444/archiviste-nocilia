@@ -1,108 +1,124 @@
-# Review — INFRA-002c
+# Review — INFRA-002c (R3 — post-push)
 
-## Round 2 (fix commit `936c4f4`)
+## Verdict
 
-### Verdict R2
 APPROVE
 
-### Round 1 findings resolution
+R1 (BLOCK) and R2 (REQUEST_CHANGES) issues are all resolved in commits `936c4f4` (R2 fixes) and `e4c8b3e` (merge). Remaining items are LOW / informational — none blocks merge of PR #55. Adversarial sweep on the post-merge diff (185 net +) surfaces no HIGH and one MED-with-mitigation. Approving with deploy-time verification notes captured below for the first real run.
 
-| R1 finding | Severity | Status R2 | Evidence in fix |
-|---|---|---|---|
-| `deploy.yml:122` static `PREVIOUS=100` gateway | HIGH | RESOLVED | Lines 119-133 : `gcloud run revisions list --service=$GATEWAY_SERVICE --region=$REGION --sort-by=~metadata.creationTimestamp --limit=2 --format='value(metadata.name)' \| tail -1` puis `update-traffic --to-revisions="${PREVIOUS}=100"`. Résolution dynamique correcte (cf vérification ci-dessous). |
-| `deploy.yml:130` static `PREVIOUS=100` workers | HIGH | RESOLVED | Lines 135-149 : même pattern dynamique appliqué au service workers. |
-| `deploy.yml:90-92` smoke sans parsing JSON `.status` | HIGH | RESOLVED | Line 97 : `curl -sf --max-time 30 "${CANARY_URL}/healthz" \| jq -e '.status == "ok"'`. Le pipeline échoue si curl renvoie non-2xx (stdout vide → `jq -e` exit ≠ 0) OU si `.status != "ok"`. |
-| `rollback.md:12` propagation du myth `PREVIOUS=100` | HIGH | RESOLVED | rollback.md lines 7-23 : nouvelle section « Workflow auto-rollback » documente la résolution dynamique exacte (commande copiée verbatim de la spec AC-12 step 6). Note explicite « il n'existe pas de sentinel `PREVIOUS` côté gcloud ». |
-| `deploy.yml:75-78, 88-91` lookup révision via `--filter='metadata.name~canary'` | MED | RESOLVED | Lines 67-69 et 81-83 : remplacé par `gcloud run services describe <svc> --format='value(status.latestCreatedRevisionName)'`. Commentaire AC-12 step 3 explique pourquoi. |
-| `deploy.yml:124-131` `exit 1` explicite manquant | MED | RESOLVED | Lines 133 et 149 : `exit 1` ajouté en fin de chaque step rollback. Aligné avec spec AC-12 step 6 + failure-mode line 71. |
-| `deploy.yml` smoke workers absent — justification manquante | MED | RESOLVED | Lines 85-89 : commentaire documente `Workers ingress=internal: not directly curl-able from GHA runner — gateway /healthz exercises workers reachability via internal service call`. |
-| `deploy.yml` 3 secrets GHA non documentés | MED | RESOLVED | rollback.md lines 73-86 : table `GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`, `GCP_PROJECT_ID` avec source `terraform output` documentée. |
-| actionlint non vérifié localement | LOW | DEFERRED | Toujours non lancé localement (binaire indisponible sur Windows worktree). Couverture CI via `ci.yml` actionlint step (plan line 77) — vérification post-PR. |
-| `timeout-minutes` absent sur les steps `gcloud run deploy` | LOW | NOT ADDRESSED | Non corrigé. Non-bloquant (job-level fallback GHA = 360 min). Acceptable V1. |
+## Context
 
-### Round 2 gaming / correctness checks
+- PR #55 `feat(infra): INFRA-002c GHA deploy.yml + auto-rollback + jq smoke`
+- Branch: `feat/INFRA-002c-gha-deploy` (3 commits ahead of `origin/main`).
+- Files touched: `.github/workflows/deploy.yml` (+149), `docs/runbook/rollback.md` (+35/-1), `CHANGELOG.md` (+5 lines).
+- Prior reviews: R1 BLOCK (e56f33c, prior content overwritten here), R2 REQUEST_CHANGES on PR-c (7569d86).
+- Diff size 185 net + = well under 300 LOC vertical-slice cap.
+- No conflict markers anywhere (`git grep -nE "^(<<<<<<<|=======|>>>>>>>)"` returns empty).
+- YAML parses cleanly (`yaml.safe_load`).
+- GitHub-hosted `ubuntu-latest` defaults `run:` to `bash --noprofile --norc -eo pipefail {0}` — `set -eo pipefail` is implicit, so `curl -sf … | jq -e …` correctly fails the step when either side errors. No explicit `defaults.run.shell: bash` needed.
 
-| Check | Status | Evidence |
-|---|---|---|
-| Résolution N-1 réelle (pas `--limit=1`) | PASS | `--sort-by=~metadata.creationTimestamp --limit=2 \| tail -1` retourne bien N-1. `~` = tri descendant, top = canary fraîchement déployée (la plus récente), `tail -1` du résultat à 2 lignes = avant-dernière = révision promue précédente. Correct. |
-| `jq -e '.status == "ok"'` exit code propagé | PASS | Dernière commande du pipeline = jq, son exit code remonte au step. `set -e` (default GHA `bash -e`) abandonne sur exit ≠ 0. Pas besoin de `pipefail` explicite ici. |
-| `latestCreatedRevisionName` est la canary | PASS | `gcloud run deploy --no-traffic --tag canary` crée une nouvelle révision → devient `status.latestCreatedRevisionName` immédiatement. Pas de race sur push-to-main monothread. |
-| Rollback target ≠ canary fautive | PASS | À l'instant T du rollback, la canary EST la révision la plus récente (smoke échoue après deploy mais avant promote). `tail -1` de la liste à 2 lignes pointe donc bien sur l'avant-dernière = révision actuellement à 100 %. Correct. |
-| Hardcoded test values / sentinels | PASS | Aucun. `PREVIOUS` est une variable shell capturée dynamiquement, pas un sentinel statique. |
-| Out-of-scope changes | PASS | Diff R2 ne touche que `.github/workflows/deploy.yml`, `docs/runbook/rollback.md`, `CHANGELOG.md` — listés dans plan PR c. |
-| Diff total ≤ 300 LOC | PASS | 186 LOC additions (149 deploy.yml + 34 rollback.md + 3 CHANGELOG). |
-| Security R1 acquis | PASS | Aucune régression — toujours zéro `credentials_json`, zéro `GCP_SA_KEY`, WIF only, `--max-time 30`, tags immutables `${{ github.sha }}`. |
-
-### Spec coverage R2
-
-- AC-12 step 4 (smoke `curl -sf <canary-url>/healthz \| jq -e '.status == "ok"'`) : **PASS** — pipeline JSON exact comme spec line 36.
-- AC-12 step 6 (résolution dynamique + `exit 1`) : **PASS** — commande exacte spec line 38, plus `exit 1` final.
-- AC-13 (runbook 3 cmds + PITR + workflow auto-rollback documenté) : **PASS** — section ajoutée cohérente avec workflow.
-
-### Verdict final
-APPROVE — toutes les findings R1 HIGH+MED résolues, aucune nouvelle régression, deux LOW restantes acceptables (actionlint CI-side, timeout-minutes non-bloquant V1).
-
----
-
-## Round 1
-
-### Verdict
-BLOCK
-
-## Findings
+## Focus zone 1 — Dynamic rollback correctness
 
 | File:line | Severity | Pattern | Evidence | Suggested fix |
 |---|---|---|---|---|
-| `.github/workflows/deploy.yml:122` | HIGH | Spec violation AC-12 step 6 (amended) — static `PREVIOUS` sentinel | `--to-revisions=PREVIOUS=100` on gateway rollback. Spec line 38/71 explicitly states "il n'existe pas de sentinel `PREVIOUS` côté gcloud — résolution dynamique obligatoire" via `gcloud run revisions list --service=<svc> --region=europe-west9 --sort-by=~metadata.creationTimestamp --limit=2 --format='value(metadata.name)' \| tail -1`. `gcloud` will reject this with `Revision PREVIOUS not found`, leaving traffic on the broken canary if it had received any. | Replace with dynamic resolution shell step that lists the last 2 revisions sorted by creationTimestamp DESC and picks `tail -1` (the N-1 revision name) before the `update-traffic` call. |
-| `.github/workflows/deploy.yml:130` | HIGH | Spec violation AC-12 step 6 (amended) — static `PREVIOUS` sentinel | Same defect on workers rollback. Same `PREVIOUS=100` literal. | Same fix. Resolve dynamically per-service before `update-traffic`. |
-| `.github/workflows/deploy.yml:90-92` | HIGH | Spec violation AC-12 step 4 (amended) — smoke test does not parse JSON `.status` | `curl -sf --max-time 30 "${CANARY_URL}/healthz"` — HTTP 2xx only. Spec line 36 explicitly requires `curl -sf <canary-url>/healthz \| jq -e '.status == "ok"'` because gateway `/healthz` returns 200 even when workers are degraded (cf gateway/src/handlers/health.rs). Current impl will promote degraded builds. | Pipe response into `jq -e '.status == "ok"'`. Fails the step on any non-ok status field. |
-| `docs/runbook/rollback.md:12` | HIGH | Spec violation — runbook propagates the static `PREVIOUS` myth | Line 12: ``gcloud run services update-traffic --to-revisions=PREVIOUS=100``. Same gcloud-doesn't-have-this-sentinel issue. Runbook xref to `deploy.yml` is now misleading. | Document the dynamic resolution command (`gcloud run revisions list --sort-by=~metadata.creationTimestamp --limit=2 \| tail -1`) used by the workflow. |
-| `.github/workflows/deploy.yml:75-78, 88-91` | MED | Race / lookup correctness — `--filter='metadata.name~canary'` to identify the just-deployed revision | The `gcloud run deploy ... --tag canary` reassigns the `canary` tag from the previous canary to the new one, but the filter `metadata.name~canary` is a name substring regex, not a tag filter. If revision names don't actually contain "canary" (Cloud Run names are `<service>-<random>-<rev>`, the tag is metadata, not the name), this lookup returns empty and `steps.deploy_gateway.outputs.revision` is empty → subsequent `--to-revisions==100` is malformed. | Use `gcloud run services describe <svc> --region=<r> --format='value(status.latestCreatedRevisionName)'` immediately after `gcloud run deploy` to obtain the canonical revision name. Far more reliable than substring-matching on names. |
-| `.github/workflows/deploy.yml:124-131` | MED | Missing `exit 1` after auto-rollback | Spec AC-12 step 6 and failure-mode line 71 explicitly require `exit 1` after the rollback so the run is marked failed. The job is already failed (`if: failure()` branch ran), so it does exit non-zero, BUT a `curl` smoke failure already set the failure status — verify there's no path where the rollback step succeeds and masks the failure. As-written, OK because of `if: failure()`, but plan line 46 + failure-mode line 71 wording ("puis `exit 1`") suggests an explicit exit at the end. | Append explicit `exit 1` to the rollback step body for clarity, matching spec wording. |
-| `.github/workflows/deploy.yml:106-119` | MED | Promote steps run even if only one canary deploy failed | `if: success()` on both promote steps. If `deploy_workers` fails, gateway deploy succeeded → `success()` is false at that point, gateway promote skipped, good. BUT if both deploy steps succeed and smoke fails, both promote skipped (correct). Concern: there is no smoke test for workers. Workers has `ingress=internal` so direct *.run.app curl from a GHA runner won't work, but the spec requires verifying the canary stack end-to-end. Gateway healthz at `/healthz` does (per gateway code) check workers connectivity → defensible. Document this. | Add a comment justifying why only gateway is smoke-tested (`/healthz` exercises workers reachability via internal service call). Otherwise spec AC-12 step 4 reads as covering both. |
-| `.github/workflows/deploy.yml` | MED | Out-of-scope: secret indirections not documented in plan | Plan PR c does not list `secrets.GCP_WIF_PROVIDER`, `secrets.GCP_SA_EMAIL`, `secrets.GCP_PROJECT_ID` requirements. These must be configured in the repo settings for the workflow to function. Not a code defect, but post-merge the first run will fail without operator setup. | Add a section to `docs/runbook/bootstrap-gcp.md` (or rollback runbook) listing the 3 required GitHub Actions secrets and how to source their values from Terraform outputs. |
-| `.github/workflows/deploy.yml` | LOW | actionlint not run locally (binary unavailable on Windows worktree) | Cannot confirm syntax/expression validity. Per plan line 77, `actionlint` step in `ci.yml` should cover `deploy.yml` automatically on PR. | Verify CI actionlint job passes on the PR before merging. Manual confirmation required. |
-| `.github/workflows/deploy.yml:1-132` | LOW | No timeout on `gcloud run deploy` steps | Build-and-deploy steps lack `timeout-minutes`. A stuck Cloud Run deploy could burn 6h of runner time. | Add `timeout-minutes: 15` at job or step level. |
+| `.github/workflows/deploy.yml:122-127` | OK | `gcloud revisions list` ordering | `--sort-by=~metadata.creationTimestamp --limit=2 \| tail -1` correctly resolves N-1 revision. `~` prefix = descending, so list = [current, previous], `tail -1` = previous. | — |
+| `.github/workflows/deploy.yml:135-149` | OK | Independent workers rollback | Workers rollback step re-runs `gcloud revisions list` against `WORKERS_SERVICE` (no shared variable from gateway step). Correct. | — |
+| `.github/workflows/deploy.yml:133, 149` | OK | `exit 1` on each rollback step | Both rollback steps end with `exit 1` after `update-traffic`. Workflow fails — no silent green. | — |
+| `.github/workflows/deploy.yml:119-149` | LOW | First-deploy edge case | If `revisions list --limit=2` returns 1 row (very first deploy), `tail -1` returns the JUST-deployed canary; `update-traffic --to-revisions=<canary>=100` becomes a no-op and `exit 1` still fires correctly. Acceptable for V1 beta per spec ligne 38/71. | Optional belt-and-braces: `[ -z "${PREVIOUS}" ] && { echo "no previous revision"; exit 1; }` before update-traffic. |
+| `.github/workflows/deploy.yml:101, 109` | MED | Promote-failure rollback gap | Conditional `if: success()` on promote steps + `if: failure() && steps.smoke.conclusion == 'failure'` on rollback steps means: if `promote gateway` itself fails (e.g. IAM/quota) AFTER smoke succeeded, neither rollback fires. Workflow exits non-zero but canary tag retains 0% traffic, no harm to live traffic, but operator must inspect manually. | Broaden rollback `if:` to fire on any post-deploy failure: `if: failure() && steps.deploy_gateway.conclusion == 'success'`. Recommended as follow-up ticket; not a blocker because the failure mode is safe (no traffic shift). |
+| `.github/workflows/deploy.yml:120, 136` | LOW | Cross-service blast radius | If only gateway smoke fails (e.g. gateway image bad, workers image fine), workflow rolls back BOTH services. Workers revision is freshly built but reverts to N-1. V1 beta deploys-as-pair so acceptable, but operator should know. | Optional: add a comment line above rollback steps documenting the pair-rollback intent. Not blocking. |
+
+## Focus zone 2 — jq smoke correctness
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `.github/workflows/deploy.yml:97` | OK | curl + jq composition | `curl -sf --max-time 30 "${CANARY_URL}/healthz" \| jq -e '.status == "ok"'`. `-sf` exits non-zero on HTTP ≥ 400; `jq -e` exits non-zero on false/null. `pipefail` set by GHA default → step fails if either side fails. `--max-time 30` matches the 30 s spec cap on external calls. | — |
+| `.github/workflows/deploy.yml:90-97` | MED | Canary URL field path | `gcloud run revisions describe <rev> --format='value(status.url)'` — for an untagged revision this returns the revision-level URL `https://<service>-<hash>-<region>.a.run.app`. For a tagged revision deployed with `--tag canary --no-traffic`, the tagged URL `https://canary---<service>-<hash>.a.run.app` lives on the SERVICE object under `status.traffic[].url`, not always on the REVISION's `status.url` (gcloud SDK version-dependent). If `${CANARY_URL}` is empty, `curl` will try `"/healthz"` and `-f` fails — workflow does roll back, but for the wrong reason (false-negative smoke). | First real run: visually confirm the `Smoke URL: <value>` log line (already in place at line 96) is non-empty. If empty in practice, swap to a service-level traffic-tag lookup. Track as deploy-time observation, not blocker. |
+| `.github/workflows/deploy.yml:85-89` | OK | Smoke is gateway-only (intentional) | Comment block (lines 86-89) explicitly documents why workers smoke is not done: `ingress=internal` not reachable from GHA runner, gateway `/healthz` exercises workers via internal call. Matches spec AC-12 step 4 + AC-2 (workers ingress=internal). | — |
+| `.github/workflows/deploy.yml:85` | OK | Bypass Cloudflare DNS race | Smoke hits the canary `*.run.app` URL directly, not `archiviste.nocilia.fr`. Comment matches R6 risk in plan. | — |
+
+## Focus zone 3 — WIF auth
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `.github/workflows/deploy.yml:26-29` | OK | Zero JSON keys | `google-github-actions/auth@v2` with `workload_identity_provider` + `service_account` only. No `credentials_json`, no `key-file`. `grep -nE "credentials_json\|GCP_SA_KEY\|sa-key\|key-file"` returns empty. Matches AC-11 + D-7 garde-fou. | — |
+| `.github/workflows/deploy.yml:7-9` | OK | Job permissions | `id-token: write` (required for WIF), `contents: read`. Minimal. | — |
+| `.github/workflows/deploy.yml:26` | MED | Action version pin | `google-github-actions/auth@v2` is a floating major tag, not a commit SHA. ci.yml pins `rhysd/actionlint@a443f344… # v1.7.9` to SHA but uses floating tags for first-party `actions/*` — project convention is mixed. `google-github-actions/*` and `docker/*` are third-party; same risk profile as `rhysd/*`. Defense-in-depth says pin SHA. | Follow-up `chore(ci)` ticket: pin SHAs for `google-github-actions/*` + `docker/*` across all workflows. Not a blocker — consistent with `googleapis/release-please-action@v4` floating-tag pattern already in repo. |
+
+## Focus zone 4 — Merge correctness (commit e4c8b3e)
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `CHANGELOG.md:10-15` | OK | Conflict resolution | All 4 expected bullets present under unified `### Security` heading inside `## [Unreleased]`: PR-c review fixes, PR-c initial, PR-b review fixes, SEC-003. Order matches commit chronology. `git diff e4c8b3e^1...e4c8b3e -- CHANGELOG.md` shows clean additions, no deletion of pre-existing content. | — |
+| `CHANGELOG.md:17, 19` | LOW | Orphan bullets after `### Security` | Lines 17 (`chore(ci): INFRA-001…`) and 19 (`fix(gdrive_export)…`) sit between `### Security` (line 10) and `### Added` (line 21) with no intervening sub-header — they visually fall under `### Security` but were authored as un-categorised entries. Pre-existing on `main`; not introduced by this PR. | Out of scope for INFRA-002c. Optional follow-up: re-categorise under `### Added` / `### Fixed` or introduce a `### Changed` heading. |
+| project-wide | OK | No conflict markers | `git grep -nE "^(<<<<<<<\|=======\|>>>>>>>)"` returns nothing. Clean merge. | — |
+| project-wide | OK | No file content loss | Merge stat (only CHANGELOG.md touched) confirms no orphan deletes elsewhere. | — |
+
+## Focus zone 5 — Secret hygiene
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `.github/workflows/deploy.yml:28-29, 41, 51` | OK | Secrets via `${{ secrets.* }}` only | `GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`, `GCP_PROJECT_ID` — all 3 read via `secrets.*` context. No inline values, no hardcoded project ID. | — |
+| `docs/runbook/rollback.md:75-86` | OK | Required secrets documented | Table at lines 78-82 lists the 3 secrets with source + description. Operator can reproduce config from `terraform output`. Matches AC-13 spirit. | — |
+| `.github/workflows/deploy.yml` (whole file) | OK | No `gcloud auth activate-service-account --key-file=…` | grep confirms absent. Only WIF auth path exists. ADR-banned JSON key fallback not present. | — |
+| `.github/workflows/deploy.yml` (whole file) | OK | No secret printed | No `echo ${{ secrets.* }}`, no `env > $GITHUB_OUTPUT`. The only `echo` statements (lines 96, 128, 144) print non-secret revision names / canary URL. | — |
+
+## Focus zone 6 — Pin discipline
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `.github/workflows/deploy.yml:22, 26, 36, 46` | MED | Third-party actions on floating tags | `actions/checkout@v4` (first-party — OK per project convention, ci.yml lines 27, 40, 70, 111 all `@v4`), `google-github-actions/auth@v2` (third-party — inconsistent with `rhysd/actionlint@<SHA>` pattern), `docker/build-push-action@v6` × 2 (third-party — same). | Follow-up `chore(ci)` ticket: pin SHAs for `google-github-actions/*` + `docker/*` across all workflows for consistency. Not a blocker for this PR — matches existing `release-please.yml` pattern. |
+
+## Focus zone 7 — Other adversarial sweeps
+
+| File:line | Severity | Pattern | Evidence | Suggested fix |
+|---|---|---|---|---|
+| `.github/workflows/deploy.yml:31` | LOW | `gcloud auth configure-docker` ↔ buildx isolation | `gcloud auth configure-docker europe-west9-docker.pkg.dev --quiet` modifies `~/.docker/config.json` with a credential helper. `docker/build-push-action@v6` without an explicit `docker/setup-buildx-action` auto-creates a buildx instance using the `docker-container` driver; that driver runs in an isolated container and may not inherit the host config.json's credential helper. Empirically this works on GHA runners because buildx `--push` uses the host docker daemon's auth context, but it's fragile. | Add `- uses: docker/setup-buildx-action@v3` before the build steps OR add `docker/login-action@v3` with explicit AR registry credentials. First real run will surface push auth issues immediately. Track as deploy-time observation. |
+| `.github/workflows/deploy.yml:42-43, 52-53` | OK | `cache-from: type=gha` / `cache-to: type=gha,mode=max` | GHA cache backend works with auto-buildx in `build-push-action@v6`. No issue. | — |
+| `.github/workflows/deploy.yml` (whole file) | OK | gcloud command syntax | All `gcloud run` invocations use valid subcommands (`deploy`, `services describe`, `services update-traffic`, `revisions describe`, `revisions list`). Flags `--no-traffic`, `--tag`, `--to-revisions=<rev>=N`, `--quiet`, `--region`, `--service`, `--sort-by`, `--limit`, `--format` all valid for current gcloud SDK. | — |
+| `.github/workflows/deploy.yml:13` | OK | Job naming | `name: build → push → canary → smoke → promote` — emoji-free, ASCII arrow. Cosmetic but reads cleanly. | — |
+| `docs/runbook/rollback.md` (whole file) | OK | AC-13 grep contract | `grep -c 'gcloud run' docs/runbook/rollback.md` → 5 hits (lines 11, 15, 21, 35, 41) ≥ 3. `gcloud sql backups` present at line 60. PITR Cloud SQL section matches AC-13. | — |
+| `.github/workflows/deploy.yml:88-89` | OK | Workers ingress comment | Comment explicitly explains why no direct workers smoke — matches spec AC-2 + AC-12 step 4 + plan line 46. No commented-out code. | — |
+| `.github/workflows/deploy.yml:65-66, 80` | OK | Comment quality | WHY comments at lines 65-66 (`tag-based substring filter on metadata.name is unreliable`) and 80 (`same canonical resolution`) document non-obvious choice. Per `clean-code.md`, WHY comments are appropriate when non-obvious. | — |
 
 ## Spec coverage
 
-- AC-11 (WIF auth, no JSON key): pass — workflow uses `google-github-actions/auth@v2` with `workload_identity_provider` + `service_account`. `! grep credentials_json` confirmed (zero matches). `! grep GCP_SA_KEY` confirmed.
-- AC-12 step 1 (build images): pass — `docker/build-push-action@v6` × 2.
-- AC-12 step 2 (push to AR `<region>-docker.pkg.dev/<project>/archiviste/{gateway,workers}:<git_sha>`): pass — tags use `github.sha`.
-- AC-12 step 3 (`--no-traffic`): pass — both services deployed with `--no-traffic --tag canary`.
-- AC-12 step 4 (smoke `curl -sf <canary-url>/healthz | jq -e '.status == "ok"'`): **FAIL** — `jq` parsing absent. HTTP 2xx is the only gate. See finding 3.
-- AC-12 step 5 (promote): pass — `update-traffic --to-revisions=<rev>=100` × 2, gated on `success()`.
-- AC-12 step 6 (rollback via dynamic resolution + `exit 1`): **FAIL** — uses static `PREVIOUS=100` sentinel which gcloud does not recognize. See findings 1, 2, 4. Explicit `exit 1` missing (finding 6).
-- AC-13 (runbook 3 cmds + PITR): pass — `rollback.md` lists `gcloud run revisions list`, `gcloud run services update-traffic`, `curl /healthz`, plus `gcloud sql backups` section.
+- AC-11 (WIF auth, no JSON keys): covered — lines 25-29 use `workload_identity_provider` + `service_account`. Grep contract `! grep -E "credentials_json\|GCP_SA_KEY" .github/workflows/deploy.yml` passes.
+- AC-12 step 1-2 (build + push): covered — lines 35-53, two `docker/build-push-action@v6` calls tagged with `${{ github.sha }}` pushing to `europe-west9-docker.pkg.dev/.../archiviste/{gateway,workers}`.
+- AC-12 step 3 (`gcloud run deploy --no-traffic --tag canary`): covered — lines 56-83 for both services with `latestCreatedRevisionName` captured per step output.
+- AC-12 step 4 (smoke `curl -sf <url>/healthz`): covered — line 97, plus `jq -e '.status == "ok"'` strictness which exceeds the spec literal "HTTP 2xx" (spec amended PR-c R2 fix per CHANGELOG line 12).
+- AC-12 step 5 (promote 100% on smoke OK): covered — lines 100-114.
+- AC-12 step 6 (rollback + `exit 1`): covered — lines 119-149 with dynamic revision resolution × 2 services.
+- AC-13 (rollback runbook 3 cmds + PITR): covered — `docs/runbook/rollback.md` lines 35-49 (3 numbered cmds) + lines 56-67 (PITR Cloud SQL section).
+- AC-14 (`https://archiviste.nocilia.fr/healthz` HTTP 200 post-merge): cannot be verified pre-merge — integration test deferred to first real run, matches spec "intégration end-to-end : premier run de `deploy.yml` sur merge `main`".
 
 ## Property invariants
 
-- N/A — workflow / runbook only, no property invariants from `specs/properties.md` apply.
+- N/A — `specs/properties.md` has no infra/deploy invariants. Workflow logic is procedural, not algorithmic.
 
-## Security
+## Security audit
 
-- No secrets in code — secrets referenced via `${{ secrets.* }}` (GCP_WIF_PROVIDER, GCP_SA_EMAIL, GCP_PROJECT_ID). OK.
-- No JSON service account key — confirmed by grep. WIF only. OK.
-- `permissions: id-token: write, contents: read` — minimal, correct for WIF.
-- No `verify=False`, no curl `-k` insecure flag. OK.
-- Smoke `curl` targets `*.run.app` (Cloud Run TLS terminator) — bypasses Cloudflare DNS race per plan. Acceptable.
-- `--max-time 30` on smoke curl — bounded, OK.
-- Image tags use `${{ github.sha }}` — immutable, no `:latest`. OK.
-- WIF auth uses provider + SA via secrets — no token logging risk.
-- No shell injection vector — all `${{ secrets.* }}` interpolations are into argv tokens that `gcloud` parses; no `eval`, no user-controlled input piped into shell.
+- A01 Broken Access Control: WIF condition CEL `assertion.repository == 'doudoune444/archiviste-nocilia' && assertion.ref == 'refs/heads/main'` enforced at Terraform side (PR-a); workflow `permissions: id-token: write` minimum. OK.
+- A02 Cryptographic Failures: no app-level crypto added. OK.
+- A03 Injection: `${{ secrets.* }}` interpolation in `run:` blocks is shell-injectable in principle, but values are GitHub-managed (operator-set, not user-input). Risk model: secret-setter is trusted operator. OK.
+- A09 Logging: revision names and canary URLs echoed; no secrets printed. OK.
+- A10 SSRF: smoke calls a known, deploy-pipeline-controlled Cloud Run URL — not user-supplied. OK.
+- Forbidden patterns sweep: no `unwrap`, no `verify=False`, no hardcoded creds, no wildcard CORS — N/A for YAML. OK.
+- Secret hygiene: matches `.claude/rules/secret-hygiene.md` (no inline secrets, no JSON SA key, secrets via GHA secrets context only).
 
 ## Out-of-scope changes
 
-- None. Diff touches only `.github/workflows/deploy.yml` (new), `docs/runbook/rollback.md` (finalisation per plan), `CHANGELOG.md` (entry). All listed in plan PR c "Files to touch".
-- Diff size: 144 LOC. Under 300 LOC budget. OK.
+None. Files touched (`deploy.yml`, `rollback.md`, `CHANGELOG.md`) all in plan PR-c "Files to touch" (plan.md lines 42-48). No drift.
+
+## Deploy-time observation list (post-merge first run)
+
+These are not blockers but should be visually checked the first time `deploy.yml` runs against `main`:
+
+1. `Smoke URL: <value>` log line (deploy.yml:96) — confirm non-empty. If empty, swap to `services describe` traffic-tag path.
+2. Docker push step succeeds — if not, add `docker/setup-buildx-action@v3` and/or `docker/login-action@v3`.
+3. First-run revision list returns ≥ 2 entries by the second deploy (acceptable for first-ever deploy to return only the canary).
+4. WIF token exchange step prints `Setup Workload Identity Federation` success — confirms CEL condition matches.
 
 ## Summary
 
-Two **HIGH** correctness defects directly contradicting the recently-amended spec (AC-12 step 4 JSON parsing, AC-12 step 6 dynamic revision resolution), plus a propagated copy of the broken `PREVIOUS=100` pattern in the runbook. The rollback path is non-functional as-shipped: `gcloud run services update-traffic --to-revisions=PREVIOUS=100` will error out with `Revision [PREVIOUS] not found`, meaning a failing canary cannot be automatically rolled back — the exact failure mode AC-12 step 6 was designed to handle. The smoke test gap (no `.status == "ok"` JSON check) means a gateway-up / workers-degraded build will pass smoke and promote 100%, which is the specific scenario spec line 36 calls out.
-
-Must fix before merge:
-1. Replace both `PREVIOUS=100` literals with dynamic `gcloud run revisions list --sort-by=~metadata.creationTimestamp --limit=2 | tail -1` resolution per service.
-2. Replace smoke `curl -sf` with `curl -sf ... | jq -e '.status == "ok"'`.
-3. Update `docs/runbook/rollback.md:12` to reflect dynamic resolution (matching workflow truth).
-4. Replace revision lookup `--filter='metadata.name~canary'` with `gcloud run services describe ... --format='value(status.latestCreatedRevisionName)'`.
-5. Add explicit `exit 1` at end of each rollback step (matches spec failure-mode wording).
+Three commits, 185 net +, scope clean, no HIGH findings, no secrets, no JSON keys, dynamic rollback correct, smoke composition correct, merge clean. R2 fixes verified in place. Approving with a small list of deploy-time visual checks and one MED (promote-failure rollback gap) recommended as a follow-up improvement ticket rather than a blocker.

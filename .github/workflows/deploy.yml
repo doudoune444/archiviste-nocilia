@@ -1,0 +1,149 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: build → push → canary → smoke → promote
+    runs-on: ubuntu-latest
+    env:
+      REGION: europe-west9
+      GATEWAY_SERVICE: archiviste-gateway
+      WORKERS_SERVICE: archiviste-workers
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      # AC-11: WIF auth — zero JSON key secrets, OIDC only.
+      - name: authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: configure docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # AC-12 step 1-2: build and push images tagged with git SHA.
+      - name: build and push gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: gateway
+          file: infra/docker/gateway.Dockerfile
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/gateway:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: build and push workers
+        uses: docker/build-push-action@v6
+        with:
+          context: workers
+          file: infra/docker/workers.Dockerfile
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/workers:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # AC-12 step 3: deploy canary revisions with --no-traffic.
+      - name: deploy gateway canary (no traffic)
+        id: deploy_gateway
+        run: |
+          gcloud run deploy ${{ env.GATEWAY_SERVICE }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/gateway:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --no-traffic \
+            --tag canary \
+            --quiet
+          # AC-12 step 3: resolve canary revision via latestCreatedRevisionName (tag-based
+          # substring filter on metadata.name is unreliable — Cloud Run names are random slugs).
+          echo "revision=$(gcloud run services describe ${{ env.GATEWAY_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.latestCreatedRevisionName)')" >> "$GITHUB_OUTPUT"
+
+      - name: deploy workers canary (no traffic)
+        id: deploy_workers
+        run: |
+          gcloud run deploy ${{ env.WORKERS_SERVICE }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/workers:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --no-traffic \
+            --tag canary \
+            --quiet
+          # AC-12 step 3: same canonical resolution for workers.
+          echo "revision=$(gcloud run services describe ${{ env.WORKERS_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.latestCreatedRevisionName)')" >> "$GITHUB_OUTPUT"
+
+      # AC-12 step 4: smoke test via canary revision URL (bypasses Cloudflare DNS race).
+      # MUST parse JSON .status — gateway /healthz returns HTTP 200 even when workers is
+      # degraded (cf gateway/src/handlers/health.rs); HTTP 2xx alone is not sufficient.
+      # Workers ingress=internal: not directly curl-able from GHA runner — gateway /healthz
+      # exercises workers reachability via internal service call, covering both services.
+      - name: smoke test canary gateway
+        id: smoke
+        run: |
+          CANARY_URL=$(gcloud run revisions describe ${{ steps.deploy_gateway.outputs.revision }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.url)')
+          echo "Smoke URL: ${CANARY_URL}"
+          curl -sf --max-time 30 "${CANARY_URL}/healthz" | jq -e '.status == "ok"'
+
+      # AC-12 step 5: promote 100% on smoke success.
+      - name: promote gateway to 100%
+        if: success()
+        run: |
+          gcloud run services update-traffic ${{ env.GATEWAY_SERVICE }} \
+            --to-revisions=${{ steps.deploy_gateway.outputs.revision }}=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      - name: promote workers to 100%
+        if: success()
+        run: |
+          gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
+            --to-revisions=${{ steps.deploy_workers.outputs.revision }}=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      # AC-12 step 6: rollback on smoke failure.
+      # Resolves the N-1 revision dynamically — gcloud has no "PREVIOUS" sentinel.
+      # Spec line 38/71: dynamic resolution via revisions list + exit 1 mandatory.
+      - name: rollback gateway on smoke failure
+        if: failure() && steps.smoke.conclusion == 'failure'
+        run: |
+          PREVIOUS=$(gcloud run revisions list \
+            --service=${{ env.GATEWAY_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=2 \
+            --format='value(metadata.name)' | tail -1)
+          echo "Rolling back gateway to revision: ${PREVIOUS}"
+          gcloud run services update-traffic ${{ env.GATEWAY_SERVICE }} \
+            --to-revisions="${PREVIOUS}=100" \
+            --region ${{ env.REGION }} \
+            --quiet
+          exit 1
+
+      - name: rollback workers on smoke failure
+        if: failure() && steps.smoke.conclusion == 'failure'
+        run: |
+          PREVIOUS=$(gcloud run revisions list \
+            --service=${{ env.WORKERS_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=2 \
+            --format='value(metadata.name)' | tail -1)
+          echo "Rolling back workers to revision: ${PREVIOUS}"
+          gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
+            --to-revisions="${PREVIOUS}=100" \
+            --region ${{ env.REGION }} \
+            --quiet
+          exit 1

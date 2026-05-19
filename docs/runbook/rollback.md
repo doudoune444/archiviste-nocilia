@@ -4,7 +4,25 @@ Procédure de rollback manuel après auto-rollback échoué OU bug détecté
 post-promote 100 %. Référencée par `docs/vision.md` § Cible deploy V1 beta
 et `docs/adr/0003-terraform-deferred.md` § Activation 2026-05-18.
 
-## Détection
+## Workflow auto-rollback
+
+`.github/workflows/deploy.yml` déclenche un rollback automatique si le smoke test
+`curl -sf <canary-url>/healthz | jq -e '.status == "ok"'` échoue après
+`gcloud run deploy --no-traffic --tag canary`.
+Dans ce cas le workflow :
+1. Résout la révision précédente via :
+   ```bash
+   gcloud run revisions list --service=<svc> --region=europe-west9 \
+     --sort-by=~metadata.creationTimestamp --limit=2 \
+     --format='value(metadata.name)' | tail -1
+   ```
+   (Note : il n'existe pas de sentinel `PREVIOUS` côté gcloud — la résolution dynamique
+   est obligatoire. Voir spec AC-12 step 6.)
+2. Exécute `gcloud run services update-traffic --to-revisions=<previous>=100` sur gateway ET workers.
+3. Sort avec `exit 1` (run GHA marqué failed — notification email GitHub par défaut).
+La révision défaillante reste taggée `canary` mais ne reçoit aucun trafic.
+
+## Détection (post-promote)
 
 - Cloudflare analytics : spike 5xx > 1 % sur 5 min.
 - Langfuse error rate > 5 % sur 10 min.
@@ -51,6 +69,21 @@ gcloud sql backups restore <BACKUP_ID> \
 Puis mettre à jour le secret `DATABASE_URL` dans Secret Manager pour pointer
 vers l'instance restaurée et redéployer (Cloud Run pick le nouveau secret au
 prochain cold start).
+
+## Secrets GitHub Actions requis
+
+Le workflow `deploy.yml` nécessite les 3 secrets suivants configurés dans
+**Settings → Secrets and variables → Actions** du dépôt :
+
+| Secret | Source | Description |
+|---|---|---|
+| `GCP_WIF_PROVIDER` | `terraform output wif_provider` | Provider WIF complet : `projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>` |
+| `GCP_SA_EMAIL` | `terraform output gha_deploy_sa_email` | Email du SA `gha-deploy@<project>.iam.gserviceaccount.com` |
+| `GCP_PROJECT_ID` | ID du projet GCP | Ex. `archiviste-prod-123456` |
+
+Ces valeurs sont produites par `terraform apply` (PR INFRA-002a). Sans elles,
+l'étape `authenticate to GCP via WIF` échoue avec
+`failed to generate Google Cloud access token`.
 
 ## Post-rollback
 

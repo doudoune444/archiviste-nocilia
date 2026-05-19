@@ -75,6 +75,7 @@ def oversize_payload() -> bytes:
 
 @pytest.fixture(autouse=True)
 def _silence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Kept for backward compat with optional embedder-fallback extras.
     monkeypatch.setenv("TRANSFORMERS_VERBOSITY", "error")
     monkeypatch.setenv("TOKENIZERS_PARALLELISM", "false")
 

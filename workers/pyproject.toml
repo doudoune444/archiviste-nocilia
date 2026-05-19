@@ -22,9 +22,10 @@ dependencies = [
     "langchain-mistralai>=0.2",
     "langchain-google-genai>=2.0",
     "langchain-deepseek>=0.1",
-    "sentence-transformers>=3.3",
-    "transformers>=4.45",
     "langchain-text-splitters>=0.3",
+    # transformers kept for ingest/chunker.py AutoTokenizer (bge-m3 tokenizer, no model weights).
+    # sentence-transformers (full model weights ~2 GiB) moved to optional embedder-fallback.
+    "transformers>=4.45",
     "pyyaml>=6.0",
     "google-cloud-storage>=2.18",
     "langfuse>=2.55",
@@ -49,6 +50,11 @@ dev = [
     "pip-audit>=2.7",
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",
+]
+# Fallback local embedder for V2 self-hosted scenario (cf vision.md Q7).
+# transformers already in runtime (used by chunker tokenizer); sentence-transformers adds model weights.
+embedder-fallback = [
+    "sentence-transformers>=3.3",
 ]
 
 [build-system]
@@ -105,8 +111,6 @@ module = [
     "google.cloud",
     "google.cloud.*",
     "pgvector.*",
-    "sentence_transformers",
-    "sentence_transformers.*",
     "transformers",
     "transformers.*",
     "langchain_text_splitters",

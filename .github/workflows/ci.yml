@@ -129,14 +129,6 @@ jobs:
           psql -h localhost -U postgres -d archiviste \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-      - name: restore HF Hub cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface/hub
-          key: ${{ runner.os }}-hf-hub-${{ hashFiles('workers/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-hf-hub-
-
       - name: start workers
         working-directory: workers
         env:

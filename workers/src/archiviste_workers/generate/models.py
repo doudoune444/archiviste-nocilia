@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_validator
 
 UserTier = Literal["anonymous", "members", "author_only"]
-Mode = Literal["canon"]
+Mode = Literal["canon", "off_topic"]
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 QUERY_MAX_BYTES = 4 * 1024

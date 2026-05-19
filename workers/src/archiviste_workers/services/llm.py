@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import structlog
 from langchain_anthropic import ChatAnthropic
@@ -25,6 +25,26 @@ logger = structlog.get_logger()
 
 LLM_TIMEOUT_S = 30
 _PROVIDERS = ("mistral", "anthropic", "google", "openai", "deepseek")
+
+
+@runtime_checkable
+class LlmClientProtocol(Protocol):
+    """Structural interface satisfied by LlmClient and test fakes (GEN-003 AC-4)."""
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def provider(self) -> str: ...
+
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        *,
+        timeout_s: float | None = None,
+    ) -> AIMessage:
+        """Invoke the LLM with optional timeout override."""
+        ...
 
 
 class LlmConfigError(RuntimeError):
@@ -100,9 +120,12 @@ class LlmClient:
     def provider(self) -> str:
         return self._config.provider
 
-    async def invoke(self, messages: list[BaseMessage]) -> AIMessage:
+    async def invoke(
+        self, messages: list[BaseMessage], *, timeout_s: float | None = None
+    ) -> AIMessage:
+        effective_timeout = timeout_s if timeout_s is not None else LLM_TIMEOUT_S
         try:
-            return await asyncio.wait_for(self._chat.ainvoke(messages), timeout=LLM_TIMEOUT_S)
+            return await asyncio.wait_for(self._chat.ainvoke(messages), timeout=effective_timeout)
         except TimeoutError as exc:
             raise LlmTimeoutError("llm timeout") from exc
         except Exception as exc:

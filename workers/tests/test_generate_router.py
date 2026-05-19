@@ -31,14 +31,18 @@ CONVERSATION_ID = "44444444-4444-4444-8444-444444444444"
 
 
 class _FakeLlmClient:
+    """Stub LLM client. First invoke() call = classifier (returns 'in_domain' by default).
+    Subsequent calls use the configured message/error."""
+
     def __init__(
         self,
         *,
         message: AIMessage | None = None,
         raise_timeout: bool = False,
         raise_upstream: int | None = None,
+        classifier_response: str = "in_domain",
     ) -> None:
-        self.calls: list[Any] = []
+        self.all_calls: list[list[Any]] = []
         self.captured_messages: list[Any] = []
         self._message = message or AIMessage(
             content="L'Archiviste consulte ses parchemins. [a/b.md]",
@@ -46,11 +50,19 @@ class _FakeLlmClient:
         )
         self._raise_timeout = raise_timeout
         self._raise_upstream = raise_upstream
+        self._classifier_response = classifier_response
         self.model = "mistral-small-latest"
         self.provider = "mistral"
 
-    async def invoke(self, messages: list[Any]) -> AIMessage:
+    async def invoke(self, messages: list[Any], *, timeout_s: float | None = None) -> AIMessage:
+        self.all_calls.append(messages)
         self.captured_messages = messages
+        is_classifier = timeout_s is not None and timeout_s <= 5.0
+        if is_classifier:
+            return AIMessage(
+                content=self._classifier_response,
+                usage_metadata={"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+            )
         if self._raise_timeout:
             raise LlmTimeoutError("timeout")
         if self._raise_upstream is not None:
@@ -244,7 +256,8 @@ async def test_retrieve_failure_502_no_query_log_no_llm() -> None:
         r = await client.post("/v1/generate", json=_payload())
     assert r.status_code == 502
     assert r.json() == {"error": "retrieve_failed"}
-    assert llm.captured_messages == []
+    # AC-23: classifier runs (1 call), but no generation LLM call — only 1 total invoke.
+    assert len(llm.all_calls) == 1
     app.state.query_log_repo.insert.assert_not_called()
     for http in http_clients:
         await http.aclose()
@@ -398,6 +411,55 @@ async def test_query_log_inserted_on_success(db_pool: asyncpg.Pool) -> None:
     assert row["completion_tokens"] == 50
     assert row["latency_ms"] >= 0
     assert row["cost_eur"] is not None
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM query_log WHERE request_id=$1", request_id)
+        await conn.execute("DELETE FROM conversations WHERE id=$1", conversation_id)
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_query_log_intent_in_domain_canon(db_pool: asyncpg.Pool) -> None:
+    # GEN-003 AC-2 / AC-19: query_log.intent = 'in_domain' on canon path.
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha"}]
+    llm = _FakeLlmClient(classifier_response="in_domain")
+    app, http_clients = _build_app(
+        retrieve_handler=_retrieve_handler_factory(chunks=chunks),
+        conversation_handler=_conversation_handler,
+        llm_client=llm,
+        pool=db_pool,
+    )
+    request_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    conversation_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM query_log WHERE request_id=$1", request_id)
+        await conn.execute("DELETE FROM conversations WHERE id=$1", conversation_id)
+        await conn.execute(
+            "INSERT INTO conversations (id, user_id, gcs_uri) VALUES ($1, $2, $3)",
+            conversation_id,
+            USER_ID,
+            f"gs://test/{conversation_id}.md",
+        )
+    transport = ASGITransport(app=app)
+    with capture_logs() as logs:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/v1/generate",
+                json=_payload(request_id=request_id, conversation_id=conversation_id),
+            )
+    assert r.status_code == 200
+    assert r.json()["mode"] == "canon"
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT intent, mode FROM query_log WHERE request_id=$1", request_id
+        )
+    assert row is not None
+    assert row["intent"] == "in_domain"
+    assert row["mode"] == "canon"
+    # AC-20: log INFO contains intent field.
+    generate_logs = [lg for lg in logs if lg.get("event") == "generate"]
+    assert len(generate_logs) == 1
+    assert generate_logs[0]["intent"] == "in_domain"
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM query_log WHERE request_id=$1", request_id)
         await conn.execute("DELETE FROM conversations WHERE id=$1", conversation_id)

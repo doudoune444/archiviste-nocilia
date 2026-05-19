@@ -1,4 +1,4 @@
-//! Integration tests for static file serving and security headers (UI-001).
+//! Integration tests for static file serving and security headers (UI-001 / SEC-003).
 //!
 //! AC references per criterion are noted inline.
 
@@ -50,9 +50,22 @@ const CSP_VALUE: &str = "default-src 'self'; script-src 'self'; style-src 'self'
     img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; \
     base-uri 'none'; form-action 'self'";
 
-/// Assert all 4 security headers are present with exact literal values (AC-6).
+/// Expected value of the Strict-Transport-Security header (SEC-003 AC-1 / AC-8 literal).
+const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains; preload";
+
+/// Assert all 5 security headers are present with exact literal values (AC-2, AC-8).
+///
+/// Also asserts each header name appears exactly once — no duplicates (AC-6).
 fn assert_security_headers(resp: &axum::response::Response) {
     let headers = resp.headers();
+
+    // AC-1 / SEC-003: HSTS header.
+    let hsts = headers
+        .get("strict-transport-security")
+        .expect("Strict-Transport-Security header missing")
+        .to_str()
+        .unwrap();
+    assert_eq!(hsts, HSTS_VALUE, "HSTS value mismatch");
 
     let csp = headers
         .get("content-security-policy")
@@ -84,6 +97,21 @@ fn assert_security_headers(resp: &axum::response::Response) {
         .to_str()
         .unwrap();
     assert_eq!(xfo, "DENY", "X-Frame-Options mismatch");
+
+    // AC-6: no header duplicated — each of the 5 names must appear exactly once.
+    for name in &[
+        "strict-transport-security",
+        "content-security-policy",
+        "x-content-type-options",
+        "referrer-policy",
+        "x-frame-options",
+    ] {
+        let count = headers.get_all(*name).iter().count();
+        assert_eq!(
+            count, 1,
+            "header '{name}' appears {count} times, expected 1"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +318,7 @@ fn ac7_no_inline_in_index_html() {
 // AC-17 : POST /v1/chat also carries security headers (router-level)
 // ---------------------------------------------------------------------------
 
-/// AC-17: POST /v1/chat response has all 4 security headers (router-level middleware).
+/// AC-17: POST /v1/chat response has all 5 security headers (router-level middleware).
 #[tokio::test]
 async fn ac17_chat_endpoint_has_security_headers() {
     let mut server = mockito::Server::new_async().await;
@@ -326,5 +354,103 @@ async fn ac17_chat_endpoint_has_security_headers() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_security_headers(&resp);
+}
+
+// ---------------------------------------------------------------------------
+// SEC-003 AC-3 : GET /healthz carries all 5 security headers
+// ---------------------------------------------------------------------------
+
+/// SEC-003 AC-3: GET /healthz 200 (workers up via mockito) has all 5 security headers.
+#[tokio::test]
+async fn sec003_healthz_200_has_headers() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/health")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"status":"ok"}"#)
+        .create_async()
+        .await;
+
+    let config = Config {
+        bind_addr: "127.0.0.1:0".to_string(),
+        workers_url: server.url(),
+        database_url: "postgres://test".to_string(),
+        version: "0.1.0".to_string(),
+        connect_timeout_ms: 500,
+        request_timeout_ms: 35_000,
+    };
+    let state = Arc::new(AppState::new(config).unwrap());
+    let app = router(state);
+
+    let resp = get(app, "/healthz").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_security_headers(&resp);
+}
+
+/// SEC-003 AC-3: GET /healthz workers-down (degraded 200) has all 5 security headers.
+///
+/// The healthz handler returns HTTP 200 with `"degraded"` when workers are unreachable
+/// (port 1 = always-closed). Headers must still be present on this 200 response.
+#[tokio::test]
+async fn sec003_healthz_workers_down_has_headers() {
+    // workers_url points at closed port — handler returns 200 "degraded".
+    let app = router(make_state());
+    let resp = get(app, "/healthz").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_security_headers(&resp);
+}
+
+// ---------------------------------------------------------------------------
+// SEC-003 AC-4 : POST /v1/chat body > 1 MiB → 400 carries all 5 security headers
+// ---------------------------------------------------------------------------
+
+/// SEC-003 AC-4: oversized body (> 1 MiB) → 400 response carries all 5 security headers.
+#[tokio::test]
+async fn sec003_chat_body_limit_400_has_headers() {
+    // Body of exactly 1 048 577 bytes triggers RequestBodyLimitLayer (1 MiB cap).
+    let oversized_body = vec![b'x'; 1_048_577];
+
+    let app = router(make_state());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat")
+                .header("content-type", "application/json")
+                .body(Body::from(oversized_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_security_headers(&resp);
+}
+
+// ---------------------------------------------------------------------------
+// SEC-003 AC-5 : 404 responses carry all 5 security headers
+// ---------------------------------------------------------------------------
+
+/// SEC-003 AC-5: GET /assets/inexistant.txt (`ServeDir` 404) has all 5 security headers.
+#[tokio::test]
+async fn sec003_unknown_asset_404_has_headers() {
+    let app = router(make_state());
+    let resp = get(app, "/assets/inexistant.txt").await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_security_headers(&resp);
+}
+
+/// SEC-003 AC-5: GET /chemin/inexistant (router fallback 404) has all 5 security headers.
+#[tokio::test]
+async fn sec003_unknown_route_404_has_headers() {
+    let app = router(make_state());
+    let resp = get(app, "/chemin/inexistant").await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_security_headers(&resp);
 }

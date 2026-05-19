@@ -14,7 +14,7 @@ from archiviste_workers.conversation.gcs_storage import (
 from archiviste_workers.conversation.repository import ConversationRepository
 from archiviste_workers.conversation.router import router as conversation_router
 from archiviste_workers.db import create_pool
-from archiviste_workers.embedder import Embedder
+from archiviste_workers.embedder import build_embedder
 from archiviste_workers.generate.router import router as generate_router
 from archiviste_workers.retrieve.router import router as retrieve_router
 from archiviste_workers.routers import health
@@ -44,12 +44,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gcs_storage = storage
     app.state.conversation_repo = ConversationRepository(pool)
 
-    # RET-001 AC-6: load embedder once at startup; failure leaves state=None (AC-13).
-    # Catch broad Exception: model download / OOM / file IO can surface various
-    # exception classes from sentence-transformers; we never want to crash the boot.
+    # AC-10 INFRA-002: build_embedder reads EMBEDDER_PROVIDER env (default "mistral").
+    # EMBEDDER_PROVIDER=fake → FakeEmbedder (CI offline, no API call, deterministic).
+    # EMBEDDER_PROVIDER=mistral → Embedder() with mistral-embed + MISTRAL_API_KEY.
+    # Invalid provider → ValueError raised immediately (fail-fast, not swallowed).
+    # Narrow except: only I/O errors at construction time (bad env, unreachable endpoint).
+    # Auth errors (401) surface at first call, not here.
     try:
-        app.state.embedder = Embedder(settings.embedding_model)
-    except Exception as exc:
+        app.state.embedder = build_embedder()
+    except (ValueError, OSError) as exc:
         logger.warning("embedder_unavailable", error_type=type(exc).__name__)
         app.state.embedder = None
 

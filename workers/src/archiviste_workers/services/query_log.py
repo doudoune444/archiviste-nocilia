@@ -18,6 +18,7 @@ class QueryLogRow:
     conversation_id: str | None
     query_text: str
     mode: str | None
+    intent: str | None
     status_code: int
     latency_ms: int
     prompt_tokens: int | None
@@ -34,8 +35,8 @@ class QueryLogRepository:
         INSERT INTO query_log (
             request_id, user_id, conversation_id, query_text, intent,
             mode, status_code, latency_ms, prompt_tokens, completion_tokens, cost_eur
-        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, NULL,
-                  $5, $6, $7, $8, $9, $10)
+        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5,
+                  $6, $7, $8, $9, $10, $11)
         """
         try:
             async with self._pool.acquire() as conn:
@@ -45,6 +46,7 @@ class QueryLogRepository:
                     row.user_id,
                     row.conversation_id,
                     row.query_text,
+                    row.intent,
                     row.mode,
                     row.status_code,
                     row.latency_ms,

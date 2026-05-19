@@ -30,3 +30,14 @@ variable "budget_email" {
   description = "Email address for billing budget notifications (must be a billing account admin)."
   type        = string
 }
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare account ID."
+  type        = string
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token. Scopes: Zone:Edit, DNS:Edit, Page Rules:Edit, Bot Management:Edit."
+  type        = string
+  sensitive   = true
+}

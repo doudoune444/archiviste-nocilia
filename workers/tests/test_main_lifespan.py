@@ -129,9 +129,9 @@ async def test_lifespan_fake_provider_sets_fake_embedder(
     app = FastAPI()
     try:
         async with lifespan(app):
-            assert isinstance(
-                app.state.embedder, FakeEmbedder
-            ), "Expected FakeEmbedder when EMBEDDER_PROVIDER=fake"
+            assert isinstance(app.state.embedder, FakeEmbedder), (
+                "Expected FakeEmbedder when EMBEDDER_PROVIDER=fake"
+            )
     except (OSError, ConnectionError) as exc:
         pytest.skip(f"postgres unavailable: {exc}")
 

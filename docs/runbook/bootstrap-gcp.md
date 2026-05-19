@@ -56,9 +56,11 @@ terraform apply -target=google_artifact_registry_repository.archiviste \
 `terraform.tfvars` is gitignored. Minimal example (never commit):
 
 ```hcl
-project_id      = "<PROJECT_ID>"
-billing_account = "<BILLING_ACCOUNT_ID>"
-budget_email    = "owner@example.com"
+project_id            = "<PROJECT_ID>"
+billing_account       = "<BILLING_ACCOUNT_ID>"
+budget_email          = "owner@example.com"
+cloudflare_account_id = "<CF_ACCOUNT_ID>"
+cloudflare_api_token  = "<CF_API_TOKEN>"
 ```
 
 ### 4b. Push placeholder images
@@ -119,7 +121,18 @@ Inside psql:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-## 7. Verify IAM database authentication
+## 7. Cloudflare API token
+
+Scope required: `Zone:Edit` + `DNS:Edit` + `Page Rules:Edit` + `Bot Management:Edit` on
+zones `nocilia.fr`, `nocilia.com`, `nocilia.org`, `nocilia.eu`, `nocilia.net`.
+
+Token is stored **outside Secret Manager GCP** (it's a Cloudflare provider credential, not a
+Cloud Run runtime secret). Store it as:
+
+- GitHub Actions secret `CLOUDFLARE_API_TOKEN` (for future CI Terraform plan — V2 only).
+- Local `terraform.tfvars` (gitignored) for manual `terraform apply` V1.
+
+## 8. Verify IAM database authentication
 
 Cloud Run v2 uses the integrated Cloud SQL Auth Proxy (declared via `volumes.cloud_sql_instance`
 + annotation `run.googleapis.com/cloudsql-instances`). Verify that the proxy supports IAM
@@ -136,7 +149,7 @@ If this fails with `pg_authentication_failed`, the integrated proxy may not supp
 `--auto-iam-authn` for this Cloud Run v2 configuration. In that case, raise a blocker — see
 `docs/blockers.md`. Do NOT proceed with `deploy.yml` until the connection succeeds.
 
-## 8. Verify apply
+## 9. Verify apply
 
 ```bash
 gcloud run services describe archiviste-gateway --region=europe-west9
@@ -148,7 +161,7 @@ gcloud iam service-accounts list
 gcloud billing budgets list --billing-account=<BILLING_ACCOUNT_ID>
 ```
 
-## 9. Post-apply: add GITHUB_ACTIONS_SA_WIF to GitHub Actions secrets
+## 10. Post-apply: add GITHUB_ACTIONS_SA_WIF to GitHub Actions secrets
 
 Required by `deploy.yml`:
 

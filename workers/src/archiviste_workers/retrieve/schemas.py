@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -38,6 +38,9 @@ class RetrievedChunk(BaseModel):
     ord: int
     text: str
     score: float
+    # AC-2 (GEN-005): access_tier propagated from documents.access_tier via JOIN.
+    # Strict Literal here (production schema); acl.py handles unknown values fail-closed.
+    access_tier: Literal["public", "members", "author_only"]
 
 
 class RetrieveResponse(BaseModel):

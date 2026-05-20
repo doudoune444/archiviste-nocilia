@@ -34,4 +34,5 @@ class RetrieveClient:
             raise RetrieveError(f"retrieve status {response.status_code}")
         payload = response.json()
         raw_chunks = payload.get("chunks", []) if isinstance(payload, dict) else []
+        # AC-2 (GEN-005): access_tier propagated from RetrievedChunk via Pydantic model_validate.
         return [Chunk.model_validate(item) for item in raw_chunks]

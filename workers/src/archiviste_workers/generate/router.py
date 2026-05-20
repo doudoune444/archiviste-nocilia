@@ -1,4 +1,4 @@
-"""POST /v1/generate — Mode 1 canon + Mode 2 off_topic + Mode 3 lore_gap. Internal-only."""
+"""POST /v1/generate — Modes 1-4 (canon, off_topic, lore_gap, mystery). Internal-only."""
 
 from __future__ import annotations
 
@@ -27,8 +27,10 @@ from archiviste_workers.generate.pricing import compute_cost_eur
 from archiviste_workers.generate.prompt import (
     build_lore_gap_messages,
     build_messages,
+    build_mystery_messages,
     build_off_topic_messages,
 )
+from archiviste_workers.services.acl import filter_chunks_by_tier
 from archiviste_workers.services.conversation_client import ConversationClient
 from archiviste_workers.services.intent import IntentResult, classify_intent
 from archiviste_workers.services.llm import (
@@ -171,12 +173,25 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         raise _GenerateError(502, "retrieve_failed") from exc
     retrieve_ms = int((time.perf_counter() - retrieve_started) * 1000)
 
-    # AC-2: evaluate max cosine score; if below threshold, divert to Mode 3 lore-gap.
-    max_score = max((c.score for c in chunks), default=0.0)
-    if max_score < LORE_GAP_THRESHOLD:
-        return await _run_lore_gap(ctx, intent_result, chunks=chunks, retrieve_ms=retrieve_ms)
+    # GEN-005 AC-3/AC-4: ACL post-retrieve filter — must run BEFORE max_score check.
+    acl_result = filter_chunks_by_tier(chunks, parsed.user_tier)
+    if not acl_result.visible and acl_result.blocked_count >= 1:
+        return await _run_mystery(
+            ctx, intent_result, retrieve_ms=retrieve_ms, blocked_count=acl_result.blocked_count
+        )
 
-    messages = build_messages(parsed.query, chunks, suspected_injection=bool(ctx.suspected))
+    # Use only visible chunks for downstream processing (AC-5).
+    visible_chunks = acl_result.visible
+    blocked_count = acl_result.blocked_count
+
+    # AC-2: evaluate max cosine score; if below threshold, divert to Mode 3 lore-gap.
+    max_score = max((c.score for c in visible_chunks), default=0.0)
+    if max_score < LORE_GAP_THRESHOLD:
+        return await _run_lore_gap(
+            ctx, intent_result, chunks=visible_chunks, retrieve_ms=retrieve_ms
+        )
+
+    messages = build_messages(parsed.query, visible_chunks, suspected_injection=bool(ctx.suspected))
 
     llm_started = time.perf_counter()
     try:
@@ -221,8 +236,8 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
     llm_ms = int((time.perf_counter() - llm_started) * 1000)
 
     answer = str(ai_message.content) if ai_message.content is not None else ""
-    citations = extract_citations(answer, chunks)
-    if not citations and chunks:
+    citations = extract_citations(answer, visible_chunks)
+    if not citations and visible_chunks:
         logger.warning("llm_no_citation", request_id=parsed.request_id)
 
     usage = extract_usage(ai_message, ctx.llm_client.provider)
@@ -268,6 +283,10 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         )
     )
 
+    # U-5: blocked_count kwarg added only when canon AND blocked_count > 0 (AC-18).
+    extra_log: dict[str, Any] = {}
+    if blocked_count > 0:
+        extra_log["blocked_count"] = blocked_count
     logger.info(
         "generate",
         request_id=parsed.request_id,
@@ -277,8 +296,9 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         status=200,
         retrieve_ms=retrieve_ms,
         llm_ms=llm_ms,
-        chunks=len(chunks),
+        chunks=len(visible_chunks),
         citations=len(citations),
+        **extra_log,
     )
     return GenerateResponse(
         answer=answer,
@@ -287,6 +307,137 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         conversation_id=ctx.conversation_id,
         request_id=parsed.request_id,
         usage=canon_usage,
+        retrieve_ms=retrieve_ms,
+        llm_ms=llm_ms,
+    )
+
+
+async def _run_mystery(
+    ctx: _RequestContext,
+    intent_result: IntentResult,
+    *,
+    retrieve_ms: int,
+    blocked_count: int,
+) -> GenerateResponse:
+    """Mode 4 mystery — all top-K chunks ACL-blocked; evasive LLM response (AC-4, AC-7/8).
+
+    Timing-constant: calls LLM, persists conversation (2 POST ING-003), inserts query_log.
+    No chunk content reaches the LLM — only the mystery system prompt + user query (AC-8).
+    """
+    parsed = ctx.parsed
+    mystery_messages = build_mystery_messages(parsed.query, suspected_injection=bool(ctx.suspected))
+
+    llm_started = time.perf_counter()
+    try:
+        mystery_ai = await ctx.llm_client.invoke(mystery_messages)
+    except LlmTimeoutError:
+        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
+        await ctx.query_log_repo.insert(
+            QueryLogRow(
+                request_id=parsed.request_id,
+                user_id=parsed.user_id,
+                conversation_id=ctx.conversation_id,
+                query_text=parsed.query,
+                mode="mystery",
+                intent=intent_result.intent,
+                status_code=504,
+                latency_ms=latency_ms,
+                prompt_tokens=None,
+                completion_tokens=None,
+                cost_eur=None,
+            )
+        )
+        raise _GenerateError(504, "llm_timeout") from None
+    except LlmUpstreamError as exc:
+        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
+        logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
+        await ctx.query_log_repo.insert(
+            QueryLogRow(
+                request_id=parsed.request_id,
+                user_id=parsed.user_id,
+                conversation_id=ctx.conversation_id,
+                query_text=parsed.query,
+                mode="mystery",
+                intent=intent_result.intent,
+                status_code=502,
+                latency_ms=latency_ms,
+                prompt_tokens=None,
+                completion_tokens=None,
+                cost_eur=None,
+            )
+        )
+        raise _GenerateError(502, "llm_upstream") from exc
+    llm_ms = int((time.perf_counter() - llm_started) * 1000)
+
+    answer = str(mystery_ai.content) if mystery_ai.content is not None else ""
+
+    usage_raw = extract_usage(mystery_ai, ctx.llm_client.provider)
+    cost_eur = compute_cost_eur(
+        ctx.llm_client.model, usage_raw.prompt_tokens, usage_raw.completion_tokens
+    )
+    if cost_eur is None and usage_raw.prompt_tokens is not None:
+        logger.warning("unknown_model_pricing", model=ctx.llm_client.model)
+    mystery_usage = Usage(
+        prompt_tokens=usage_raw.prompt_tokens,
+        completion_tokens=usage_raw.completion_tokens,
+        cost_eur=cost_eur,
+    )
+
+    # AC-11: persist conversation (2 sequential posts, same as canon).
+    now = datetime.now(UTC)
+    await ctx.conversation_client.append_message(
+        conversation_id=ctx.conversation_id,
+        role="user",
+        content=parsed.query,
+        timestamp=now,
+        user_id=parsed.user_id,
+    )
+    await ctx.conversation_client.append_message(
+        conversation_id=ctx.conversation_id,
+        role="assistant",
+        content=answer,
+        timestamp=datetime.now(UTC),
+        user_id=parsed.user_id,
+    )
+
+    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
+    await ctx.query_log_repo.insert(
+        QueryLogRow(
+            request_id=parsed.request_id,
+            user_id=parsed.user_id,
+            conversation_id=ctx.conversation_id,
+            query_text=parsed.query,
+            mode="mystery",
+            intent=intent_result.intent,
+            status_code=200,
+            latency_ms=latency_ms,
+            prompt_tokens=mystery_usage.prompt_tokens,
+            completion_tokens=mystery_usage.completion_tokens,
+            cost_eur=mystery_usage.cost_eur,
+        )
+    )
+
+    # AC-18: blocked_count always present for mystery (AC-18).
+    logger.info(
+        "generate",
+        request_id=parsed.request_id,
+        conversation_id=ctx.conversation_id,
+        intent=intent_result.intent,
+        mode="mystery",
+        status=200,
+        retrieve_ms=retrieve_ms,
+        llm_ms=llm_ms,
+        chunks=blocked_count,
+        citations=0,
+        blocked_count=blocked_count,
+    )
+    return GenerateResponse(
+        answer=answer,
+        citations=[],
+        mode="mystery",
+        conversation_id=ctx.conversation_id,
+        request_id=parsed.request_id,
+        usage=mystery_usage,
         retrieve_ms=retrieve_ms,
         llm_ms=llm_ms,
     )

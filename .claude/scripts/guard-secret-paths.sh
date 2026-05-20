@@ -10,6 +10,11 @@ path="${CLAUDE_TOOL_INPUT_file_path:-}"
 # Normalize to lowercase for matching (Windows path-insensitive).
 lc=$(echo "$path" | tr '[:upper:]' '[:lower:]')
 
+# Whitelist: example/template files explicitly allowed by secret-hygiene.md.
+case "$lc" in
+  *.env.example|*.env.sample|*.env.template) exit 0 ;;
+esac
+
 forbidden_patterns=(
   '\.env$'
   '\.env\.[^/]+$'

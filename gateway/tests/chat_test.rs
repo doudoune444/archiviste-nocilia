@@ -4,6 +4,9 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod common;
+use common::jwt_helpers::test_public_key_pem;
+
 use archiviste_gateway::{config::Config, router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -21,6 +24,7 @@ fn make_state(workers_url: &str) -> Arc<AppState> {
         bind_addr: "127.0.0.1:0".to_string(),
         workers_url: workers_url.to_string(),
         database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,
@@ -38,6 +42,7 @@ fn make_state_with_short_timeout(workers_url: &str) -> Arc<AppState> {
         bind_addr: "127.0.0.1:0".to_string(),
         workers_url: workers_url.to_string(),
         database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 50,
         request_timeout_ms: 500,
@@ -311,11 +316,17 @@ async fn ac3_ac4_workers_body_and_headers() {
         workers_body["conversation_id"],
         "550e8400-e29b-41d4-a716-446655440000"
     );
-    assert_eq!(
-        workers_body["user_id"],
-        "00000000-0000-0000-0000-000000000000"
+    // SEC-001 AC-14: user_id and user_tier are propagated via X-User-Tier / X-User-Id
+    // outbound headers, NOT in the JSON body (plan line 24 "au lieu de user_id/user_tier
+    // dans le JSON body"). Assert the fields are absent from the body.
+    assert!(
+        workers_body.get("user_id").is_none(),
+        "user_id must NOT appear in workers JSON body (use X-User-Id header instead)"
     );
-    assert_eq!(workers_body["user_tier"], "anonymous");
+    assert!(
+        workers_body.get("user_tier").is_none(),
+        "user_tier must NOT appear in workers JSON body (use X-User-Tier header instead)"
+    );
     assert!(workers_body["request_id"].as_str().is_some());
     assert_eq!(workers_body["request_id"], response_request_id);
 
@@ -558,5 +569,58 @@ async fn ac14_single_http_client_in_state() {
     assert_eq!(
         client_ptr, client_ptr_after,
         "Client pointer changed — a new Client was created between requests"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SEC-001 AC-14 : X-User-Tier and X-User-Id headers forwarded to workers
+// ---------------------------------------------------------------------------
+
+/// SEC-001 AC-14 (a): anonymous request → workers receive X-User-Tier=anonymous
+/// and X-User-Id=<uuidv5-fingerprint>.
+#[tokio::test]
+async fn sec001_ac14a_anonymous_headers_forwarded_to_workers() {
+    use std::sync::{Arc as StdArc, Mutex};
+
+    let captured_tier: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+    let captured_uid: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+
+    let mut server = mockito::Server::new_async().await;
+    let tier_cap = StdArc::clone(&captured_tier);
+    let uid_cap = StdArc::clone(&captured_uid);
+
+    let _mock = server
+        .mock("POST", "/v1/generate")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body_from_request(move |req| {
+            if let Some(t) = req.header("x-user-tier").first() {
+                *tier_cap.lock().unwrap() = Some(t.to_str().unwrap_or("").to_string());
+            }
+            if let Some(u) = req.header("x-user-id").first() {
+                *uid_cap.lock().unwrap() = Some(u.to_str().unwrap_or("").to_string());
+            }
+            r#"{"answer":"ok","citations":[]}"#.into()
+        })
+        .create_async()
+        .await;
+
+    let app = router(make_state(&server.url()));
+    let resp = post_chat(app, r#"{"query":"hello"}"#).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // SEC-001 AC-14 (a): anonymous caller → tier=anonymous, user_id=uuid5 fingerprint
+    let tier = captured_tier.lock().unwrap().clone().unwrap_or_default();
+    assert_eq!(
+        tier, "anonymous",
+        "X-User-Tier must be anonymous for unauthenticated caller"
+    );
+
+    let uid = captured_uid.lock().unwrap().clone().unwrap_or_default();
+    assert_eq!(uid.len(), 36, "X-User-Id must be a UUID");
+    // UUIDv5 from fingerprint (not the old sentinel 00000000-...)
+    assert_ne!(
+        uid, "00000000-0000-0000-0000-000000000000",
+        "X-User-Id must not be the old sentinel"
     );
 }

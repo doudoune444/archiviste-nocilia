@@ -2,8 +2,10 @@
 //!
 //! Exposes the public REST API and proxies internal calls to the workers tier.
 
+pub mod auth;
 pub mod config;
 pub mod handlers;
+pub mod routes;
 pub mod state;
 
 use anyhow::Result;
@@ -12,11 +14,12 @@ use axum::{
     http::{HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use serde::Serialize;
-use std::sync::Arc;
+use serde_json::json;
+use std::{net::SocketAddr, sync::Arc};
 use tower_http::{
     limit::RequestBodyLimitLayer,
     services::{ServeDir, ServeFile},
@@ -25,7 +28,18 @@ use tower_http::{
 };
 use uuid::Uuid;
 
-use crate::{config::Config, state::AppState};
+use crate::{
+    auth::{
+        extractor::{AnonIdentity, UserTier},
+        fingerprint::{
+            compute_fingerprint, extract_ip, extract_user_agent, fingerprint_to_user_id,
+            parse_anon_cookie, ANON_COOKIE_NAME,
+        },
+        jwt,
+    },
+    config::Config,
+    state::AppState,
+};
 
 // ---------------------------------------------------------------------------
 // Request-id middleware (R2)
@@ -46,6 +60,201 @@ async fn attach_request_id(mut req: Request, next: Next) -> Response {
     let id = Uuid::new_v4().to_string();
     req.extensions_mut().insert(RequestId(id));
     next.run(req).await
+}
+
+// ---------------------------------------------------------------------------
+// Anonymous identity middleware (AC-9, AC-10)
+// ---------------------------------------------------------------------------
+
+/// Middleware: resolve caller identity (authenticated member/author via JWT,
+/// or anonymous via fingerprint).
+///
+/// Attaches `AnonIdentity` extension for all requests.  Also sets the
+/// `archiviste_anon` cookie on the response if the caller is anonymous
+/// and the cookie was absent from the request.
+///
+/// Fail-closed (HIGH-2 / security.md §A07): if the caller presented a
+/// Bearer/session token AND the DB is unavailable, the middleware short-circuits
+/// with 503 `upstream_unavailable` rather than silently downgrading to anonymous.
+/// Only unauthenticated paths (no token) continue to the anonymous fingerprint branch.
+async fn resolve_identity(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let headers = req.headers().clone();
+
+    // Attempt JWT authentication — fail-closed if DB unreachable with a token present.
+    let jwt_result = try_authenticate_jwt(&headers, &state).await;
+
+    // Propagate 503 when JWT was present but session DB was unavailable (HIGH-2).
+    let maybe_auth = match jwt_result {
+        Err(JwtAuthError::DbUnavailable) => {
+            return build_service_unavailable();
+        }
+        Ok(auth) => auth,
+    };
+
+    let anon_cookie_to_set = if maybe_auth.is_none() {
+        // Anonymous path: read or generate archiviste_anon cookie.
+        let existing = parse_anon_cookie(&headers);
+        if existing.is_none() {
+            Some(Uuid::new_v4().to_string())
+        } else {
+            None // cookie already exists, no need to set it
+        }
+    } else {
+        None
+    };
+
+    let identity = if let Some(auth) = maybe_auth {
+        // Authenticated member or author.
+        AnonIdentity {
+            user_id: auth.user_id,
+            tier: auth.tier,
+            fingerprint: None,
+        }
+    } else {
+        // Anonymous: compute fingerprint from IP + UA + anon cookie.
+        let anon_id = parse_anon_cookie(&headers)
+            .or_else(|| anon_cookie_to_set.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        // ConnectInfo is not available in `oneshot` tests (no TCP socket).
+        let connect_info: Option<SocketAddr> = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0);
+
+        let ip = extract_ip(&headers, connect_info.as_ref());
+        let ua = extract_user_agent(&headers);
+        let fp = compute_fingerprint(&ip, ua, &anon_id);
+        let user_id = fingerprint_to_user_id(&fp);
+
+        AnonIdentity {
+            user_id,
+            tier: UserTier::Anonymous,
+            fingerprint: Some(fp),
+        }
+    };
+
+    req.extensions_mut().insert(identity);
+
+    let mut resp = next.run(req).await;
+
+    // Set archiviste_anon cookie if this is a new anonymous visitor (AC-10).
+    if let Some(new_cookie_val) = anon_cookie_to_set {
+        let cookie_str = format!(
+            "{ANON_COOKIE_NAME}={new_cookie_val}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=31536000"
+        );
+        if let Ok(hv) = HeaderValue::from_str(&cookie_str) {
+            // Append (not insert) to preserve coexistence with other Set-Cookie headers
+            // that may be added by future auth flows (e.g. PR-b login sets archiviste_session).
+            resp.headers_mut().append("set-cookie", hv);
+        }
+    }
+
+    resp
+}
+
+/// Internal error discriminator for `try_authenticate_jwt`.
+///
+/// Separates "no token / invalid token → go anonymous" from
+/// "token present but DB down → fail-closed 503" (HIGH-2).
+enum JwtAuthError {
+    /// The session DB was unavailable while a structurally valid token was present.
+    ///
+    /// Caller MUST short-circuit with 503 — do not fall through to anonymous (security.md §A07).
+    DbUnavailable,
+}
+
+/// Attempt to authenticate the request via JWT.
+///
+/// Returns `Ok(Some(auth))` if a valid, non-revoked JWT is present.
+/// Returns `Ok(None)` if no JWT is present or it is invalid (anonymous fallback).
+/// Returns `Err(JwtAuthError::DbUnavailable)` if a structurally valid JWT was
+/// present but the session DB was unreachable — caller must respond 503 (HIGH-2).
+async fn try_authenticate_jwt(
+    headers: &axum::http::HeaderMap,
+    state: &Arc<AppState>,
+) -> Result<Option<crate::auth::extractor::AuthUser>, JwtAuthError> {
+    use crate::auth::{extractor::AuthUser, sessions, sessions::SessionError};
+
+    // If no token is present, caller is anonymous — not an error.
+    let Some(token) = extract_session_token(headers) else {
+        return Ok(None);
+    };
+
+    // Invalid JWT (bad sig, wrong alg, expired…) → anonymous, not an error.
+    let Ok(claims) = jwt::verify(&token, &state.config.jwt_ed25519_public_key_pem) else {
+        return Ok(None);
+    };
+
+    let Ok(user_id) = Uuid::parse_str(&claims.sub) else {
+        return Ok(None);
+    };
+    let Ok(sid) = Uuid::parse_str(&claims.sid) else {
+        return Ok(None);
+    };
+    let Some(tier) = UserTier::from_claim(&claims.tier) else {
+        return Ok(None);
+    };
+
+    // AC-13: server-side session check.
+    // If no pool is configured (test env), skip the check — session is assumed valid.
+    // In production, absence of a pool is caught at boot via `run()` → panic.
+    let Some(pool) = state.db_pool.as_ref() else {
+        // Test path: no DB available, treat as valid session (AC-13 tested in PR-b).
+        return Ok(Some(AuthUser { user_id, tier, sid }));
+    };
+
+    match sessions::check_session(pool, sid).await {
+        Ok(()) => {}
+        Err(SessionError::Revoked) => return Ok(None),
+        // Token was present and structurally valid, but DB is down → fail-closed 503 (HIGH-2).
+        Err(SessionError::Unavailable) => return Err(JwtAuthError::DbUnavailable),
+    }
+
+    Ok(Some(AuthUser { user_id, tier, sid }))
+}
+
+/// Build a 503 `upstream_unavailable` response for the fail-closed DB path (HIGH-2).
+fn build_service_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        )],
+        Json(json!({
+            "error": "upstream_unavailable",
+        })),
+    )
+        .into_response()
+}
+
+/// Extract session token from cookie (`archiviste_session`) or `Authorization` header.
+///
+/// Cookie takes priority over Authorization header (D-6).
+fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(cookie_header) = headers.get(axum::http::header::COOKIE) {
+        if let Ok(s) = cookie_header.to_str() {
+            for part in s.split(';') {
+                let part = part.trim();
+                if let Some(val) = part.strip_prefix("archiviste_session=") {
+                    if !val.is_empty() {
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    auth.strip_prefix("Bearer ").map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +318,7 @@ const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains; preload";
 pub fn router(state: Arc<AppState>) -> Router {
     // `/v1/chat` sub-router with body limit + error-handler middleware.
     let chat_router = Router::new()
-        .route("/v1/chat", post(handlers::chat::chat))
+        .route("/v1/chat", axum::routing::post(handlers::chat::chat))
         .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB (AC-7)
         .layer(middleware::from_fn(handle_body_limit_error));
 
@@ -119,11 +328,27 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route_service("/", ServeFile::new("static/index.html"))
         .nest_service("/assets", ServeDir::new("static/assets"));
 
+    // Public API routes (AC-11: marker #[public] — all handlers accept anonymous).
+    let public_api = Router::new().route("/v1/me", get(routes::me::me));
+
+    // Author-gated test route (AC-16 contract test).
+    // Debug builds only — never compiled into release binaries. `security.md` §A05.
+    #[cfg(debug_assertions)]
+    let test_routes = Router::new().route("/v1/author-test", get(author_test_handler));
+    #[cfg(not(debug_assertions))]
+    let test_routes = Router::<Arc<AppState>>::new();
+
     // Root router: merge API + static, then apply global security headers (AC-6).
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
         .merge(chat_router)
+        .merge(public_api)
+        .merge(test_routes)
         .merge(static_router)
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            resolve_identity,
+        ))
         .layer(middleware::from_fn(attach_request_id))
         .with_state(state)
         // SEC-003 / AC-1 / A02: 5 security headers applied router-wide (static + API).
@@ -150,6 +375,23 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(TraceLayer::new_for_http())
 }
 
+// ---------------------------------------------------------------------------
+// Test-only: author-gated handler (AC-16)
+// ---------------------------------------------------------------------------
+
+/// Handler only accessible to `author` tier.  Used by `auth_extractor_test.rs`
+/// to exercise the `RequireAuthor` extractor (AC-16).
+/// Only compiled in debug builds — not in release.
+#[cfg(debug_assertions)]
+async fn author_test_handler(
+    auth: Result<crate::auth::extractor::RequireAuthor, crate::auth::extractor::AuthError>,
+) -> Response {
+    match auth {
+        Ok(_) => (StatusCode::OK, "author ok").into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 /// Bind to `config.bind_addr` and serve the gateway router until shutdown.
 ///
 /// # Errors
@@ -158,7 +400,14 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// cannot bind, or the Axum server exits with an error.
 pub async fn run(config: Config) -> Result<()> {
     let addr = config.bind_addr.clone();
-    let state = Arc::new(AppState::new(config)?);
+
+    // Production: connect to Postgres and verify the public key loads.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&config.database_url)
+        .await?;
+
+    let state = Arc::new(AppState::new_with_pool(config, pool)?);
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

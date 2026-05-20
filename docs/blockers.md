@@ -20,6 +20,17 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-05-20 — SEC-001 — sessions.rs: `sqlx::query_as` runtime violates security.md §A03 (compile-checked SQL macro required)
+
+- File: `gateway/src/auth/sessions.rs:50`
+- Symptom: `sqlx::query_as(r"SELECT ... FROM sessions WHERE id = $1")` uses the runtime variant, bypassing compile-time SQL type checking. `security.md §A03` mandates `sqlx::query_as!` macro. The existing comment "without requiring offline cache" makes the workaround explicit.
+- Why blocked: `sqlx::query_as!` macro requires `cargo sqlx prepare` which needs a live PostgreSQL instance with the schema applied. This cannot run in the current dev/CI environment without a running DB. Converting without running `cargo sqlx prepare` would produce a compile error (`DATABASE_URL` not set for compile-time check, or missing `.sqlx/` cache).
+- Suggested resolution:
+  1. Set up a local PostgreSQL instance, apply migrations (`migrations/run.sh`), run `cargo sqlx prepare --manifest-path gateway/Cargo.toml`, commit the generated `.sqlx/` directory, then convert `sqlx::query_as` → `sqlx::query_as!` in `sessions.rs:50`.
+  2. Alternatively, use `sqlx::query_as_unchecked!` as a transitional step (still macro, but no compile-time schema check) — acceptable only if annotated with a `// TODO: upgrade to query_as! once .sqlx/ cache is generated` comment.
+  3. A CI job running `cargo sqlx prepare --check` against the postgres service container would prevent future regressions.
+- Status: open — awaiting human to provide DB environment for `cargo sqlx prepare`
+
 ## 2026-05-18 — INFRA-002 — PR-d: `transformers` cannot be dropped from runtime while `chunker.py` imports `AutoTokenizer`
 
 - File : `workers/src/archiviste_workers/ingest/chunker.py:8`

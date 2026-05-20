@@ -24,6 +24,9 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **GEN-004b**: Mode 3 lore-gap pipeline — after retrieve, `max_score < 0.45` branches to zero-shot LLM « noté pour archives » response; ticket auto-created/incremented via cosine dedup; fail-soft on ticket/embed/db errors (200 OK preserved); `query_log.mode='lore_gap'`; log INFO extended with `top_score` + `ticket_action`.
+- **GEN-004a**: migration `0004_tickets_embedding.sql` — `tickets.question_embedding vector(1024) NULL` + HNSW partial index + B-tree indexes `tickets_conversation_id_idx` and `tickets_status_priority_idx`; `ticket_service.create_or_increment` with cosine dedup threshold 0.85 and fail-soft error handling (embed/db failures return `skipped_error` + log ALERT, never block 200 response).
+
 - **GEN-003**: Mode 2 off_topic — intent classifier (LLM zero-shot, fail-open canon) + branche refus poli in-world ; `query_log.intent` renseigné (`'in_domain'` ou `'off_topic'`) ; timeout dédié 5 s classifier ; agrégation usage/cost des deux appels LLM.
 
 - **EVAL-001 (review fixes pass 2 — HIGH-A, HIGH-B, MED)**: Fix CI workflow — apply migrations via official `migrations/run.sh` before seed, export `DATABASE_URL` at seed step, add `LLM_PROVIDER/LLM_MODEL/LLM_API_KEY=ci-placeholder` to workers offline (offline eval uses `/v1/retrieve` only — no real LLM call); fix seed corpus tautology — lore-dummy narrative texts with keywords embedded in context + hash-based pseudo-embeddings (SHA-256, 1024-dim L2-normalised, non-zero, differentiated); document `keyword_overlap_rate` offline as plumbing/integration check in README; fix redaction property test — sentinels injected into `entry.answer`/`entry.citations` (serialised fields), positive assertion on `[REDACTED]` present. Tests: 55/55 green (+9 new seed corpus tests).

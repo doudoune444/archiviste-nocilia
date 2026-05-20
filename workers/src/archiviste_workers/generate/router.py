@@ -1,4 +1,4 @@
-"""POST /v1/generate — Mode 1 canon + Mode 2 off_topic (GEN-001/GEN-003). Internal-only."""
+"""POST /v1/generate — Mode 1 canon + Mode 2 off_topic + Mode 3 lore_gap. Internal-only."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from archiviste_workers.generate.injection_filter import detect_injection
 from archiviste_workers.generate.models import (
+    LORE_GAP_THRESHOLD,
     GenerateRequest,
     GenerateResponse,
     Usage,
@@ -23,7 +24,11 @@ from archiviste_workers.generate.models import (
 )
 from archiviste_workers.generate.parser import extract_citations
 from archiviste_workers.generate.pricing import compute_cost_eur
-from archiviste_workers.generate.prompt import build_messages, build_off_topic_messages
+from archiviste_workers.generate.prompt import (
+    build_lore_gap_messages,
+    build_messages,
+    build_off_topic_messages,
+)
 from archiviste_workers.services.conversation_client import ConversationClient
 from archiviste_workers.services.intent import IntentResult, classify_intent
 from archiviste_workers.services.llm import (
@@ -34,6 +39,7 @@ from archiviste_workers.services.llm import (
 )
 from archiviste_workers.services.query_log import QueryLogRepository, QueryLogRow
 from archiviste_workers.services.retrieve_client import RetrieveClient, RetrieveError
+from archiviste_workers.services.ticket_service import TicketResult, create_or_increment
 
 router = APIRouter(prefix="/v1", tags=["generate"])
 logger = structlog.get_logger()
@@ -97,6 +103,8 @@ class _RequestContext:
     llm_client: LlmClient
     conversation_client: ConversationClient
     query_log_repo: QueryLogRepository
+    db_pool: Any  # asyncpg.Pool — typed as Any to avoid hard import in dataclass
+    embedder: Any  # Embedder | FakeEmbedder — typed as Any (protocol-compatible)
     started: float
 
 
@@ -128,6 +136,8 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
         llm_client=request.app.state.llm_client,
         conversation_client=request.app.state.conversation_client,
         query_log_repo=request.app.state.query_log_repo,
+        db_pool=getattr(request.app.state, "db_pool", None),
+        embedder=getattr(request.app.state, "embedder", None),
         started=time.perf_counter(),
     )
 
@@ -145,7 +155,7 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
 
 
 async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> GenerateResponse:
-    """Pipeline canon (Mode 1 — retrieve → LLM → parse → log)."""
+    """Pipeline canon/lore_gap (Mode 1 or 3 — retrieve → score branch → LLM → log)."""
     parsed = ctx.parsed
 
     retrieve_started = time.perf_counter()
@@ -160,6 +170,11 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         logger.error("retrieve_failed", request_id=parsed.request_id, error=str(exc))
         raise _GenerateError(502, "retrieve_failed") from exc
     retrieve_ms = int((time.perf_counter() - retrieve_started) * 1000)
+
+    # AC-2: evaluate max cosine score; if below threshold, divert to Mode 3 lore-gap.
+    max_score = max((c.score for c in chunks), default=0.0)
+    if max_score < LORE_GAP_THRESHOLD:
+        return await _run_lore_gap(ctx, intent_result, chunks=chunks, retrieve_ms=retrieve_ms)
 
     messages = build_messages(parsed.query, chunks, suspected_injection=bool(ctx.suspected))
 
@@ -272,6 +287,170 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         conversation_id=ctx.conversation_id,
         request_id=parsed.request_id,
         usage=canon_usage,
+        retrieve_ms=retrieve_ms,
+        llm_ms=llm_ms,
+    )
+
+
+async def _run_lore_gap(
+    ctx: _RequestContext,
+    intent_result: IntentResult,
+    *,
+    chunks: list[Any],
+    retrieve_ms: int,
+) -> GenerateResponse:
+    """Mode 3 lore_gap — noté pour archives, no lore chunks injected (AC-3/AC-5)."""
+    parsed = ctx.parsed
+    max_score = max((c.score for c in chunks), default=0.0)
+
+    # AC-5: build_lore_gap_messages — no chunks, only the raw query.
+    lore_gap_messages = build_lore_gap_messages(
+        parsed.query, suspected_injection=bool(ctx.suspected)
+    )
+
+    llm_started = time.perf_counter()
+    try:
+        lore_gap_ai = await ctx.llm_client.invoke(lore_gap_messages)
+    except LlmTimeoutError:
+        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
+        # AC-13: only classifier tokens; ticket NOT created.
+        await ctx.query_log_repo.insert(
+            QueryLogRow(
+                request_id=parsed.request_id,
+                user_id=parsed.user_id,
+                conversation_id=ctx.conversation_id,
+                query_text=parsed.query,
+                mode="lore_gap",
+                intent=intent_result.intent,
+                status_code=504,
+                latency_ms=latency_ms,
+                prompt_tokens=intent_result.prompt_tokens,
+                completion_tokens=intent_result.completion_tokens,
+                cost_eur=intent_result.cost_eur,
+            )
+        )
+        raise _GenerateError(504, "llm_timeout") from None
+    except LlmUpstreamError as exc:
+        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
+        logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
+        # AC-14: only classifier tokens; ticket NOT created.
+        await ctx.query_log_repo.insert(
+            QueryLogRow(
+                request_id=parsed.request_id,
+                user_id=parsed.user_id,
+                conversation_id=ctx.conversation_id,
+                query_text=parsed.query,
+                mode="lore_gap",
+                intent=intent_result.intent,
+                status_code=502,
+                latency_ms=latency_ms,
+                prompt_tokens=intent_result.prompt_tokens,
+                completion_tokens=intent_result.completion_tokens,
+                cost_eur=intent_result.cost_eur,
+            )
+        )
+        raise _GenerateError(502, "llm_upstream") from exc
+    llm_ms = intent_result.latency_ms + int((time.perf_counter() - llm_started) * 1000)
+
+    answer = str(lore_gap_ai.content) if lore_gap_ai.content is not None else ""
+
+    # AC-7: aggregate usage from classifier + lore_gap LLM.
+    lore_raw_usage = extract_usage(lore_gap_ai, ctx.llm_client.provider)
+    lore_cost = compute_cost_eur(
+        ctx.llm_client.model,
+        lore_raw_usage.prompt_tokens,
+        lore_raw_usage.completion_tokens,
+    )
+    combined_prompt = _add_optional(intent_result.prompt_tokens, lore_raw_usage.prompt_tokens)
+    combined_completion = _add_optional(
+        intent_result.completion_tokens, lore_raw_usage.completion_tokens
+    )
+    combined_cost = _add_decimal_optional(intent_result.cost_eur, lore_cost)
+    if combined_cost is None and combined_prompt is not None:
+        logger.warning("unknown_model_pricing", model=ctx.llm_client.model)
+
+    lore_gap_usage = Usage(
+        prompt_tokens=combined_prompt,
+        completion_tokens=combined_completion,
+        cost_eur=combined_cost,
+    )
+
+    # AC-8: persist conversation (2 sequential posts: user then assistant).
+    now = datetime.now(UTC)
+    user_result = await ctx.conversation_client.append_message(
+        conversation_id=ctx.conversation_id,
+        role="user",
+        content=parsed.query,
+        timestamp=now,
+        user_id=parsed.user_id,
+    )
+    asst_result = await ctx.conversation_client.append_message(
+        conversation_id=ctx.conversation_id,
+        role="assistant",
+        content=answer,
+        timestamp=datetime.now(UTC),
+        user_id=parsed.user_id,
+    )
+    conversation_logged = user_result.ok and asst_result.ok
+
+    # AC-9: ticket_service AFTER ING-003. If ING-003 failed, skip ticket (FK safety, D4).
+    ticket_action = "skipped_error"
+    if conversation_logged and ctx.db_pool is not None and ctx.embedder is not None:
+        ticket_result: TicketResult = await create_or_increment(
+            ctx.db_pool,
+            ctx.embedder,
+            conversation_id=ctx.conversation_id,
+            # AC-12: store raw query (no prefix) in tickets.question.
+            question=parsed.query,
+            request_id=parsed.request_id,
+        )
+        ticket_action = ticket_result.action
+    elif not conversation_logged:
+        logger.warning(
+            "ticket_service_skipped_after_conversation_log_failed",
+            request_id=parsed.request_id,
+        )
+
+    # AC-11: INSERT query_log.
+    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
+    await ctx.query_log_repo.insert(
+        QueryLogRow(
+            request_id=parsed.request_id,
+            user_id=parsed.user_id,
+            conversation_id=ctx.conversation_id,
+            query_text=parsed.query,
+            mode="lore_gap",
+            intent=intent_result.intent,
+            status_code=200,
+            latency_ms=latency_ms,
+            prompt_tokens=lore_gap_usage.prompt_tokens,
+            completion_tokens=lore_gap_usage.completion_tokens,
+            cost_eur=lore_gap_usage.cost_eur,
+        )
+    )
+
+    # AC-18: log INFO with top_score + ticket_action + chunks + citations=0.
+    logger.info(
+        "generate",
+        request_id=parsed.request_id,
+        conversation_id=ctx.conversation_id,
+        intent=intent_result.intent,
+        mode="lore_gap",
+        status=200,
+        retrieve_ms=retrieve_ms,
+        llm_ms=llm_ms,
+        chunks=len(chunks),
+        citations=0,
+        top_score=round(max_score, 4),
+        ticket_action=ticket_action,
+    )
+    return GenerateResponse(
+        answer=answer,
+        citations=[],
+        mode="lore_gap",
+        conversation_id=ctx.conversation_id,
+        request_id=parsed.request_id,
+        usage=lore_gap_usage,
         retrieve_ms=retrieve_ms,
         llm_ms=llm_ms,
     )

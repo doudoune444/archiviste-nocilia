@@ -54,3 +54,29 @@ def build_off_topic_messages(query: str, suspected_injection: bool) -> list[Base
         SystemMessage(content=OFF_TOPIC_SYSTEM_PROMPT),
         HumanMessage(content=f"{prefix}{query}"),
     ]
+
+
+# AC-3/AC-4: lore-gap system prompt — figé byte-for-byte (GEN-004 AC-4).
+# Contains 6 required clauses verified by test_mode3_lore_gap.py::test_lore_gap_system_prompt_*.
+LORE_GAP_SYSTEM_PROMPT = (
+    "Tu es l'Archiviste de Nocilia, gardien des écrits de l'univers. "
+    "La question posée est in-domain mais les archives sont muettes — "
+    "elles sont lacunaires sur ce sujet. "
+    "Réponds sobrement, sans inventer de faits absents des archives. "
+    "Informe l'utilisateur que sa question est notée pour les archives et sera examinée. "
+    "Tu ne romps jamais le character. "
+    "Réponds dans la langue de la question."
+)
+
+
+def build_lore_gap_messages(query: str, suspected_injection: bool) -> list[BaseMessage]:
+    """Return [SystemMessage, HumanMessage] for lore-gap generation (AC-5).
+
+    No lore chunks are injected — the retrieved context is irrelevant on this branch
+    and omitting it closes the prompt-injection surface W-I-1 (security.md RAG-specific).
+    """
+    prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
+    return [
+        SystemMessage(content=LORE_GAP_SYSTEM_PROMPT),
+        HumanMessage(content=f"{prefix}{query}"),
+    ]

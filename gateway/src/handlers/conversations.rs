@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     Json,
 };
 use chrono::Utc;
@@ -19,6 +19,7 @@ use crate::{
     errors::ApiError,
     gcs::sign,
     state::AppState,
+    RequestId,
 };
 
 /// Minimal row from `conversations` table: only `gcs_uri` needed.
@@ -40,17 +41,21 @@ pub struct SignedUrlResponse {
 
 /// Handler: `GET /v1/conversations/{id}/signed-url` — author-gated GCS signed URL (AC-8..AC-10).
 ///
+/// Uses `RequireAuthor` directly (without `Result<>`) so that Axum lets
+/// `AuthError::IntoResponse` produce the correct status codes:
+/// `InvalidToken`/`SessionRevoked` → 401, `Upstream` → 503, `AuthorRequired` → 403.
+///
 /// # Errors
-/// `ApiError::AuthorRequired` if caller is not `author` (AC-10 sub-case c).
+/// Extractor rejection if caller is not `author` or JWT invalid (AC-10 sub-case c, SEC-001 AC-12).
 /// `ApiError::ConversationNotFound` if no row matches `id` (AC-10 sub-case a).
 /// `ApiError::UpstreamUnavailable` if DB or GCS signing fails (Failure modes).
 pub async fn signed_url(
-    author: Result<RequireAuthor, crate::auth::extractor::AuthError>,
+    author: RequireAuthor,
+    Extension(req_id): Extension<RequestId>,
     Path(conversation_id): Path<Uuid>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SignedUrlResponse>, ApiError> {
-    // AC-10 sub-case c: author gate — 403 byte-for-byte AC-2 envelope.
-    let author = author.map_err(|_| ApiError::AuthorRequired)?;
+    let request_id = &req_id.0;
 
     let pool = state
         .db_pool
@@ -89,6 +94,7 @@ pub async fn signed_url(
         // Failure mode: SA signing failed — warn log (AC-23), key details never surfaced.
         tracing::warn!(
             event = "dashboard.signing_failed",
+            request_id = %request_id,
             user_id = %author.0.user_id,
             reason = %e,
         );
@@ -103,6 +109,7 @@ pub async fn signed_url(
     // AC-23: structured log — never log signed_url, gcs_uri (security.md §A09).
     tracing::info!(
         event = "dashboard.conversation.signed_url",
+        request_id = %request_id,
         user_id = %author.0.user_id,
         tier = UserTier::Author.as_str(),
         latency_ms,

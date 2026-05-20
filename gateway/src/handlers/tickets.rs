@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -19,6 +19,7 @@ use crate::{
     auth::extractor::{RequireAuthor, UserTier},
     errors::ApiError,
     state::AppState,
+    RequestId,
 };
 
 /// Query params for `GET /v1/tickets` (AC-5, AC-7).
@@ -85,17 +86,22 @@ struct CountRow {
 
 /// Handler: `GET /v1/tickets` — author-gated, paginated open tickets (AC-5, AC-6, AC-7).
 ///
+/// Uses `RequireAuthor` directly (without `Result<>`) so that Axum lets
+/// `AuthError::IntoResponse` produce the correct status codes:
+/// `InvalidToken`/`SessionRevoked` → 401, `Upstream` → 503, `AuthorRequired` → 403.
+/// This preserves the SEC-001 AC-12 contract and the UI-002 failure-mode contract.
+///
 /// # Errors
-/// `ApiError::AuthorRequired` if caller is not `author` (AC-6).
+/// Extractor rejection if caller is not `author` or JWT invalid (AC-6, SEC-001 AC-12).
 /// `ApiError::InvalidRequest` if `limit`/`offset` are out of range (AC-7).
 /// `ApiError::UpstreamUnavailable` if DB is unreachable (Failure modes).
 pub async fn list_tickets(
-    author: Result<RequireAuthor, crate::auth::extractor::AuthError>,
+    author: RequireAuthor,
+    Extension(req_id): Extension<RequestId>,
     Query(params): Query<TicketsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<TicketsResponse>, ApiError> {
-    // AC-6: author gate — 403 for non-author (byte-for-byte AC-2 envelope via ApiError).
-    let author = author.map_err(|_| ApiError::AuthorRequired)?;
+    let request_id = &req_id.0;
 
     // AC-7: validate limit ∈ [1, 200] and offset ≥ 0.
     let limit = params.limit.unwrap_or(50);
@@ -139,6 +145,7 @@ pub async fn list_tickets(
     // Never logs `question` (PII, security.md §A09).
     tracing::info!(
         event = "dashboard.tickets.list",
+        request_id = %request_id,
         user_id = %author.0.user_id,
         tier = UserTier::Author.as_str(),
         latency_ms,

@@ -5,6 +5,9 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
 
+mod common;
+use common::jwt_helpers::test_public_key_pem;
+
 use archiviste_gateway::{config::Config, router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -21,6 +24,7 @@ fn make_state() -> Arc<AppState> {
         bind_addr: "127.0.0.1:0".to_string(),
         workers_url: "http://127.0.0.1:1".to_string(),
         database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,
@@ -334,6 +338,7 @@ async fn ac17_chat_endpoint_has_security_headers() {
         bind_addr: "127.0.0.1:0".to_string(),
         workers_url: server.url(),
         database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,
@@ -377,6 +382,7 @@ async fn sec003_healthz_200_has_headers() {
         bind_addr: "127.0.0.1:0".to_string(),
         workers_url: server.url(),
         database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,

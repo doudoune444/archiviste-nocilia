@@ -3,7 +3,7 @@
 //! # Security
 //! - Body cap: 1 MiB enforced by `RequestBodyLimitLayer` in `lib.rs`.
 //! - Query cap: 4 096 bytes UTF-8 enforced in `validate_request`.
-//! - `user_id` and `user_tier` are hardcoded sentinels (phase 1, vision §73).
+//! - `user_id` and `user_tier` are resolved from `AnonIdentity` extension (SEC-001 AC-14).
 //! - Error envelope never leaks stack traces, file paths, or upstream bodies.
 //! - Log line never contains the raw `query` field (AC-13 / A09).
 
@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use crate::{state::AppState, RequestId};
+use crate::{auth::extractor::AnonIdentity, state::AppState, RequestId};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -31,12 +31,6 @@ const MAX_QUERY_BYTES: usize = 4_096;
 
 /// Maximum upstream response body size in bytes (AC-15).
 const MAX_UPSTREAM_BODY: usize = 262_144; // 256 KiB
-
-/// Sentinel `user_id` for phase-1 anonymous requests (AC-3).
-const USER_ID_SENTINEL: &str = "00000000-0000-0000-0000-000000000000";
-
-/// Sentinel `user_tier` for phase-1 anonymous requests (AC-3).
-const USER_TIER_ANON: &str = "anonymous";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,6 +58,7 @@ pub struct ErrorBody {
 /// Handler for `POST /v1/chat`.
 ///
 /// Validates the request, reads the `request_id` from middleware extension (R2),
+/// reads the caller identity from the `AnonIdentity` extension (SEC-001 AC-14),
 /// then forwards to workers. Returns passthrough body on success or a uniform
 /// error envelope on failure.
 ///
@@ -72,6 +67,7 @@ pub struct ErrorBody {
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(req_id): Extension<RequestId>,
+    Extension(identity): Extension<AnonIdentity>,
     body: axum::body::Bytes,
 ) -> Response {
     let request_id = req_id.0;
@@ -88,7 +84,7 @@ pub async fn chat(
 
     let query_len = validated.query.len();
     let (gateway_status, upstream_status, response) =
-        forward_to_workers(&state, &request_id, validated).await;
+        forward_to_workers(&state, &request_id, validated, &identity).await;
 
     let latency_ms = elapsed_ms(start);
     log_request(
@@ -146,14 +142,16 @@ async fn forward_to_workers(
     state: &AppState,
     request_id: &str,
     req: ValidatedRequest,
+    identity: &AnonIdentity,
 ) -> (StatusCode, Option<u16>, Response) {
     let url = format!("{}/v1/generate", state.config.workers_url);
 
+    // SEC-001 AC-14: propagate resolved identity to workers via outbound headers.
+    // Plan line 24: "propager X-User-Tier + X-User-Id au lieu de user_id/user_tier dans le JSON body".
+    // Identity is NOT duplicated in the JSON body — headers are the canonical transport.
     let workers_body = json!({
         "query": req.query,
         "conversation_id": req.conversation_id,
-        "user_id": USER_ID_SENTINEL,
-        "user_tier": USER_TIER_ANON,
         "request_id": request_id,
     });
 
@@ -162,6 +160,9 @@ async fn forward_to_workers(
         .post(&url)
         .header("content-type", "application/json")
         .header("x-request-id", request_id) // AC-4: observational header
+        // SEC-001 AC-14: identity propagated via headers only (not JSON body).
+        .header("x-user-tier", identity.tier.as_str())
+        .header("x-user-id", identity.user_id.to_string())
         .json(&workers_body)
         .send()
         .await;

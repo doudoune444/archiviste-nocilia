@@ -1,0 +1,120 @@
+//! Runtime-generated Ed25519 keypair for test JWT signing.
+//!
+//! Keys are generated once per test process via `OnceLock` and never committed
+//! to source — no hardcoded PEM constants (security.md § Forbidden patterns).
+//!
+//! # Usage
+//! Add `mod common;` + `use common::jwt_helpers::*;` at the top of each test file.
+
+// Each integration test binary includes this module independently;
+// clippy analyses per-binary and may flag items unused in that binary.
+#![allow(dead_code)]
+
+use archiviste_gateway::auth::{extractor::UserTier, jwt::JWT_ISSUER_AUDIENCE};
+use chrono::{DateTime, Utc};
+use ed25519_dalek::SigningKey;
+use jsonwebtoken::EncodingKey;
+use pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rand_core::OsRng;
+use std::sync::OnceLock;
+use uuid::Uuid;
+
+/// Key ID embedded in test JWTs (fixed string — not a secret).
+pub const TEST_KEY_ID: &str = "test-key-runtime";
+
+// ---------------------------------------------------------------------------
+// Cached keypair
+// ---------------------------------------------------------------------------
+
+struct TestKeypair {
+    encoding_key: EncodingKey,
+    public_key_pem: String,
+}
+
+/// Generate an Ed25519 keypair and return an `EncodingKey` + public PEM.
+///
+/// Panics on internal crypto / encoding failures — a broken test setup is a
+/// build-time defect, not a runtime error. `expect` is permitted in tests/.
+#[allow(clippy::expect_used)]
+fn generate_keypair() -> TestKeypair {
+    let signing_key = SigningKey::generate(&mut OsRng);
+
+    let private_pem = signing_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .expect("Ed25519 PKCS#8 PEM encoding must succeed");
+
+    let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())
+        .expect("EncodingKey::from_ed_pem must accept a freshly-generated key");
+
+    let public_key_pem = signing_key
+        .verifying_key()
+        .to_public_key_pem(LineEnding::LF)
+        .expect("Ed25519 public key PEM encoding must succeed");
+
+    TestKeypair {
+        encoding_key,
+        public_key_pem,
+    }
+}
+
+static TEST_KEYPAIR: OnceLock<TestKeypair> = OnceLock::new();
+
+fn keypair() -> &'static TestKeypair {
+    TEST_KEYPAIR.get_or_init(generate_keypair)
+}
+
+/// Return the test Ed25519 public key PEM (cached, stable within a test process).
+pub fn test_public_key_pem() -> &'static str {
+    &keypair().public_key_pem
+}
+
+// ---------------------------------------------------------------------------
+// Token signing helpers
+// ---------------------------------------------------------------------------
+
+/// Sign a test JWT with the runtime keypair and 7-day expiry.
+#[allow(clippy::expect_used)]
+#[must_use]
+pub fn sign_test_token(sub: Uuid, tier: UserTier, sid: Uuid) -> String {
+    let exp = Utc::now() + chrono::Duration::days(7);
+    sign_test_token_with_exp(sub, tier, sid, exp)
+}
+
+/// Sign a test JWT with a custom expiry timestamp.
+#[must_use]
+pub fn sign_test_token_with_exp(
+    sub: Uuid,
+    tier: UserTier,
+    sid: Uuid,
+    exp: DateTime<Utc>,
+) -> String {
+    sign_with_iss(sub, tier, sid, exp, JWT_ISSUER_AUDIENCE)
+}
+
+/// Sign a test JWT with a custom issuer (for iss-validation tests).
+#[must_use]
+pub fn sign_test_token_custom_iss(sub: Uuid, tier: UserTier, sid: Uuid, iss: &str) -> String {
+    let exp = Utc::now() + chrono::Duration::days(7);
+    sign_with_iss(sub, tier, sid, exp, iss)
+}
+
+#[allow(clippy::expect_used)]
+fn sign_with_iss(sub: Uuid, tier: UserTier, sid: Uuid, exp: DateTime<Utc>, iss: &str) -> String {
+    use archiviste_gateway::auth::jwt::Claims;
+
+    let claims = Claims {
+        sub: sub.to_string(),
+        tier: tier.as_str().to_string(),
+        sid: sid.to_string(),
+        iat: Utc::now().timestamp(),
+        exp: exp.timestamp(),
+        iss: iss.to_string(),
+        aud: JWT_ISSUER_AUDIENCE.to_string(),
+    };
+
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+    header.kid = Some(TEST_KEY_ID.to_string());
+
+    jsonwebtoken::encode(&header, &claims, &keypair().encoding_key)
+        .expect("test token signing must not fail — claims are well-formed")
+}

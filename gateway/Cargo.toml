@@ -26,6 +26,9 @@ jsonwebtoken = "9"
 sha2 = "0.10"
 secrecy = { version = "0.10", features = ["serde"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
+ring = "0.17"
+base64 = "0.22"
+hex = "0.4"
 
 [dev-dependencies]
 proptest = "1"
@@ -38,6 +41,9 @@ chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 rand_core = { version = "0.6", features = ["std"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
+rsa = "0.9"
+hex = "0.4"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
 
 [profile.release]
 lto = "thin"

@@ -24,6 +24,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **UI-002 PR1 (backend)**: `GET /v1/tickets` (paginated open lore-gap tickets, sorted `priority_score DESC, created_at DESC`, author-gated, AC-5 to AC-7, AC-20) and `GET /v1/conversations/{id}/signed-url` (GCS V4 `GOOG4-RSA-SHA256` signed URL, TTL 300 s, author-gated, AC-8 to AC-10, AC-21) added to gateway. `ApiError` enum with uniform `{"error":"<code>","request_id":"<uuid>"}` envelope. `gcs::sign` module (manual V4 signing via `ring`, no external GCS crate). Security headers (AC-12) and structured tracing events `dashboard.tickets.list` / `dashboard.conversation.signed_url` (AC-23) on both routes. No changes to `specs/openapi/gateway-to-workers.yml` (AC-22).
+
 - **GEN-004b**: Mode 3 lore-gap pipeline — after retrieve, `max_score < 0.45` branches to zero-shot LLM « noté pour archives » response; ticket auto-created/incremented via cosine dedup; fail-soft on ticket/embed/db errors (200 OK preserved); `query_log.mode='lore_gap'`; log INFO extended with `top_score` + `ticket_action`.
 - **GEN-004a**: migration `0004_tickets_embedding.sql` — `tickets.question_embedding vector(1024) NULL` + HNSW partial index + B-tree indexes `tickets_conversation_id_idx` and `tickets_status_priority_idx`; `ticket_service.create_or_increment` with cosine dedup threshold 0.85 and fail-soft error handling (embed/db failures return `skipped_error` + log ALERT, never block 200 response).
 

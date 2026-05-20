@@ -6,9 +6,9 @@
 #![allow(clippy::expect_used)]
 
 mod common;
-use common::jwt_helpers::test_public_key_pem;
+use common::jwt_helpers::make_test_config;
 
-use archiviste_gateway::{config::Config, router, state::AppState};
+use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -20,16 +20,7 @@ use tower::ServiceExt;
 // ---------------------------------------------------------------------------
 
 fn make_state() -> Arc<AppState> {
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: "http://127.0.0.1:1".to_string(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 500,
-        request_timeout_ms: 35_000,
-    };
-    Arc::new(AppState::new(config).unwrap())
+    Arc::new(AppState::new(make_test_config("http://127.0.0.1:1")).unwrap())
 }
 
 async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
@@ -334,16 +325,7 @@ async fn ac17_chat_endpoint_has_security_headers() {
         .create_async()
         .await;
 
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: server.url(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 500,
-        request_timeout_ms: 35_000,
-    };
-    let state = Arc::new(AppState::new(config).unwrap());
+    let state = Arc::new(AppState::new(make_test_config(&server.url())).unwrap());
     let app = router(state);
 
     let resp = app
@@ -378,16 +360,7 @@ async fn sec003_healthz_200_has_headers() {
         .create_async()
         .await;
 
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: server.url(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 500,
-        request_timeout_ms: 35_000,
-    };
-    let state = Arc::new(AppState::new(config).unwrap());
+    let state = Arc::new(AppState::new(make_test_config(&server.url())).unwrap());
     let app = router(state);
 
     let resp = get(app, "/healthz").await;

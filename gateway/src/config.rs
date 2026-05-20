@@ -12,6 +12,11 @@ pub struct Config {
     pub workers_url: String,
     /// `PostgreSQL` connection string (`sqlx`-compatible).
     pub database_url: String,
+    /// Ed25519 public key PEM for JWT verification (AC-5, AC-12).
+    ///
+    /// Required at boot. Gateway refuses to start if absent or malformed
+    /// (failure mode "clé absente → refus démarrage").
+    pub jwt_ed25519_public_key_pem: String,
     /// Crate version string surfaced via `/healthz`.
     pub version: String,
     /// TCP connect timeout for outbound calls to workers (milliseconds).
@@ -27,8 +32,8 @@ pub struct Config {
 impl Config {
     /// Read configuration from process environment.
     ///
-    /// `BIND_ADDR` defaults to `0.0.0.0:8080`. `WORKERS_URL` and
-    /// `DATABASE_URL` are required. `CONNECT_TIMEOUT_MS` and
+    /// `BIND_ADDR` defaults to `0.0.0.0:8080`. `WORKERS_URL`, `DATABASE_URL`,
+    /// and `JWT_ED25519_PUBLIC_KEY_PEM` are required. `CONNECT_TIMEOUT_MS` and
     /// `REQUEST_TIMEOUT_MS` are optional (defaults: 5000 / 35000).
     ///
     /// # Errors
@@ -39,6 +44,8 @@ impl Config {
             bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
             workers_url: std::env::var("WORKERS_URL").context("WORKERS_URL env var required")?,
             database_url: std::env::var("DATABASE_URL").context("DATABASE_URL env var required")?,
+            jwt_ed25519_public_key_pem: std::env::var("JWT_ED25519_PUBLIC_KEY_PEM")
+                .context("JWT_ED25519_PUBLIC_KEY_PEM env var required")?,
             version: env!("CARGO_PKG_VERSION").to_string(),
             connect_timeout_ms: std::env::var("CONNECT_TIMEOUT_MS")
                 .ok()

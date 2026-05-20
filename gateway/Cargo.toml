@@ -17,12 +17,15 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], defau
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 anyhow = "1"
 config = "0.14"
 jsonwebtoken = "9"
+sha2 = "0.10"
+secrecy = { version = "0.10", features = ["serde"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
 
 [dev-dependencies]
 proptest = "1"
@@ -30,6 +33,11 @@ hyper = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 mockito = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+rand_core = { version = "0.6", features = ["std"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
 
 [profile.release]
 lto = "thin"

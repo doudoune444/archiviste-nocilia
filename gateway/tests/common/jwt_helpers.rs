@@ -5,12 +5,19 @@
 //!
 //! # Usage
 //! Add `mod common;` + `use common::jwt_helpers::*;` at the top of each test file.
+//!
+//! # Config helper
+//! Use `make_test_config` / `make_test_config_with_url` to build `Config` structs
+//! in tests without duplicating field initializers (GCS fields added by UI-002 PR1).
 
 // Each integration test binary includes this module independently;
 // clippy analyses per-binary and may flag items unused in that binary.
 #![allow(dead_code)]
 
-use archiviste_gateway::auth::{extractor::UserTier, jwt::JWT_ISSUER_AUDIENCE};
+use archiviste_gateway::{
+    auth::{extractor::UserTier, jwt::JWT_ISSUER_AUDIENCE},
+    config::Config,
+};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
 use jsonwebtoken::EncodingKey;
@@ -66,6 +73,34 @@ fn keypair() -> &'static TestKeypair {
 /// Return the test Ed25519 public key PEM (cached, stable within a test process).
 pub fn test_public_key_pem() -> &'static str {
     &keypair().public_key_pem
+}
+
+// ---------------------------------------------------------------------------
+// Config factory (UI-002 PR1: avoids re-specifying GCS fields in every test)
+// ---------------------------------------------------------------------------
+
+/// Build a `Config` suitable for unit/integration tests.
+///
+/// `workers_url` defaults to a loopback address that is not listening.
+/// GCS fields use an empty placeholder PEM — the signing module will error if
+/// actually called, which is correct for non-GCS tests.
+///
+/// Callers that need specific GCS keys should build `Config` directly.
+#[allow(clippy::expect_used)]
+pub fn make_test_config(workers_url: &str) -> Config {
+    Config {
+        bind_addr: "127.0.0.1:0".to_string(),
+        workers_url: workers_url.to_string(),
+        database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
+        version: "0.1.0".to_string(),
+        connect_timeout_ms: 500,
+        request_timeout_ms: 35_000,
+        gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
+        // Empty string — placeholder; will fail at sign_get() if actually invoked.
+        gcs_signing_private_key_pem: secrecy::SecretString::from(String::new()),
+        gcs_bucket: "archiviste-conversations".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------

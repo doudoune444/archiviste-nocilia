@@ -7,10 +7,10 @@
 
 mod common;
 use common::jwt_helpers::{
-    sign_test_token, sign_test_token_custom_iss, sign_test_token_with_exp, test_public_key_pem,
+    make_test_config, sign_test_token, sign_test_token_custom_iss, sign_test_token_with_exp,
 };
 
-use archiviste_gateway::{config::Config, router, state::AppState};
+use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -23,15 +23,8 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 fn make_state() -> Arc<AppState> {
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: "http://127.0.0.1:1".to_string(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 500,
-        request_timeout_ms: 5_000,
-    };
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.request_timeout_ms = 5_000;
     Arc::new(AppState::new(config).unwrap())
 }
 

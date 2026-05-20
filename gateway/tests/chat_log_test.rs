@@ -9,9 +9,9 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
-use common::jwt_helpers::test_public_key_pem;
+use common::jwt_helpers::make_test_config;
 
-use archiviste_gateway::{config::Config, router, state::AppState};
+use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -19,16 +19,7 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn make_state(workers_url: &str) -> Arc<AppState> {
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: workers_url.to_string(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 500,
-        request_timeout_ms: 35_000,
-    };
-    Arc::new(AppState::new(config).unwrap())
+    Arc::new(AppState::new(make_test_config(workers_url)).unwrap())
 }
 
 async fn post_chat(app: axum::Router, body: &str) -> axum::response::Response {

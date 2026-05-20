@@ -3,9 +3,9 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
-use common::jwt_helpers::test_public_key_pem;
+use common::jwt_helpers::make_test_config;
 
-use archiviste_gateway::{config::Config, router, state::AppState};
+use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -17,15 +17,8 @@ use tower::ServiceExt;
 /// degrades to `"degraded"` while still returning HTTP 200.
 #[tokio::test]
 async fn healthz_returns_degraded_when_workers_unreachable() {
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: "http://127.0.0.1:1".to_string(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 500,
-        request_timeout_ms: 1_000,
-    };
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.request_timeout_ms = 1_000;
     let state = Arc::new(AppState::new(config).unwrap());
     let app = router(state);
 

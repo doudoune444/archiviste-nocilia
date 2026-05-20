@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 UserTier = Literal["anonymous", "members", "author_only"]
-Mode = Literal["canon", "off_topic"]
+Mode = Literal["canon", "off_topic", "lore_gap"]
+
+# AC-2: score threshold below which Mode 3 lore-gap is triggered. Strict < (D8).
+LORE_GAP_THRESHOLD: Final = 0.45
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 QUERY_MAX_BYTES = 4 * 1024
@@ -60,3 +63,6 @@ class Chunk(BaseModel):
     source_path: str
     ord: int
     text: str
+    # AC-2 / R5: score = 1 - cosine_distance, exposed by /v1/retrieve (RET-001).
+    # Default 0.0 preserves backward compat with any caller that omits the field.
+    score: float = 0.0

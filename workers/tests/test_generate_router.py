@@ -137,7 +137,8 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 async def test_nominal_response_shape() -> None:
     # AC-1, AC-3.
     captured: dict[str, Any] = {}
-    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha"}]
+    # GEN-004: score >= 0.45 keeps canon path (AC-19).
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.72}]
     llm = _FakeLlmClient()
     app, http_clients = _build_app(
         retrieve_handler=_retrieve_handler_factory(chunks=chunks, captured=captured),
@@ -163,7 +164,8 @@ async def test_nominal_response_shape() -> None:
 @pytest.mark.asyncio
 async def test_timings_consistent_with_query_log_latency(db_pool: asyncpg.Pool) -> None:
     # AC-24: retrieve_ms + llm_ms <= latency_ms persisted in query_log.
-    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha"}]
+    # GEN-004: score >= 0.45 keeps canon path.
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.72}]
     llm = _FakeLlmClient()
     app, http_clients = _build_app(
         retrieve_handler=_retrieve_handler_factory(chunks=chunks),
@@ -204,8 +206,8 @@ async def test_timings_consistent_with_query_log_latency(db_pool: asyncpg.Pool) 
 
 
 @pytest.mark.asyncio
-async def test_zero_chunks_still_canon_with_marker() -> None:
-    # AC-4, AC-5.
+async def test_zero_chunks_triggers_lore_gap() -> None:
+    # GEN-004 D9: zero chunks -> max_score=0.0 < 0.45 -> lore_gap (supersedes zero-chunk canon).
     llm = _FakeLlmClient()
     app, http_clients = _build_app(
         retrieve_handler=_retrieve_handler_factory(chunks=[]),
@@ -216,9 +218,33 @@ async def test_zero_chunks_still_canon_with_marker() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/v1/generate", json=_payload())
     assert r.status_code == 200
+    assert r.json()["mode"] == "lore_gap"
+    assert r.json()["citations"] == []
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_high_score_chunks_canon_with_marker() -> None:
+    # AC-4, AC-5: chunks score >= 0.45 + LLM no citation -> <no_archives_found/> marker.
+    llm = _FakeLlmClient(
+        message=AIMessage(
+            content="plain answer no citation",
+            usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+    )
+    # GEN-004: score >= 0.45 keeps canon path (AC-19).
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.60}]
+    app, http_clients = _build_app(
+        retrieve_handler=_retrieve_handler_factory(chunks=chunks),
+        conversation_handler=_conversation_handler,
+        llm_client=llm,
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post("/v1/generate", json=_payload())
+    assert r.status_code == 200
     assert r.json()["mode"] == "canon"
-    user_msg = str(llm.captured_messages[1].content)
-    assert "<no_archives_found/>" in user_msg
     for http in http_clients:
         await http.aclose()
 
@@ -265,10 +291,12 @@ async def test_retrieve_failure_502_no_query_log_no_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_upstream_4xx_502() -> None:
-    # AC-21.
+    # AC-21: canon path LLM upstream error -> 502.
+    # GEN-004: use score >= 0.45 to stay on canon path.
     llm = _FakeLlmClient(raise_upstream=401)
+    canon_chunks = [{"source_path": "a/b.md", "ord": 0, "text": "t", "score": 0.60}]
     app, http_clients = _build_app(
-        retrieve_handler=_retrieve_handler_factory(chunks=[]),
+        retrieve_handler=_retrieve_handler_factory(chunks=canon_chunks),
         conversation_handler=_conversation_handler,
         llm_client=llm,
     )
@@ -286,10 +314,12 @@ async def test_llm_upstream_4xx_502() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_upstream_5xx_502() -> None:
-    # AC-22.
+    # AC-22: canon path LLM 5xx -> 502.
+    # GEN-004: use score >= 0.45 to stay on canon path.
     llm = _FakeLlmClient(raise_upstream=503)
+    canon_chunks = [{"source_path": "a/b.md", "ord": 0, "text": "t", "score": 0.60}]
     app, http_clients = _build_app(
-        retrieve_handler=_retrieve_handler_factory(chunks=[]),
+        retrieve_handler=_retrieve_handler_factory(chunks=canon_chunks),
         conversation_handler=_conversation_handler,
         llm_client=llm,
     )
@@ -305,10 +335,12 @@ async def test_llm_upstream_5xx_502() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_timeout_504() -> None:
-    # AC-11.
+    # AC-11: canon path LLM timeout -> 504 with no token data.
+    # GEN-004: use score >= 0.45 to stay on canon path.
     llm = _FakeLlmClient(raise_timeout=True)
+    canon_chunks = [{"source_path": "a/b.md", "ord": 0, "text": "t", "score": 0.60}]
     app, http_clients = _build_app(
-        retrieve_handler=_retrieve_handler_factory(chunks=[]),
+        retrieve_handler=_retrieve_handler_factory(chunks=canon_chunks),
         conversation_handler=_conversation_handler,
         llm_client=llm,
     )
@@ -326,14 +358,15 @@ async def test_llm_timeout_504() -> None:
 
 @pytest.mark.asyncio
 async def test_no_citation_log_warn() -> None:
-    # AC-13.
+    # AC-13: canon path with no citation in LLM response -> logs warning.
+    # GEN-004: use score >= 0.45 to stay on canon path.
     llm = _FakeLlmClient(
         message=AIMessage(
             content="plain answer",
             usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         )
     )
-    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha"}]
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.60}]
     app, http_clients = _build_app(
         retrieve_handler=_retrieve_handler_factory(chunks=chunks),
         conversation_handler=_conversation_handler,

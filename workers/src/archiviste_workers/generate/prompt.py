@@ -69,6 +69,32 @@ LORE_GAP_SYSTEM_PROMPT = (
 )
 
 
+# AC-7 (GEN-005): mystery system prompt — figé byte-for-byte. Contains 6 required instructions:
+# (a) Archiviste in-world ton, (b) évasif et mystérieux, (c) interdit révéler info cachée,
+# (d) brumes/silences/non-dits, (e) pas de questions alternatives, (f) langue de la question.
+MYSTERY_SYSTEM_PROMPT = (
+    "Tu es l'Archiviste de Nocilia, gardien des écrits de l'univers. "
+    "Réponds de manière évasive et mystérieuse, en restant in-world. "
+    "N'indique jamais que tu refuses l'accès, que des informations sont scellées, "
+    "ou que l'utilisateur n'a pas les droits requis — ne révèle pas l'existence d'information cachée. "  # noqa: E501
+    "Suggère poétiquement que la question touche aux brumes, aux silences et aux non-dits de l'univers. "  # noqa: E501
+    "Ne propose pas de questions alternatives. "
+    "Réponds dans la langue de la question."
+)
+
+
+def build_mystery_messages(query: str, suspected_injection: bool) -> list[BaseMessage]:
+    """Return [SystemMessage(MYSTERY_SYSTEM_PROMPT), HumanMessage] — no chunks (AC-8).
+
+    No lore chunks injected: blocked chunks must never reach the LLM (security, AC-8).
+    """
+    prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
+    return [
+        SystemMessage(content=MYSTERY_SYSTEM_PROMPT),
+        HumanMessage(content=f"{prefix}{query}"),
+    ]
+
+
 def build_lore_gap_messages(query: str, suspected_injection: bool) -> list[BaseMessage]:
     """Return [SystemMessage, HumanMessage] for lore-gap generation (AC-5).
 

@@ -125,6 +125,7 @@ addopts = "-ra --strict-markers --strict-config"
 markers = [
     "integration: integration tests requiring docker compose",
     "slow: slow tests skipped by default",
+    "timing: timing-constant tests (AC-15); may be skipped on noisy CI",
 ]
 
 [tool.coverage.run]

@@ -1,4 +1,8 @@
-"""ACL-filtered cosine top-K SQL against `chunks` (RET-001 AC-7/8/10/14)."""
+"""ACL-agnostic cosine top-K SQL against `chunks` (GEN-005 D-2: filtering moved post-retrieve).
+
+The SQL no longer filters by access_tier (D-2: vision §41 post-retrieval ACL).
+ACL filtering is now done in services/acl.py after the retrieve call.
+"""
 
 from __future__ import annotations
 
@@ -17,12 +21,12 @@ SELECT c.id::text         AS chunk_id,
        d.source_path      AS source_path,
        c.ord              AS ord,
        c.text             AS text,
-       ROUND((1 - (c.embedding <=> $1))::numeric, 6)::float8 AS score
+       ROUND((1 - (c.embedding <=> $1))::numeric, 6)::float8 AS score,
+       d.access_tier      AS access_tier
   FROM chunks c
   JOIN documents d ON d.id = c.document_id
- WHERE d.access_tier = ANY($2::text[])
  ORDER BY c.embedding <=> $1 ASC, c.id ASC
- LIMIT $3
+ LIMIT $2
 """
 
 
@@ -38,15 +42,14 @@ class DatabaseUnavailableError(RuntimeError):
 async def search(
     pool: asyncpg.Pool,
     embedding: Sequence[float],
-    allowed_tiers: Sequence[str],
+    allowed_tiers: Sequence[str],  # D-2: ignored post GEN-005, filtering moved to services/acl.py
     top_k: int,
 ) -> list[RetrievedChunk]:
-    """Run the ACL-filtered cosine top-K SQL once. AC-7/8/10/11/14."""
+    """Run the cosine top-K SQL — all tiers returned (D-2, GEN-005 AC-2)."""
     vector = list(embedding)
-    tiers = list(allowed_tiers)
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(_SEARCH_SQL, vector, tiers, top_k, timeout=SQL_TIMEOUT_SECONDS)
+            rows = await conn.fetch(_SEARCH_SQL, vector, top_k, timeout=SQL_TIMEOUT_SECONDS)
     except (
         asyncpg.PostgresError,
         asyncpg.InterfaceError,
@@ -62,6 +65,7 @@ async def search(
             ord=row["ord"],
             text=row["text"],
             score=row["score"],
+            access_tier=row["access_tier"],
         )
         for row in rows
     ]

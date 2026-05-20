@@ -24,6 +24,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **GEN-005**: Mode 4 mystery + ACL post-retrieval filtering — `filter_chunks_by_tier` (pure module `services/acl.py`, fail-closed D-4); SQL ACL filter removed from `/v1/retrieve` (D-2, vision §41); `RetrievedChunk.access_tier` field propagated; mystery branch triggered when all top-K chunks are ACL-blocked (`mode='mystery'`, `citations=[]`); timing-constant path (real LLM call, 2×ING-003, `query_log` insert); `MYSTERY_SYSTEM_PROMPT` frozen byte-for-byte (AC-7); partial-block canon no-leak (AC-19); `blocked_count` in `generate` log (AC-18).
 - **GEN-004b**: Mode 3 lore-gap pipeline — after retrieve, `max_score < 0.45` branches to zero-shot LLM « noté pour archives » response; ticket auto-created/incremented via cosine dedup; fail-soft on ticket/embed/db errors (200 OK preserved); `query_log.mode='lore_gap'`; log INFO extended with `top_score` + `ticket_action`.
 - **GEN-004a**: migration `0004_tickets_embedding.sql` — `tickets.question_embedding vector(1024) NULL` + HNSW partial index + B-tree indexes `tickets_conversation_id_idx` and `tickets_status_priority_idx`; `ticket_service.create_or_increment` with cosine dedup threshold 0.85 and fail-soft error handling (embed/db failures return `skipped_error` + log ALERT, never block 200 response).
 

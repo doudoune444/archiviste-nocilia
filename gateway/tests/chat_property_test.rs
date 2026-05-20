@@ -11,9 +11,9 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
-use common::jwt_helpers::test_public_key_pem;
+use common::jwt_helpers::make_test_config;
 
-use archiviste_gateway::{config::Config, router, state::AppState};
+use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -27,16 +27,10 @@ use tower::ServiceExt;
 // ---------------------------------------------------------------------------
 
 fn make_state_for_property(workers_url: &str) -> Arc<AppState> {
-    let config = Config {
-        bind_addr: "127.0.0.1:0".to_string(),
-        workers_url: workers_url.to_string(),
-        database_url: "postgres://test".to_string(),
-        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
-        version: "0.1.0".to_string(),
-        connect_timeout_ms: 200,
-        // 1000 ms gives headroom on loaded CI runners (MEDIUM finding #7).
-        request_timeout_ms: 1_000,
-    };
+    let mut config = make_test_config(workers_url);
+    config.connect_timeout_ms = 200;
+    // 1000 ms gives headroom on loaded CI runners (MEDIUM finding #7).
+    config.request_timeout_ms = 1_000;
     Arc::new(AppState::new(config).unwrap())
 }
 

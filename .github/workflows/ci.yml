@@ -60,6 +60,11 @@ jobs:
       - name: build release
         run: cargo build --release
 
+      - name: openapi-not-modified (AC-22)
+        # UI-002 PR1: new endpoints are gateway↔client only; specs/openapi/ must be unchanged.
+        run: git diff --exit-code specs/openapi/
+        working-directory: ${{ github.workspace }}
+
   workers:
     name: workers (python)
     runs-on: ubuntu-latest

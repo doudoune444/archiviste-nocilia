@@ -4,6 +4,8 @@
 
 pub mod auth;
 pub mod config;
+pub mod errors;
+pub mod gcs;
 pub mod handlers;
 pub mod routes;
 pub mod state;
@@ -331,6 +333,15 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Public API routes (AC-11: marker #[public] — all handlers accept anonymous).
     let public_api = Router::new().route("/v1/me", get(routes::me::me));
 
+    // Author-gated dashboard API routes (UI-002 PR1 — AC-5..AC-12, AC-19..AC-23).
+    // `RequireAuthor` extractor gates each handler — no `#[public]` marker (AC-11).
+    let dashboard_api = Router::new()
+        .route("/v1/tickets", get(handlers::tickets::list_tickets))
+        .route(
+            "/v1/conversations/{id}/signed-url",
+            get(handlers::conversations::signed_url),
+        );
+
     // Author-gated test route (AC-16 contract test).
     // Debug builds only — never compiled into release binaries. `security.md` §A05.
     #[cfg(debug_assertions)]
@@ -343,6 +354,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(handlers::health::healthz))
         .merge(chat_router)
         .merge(public_api)
+        .merge(dashboard_api)
         .merge(test_routes)
         .merge(static_router)
         .layer(middleware::from_fn_with_state(

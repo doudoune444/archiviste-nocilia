@@ -44,6 +44,8 @@ pkcs8 = { version = "0.10", features = ["pem"] }
 rsa = "0.9"
 hex = "0.4"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-test = "0.2"
 
 [profile.release]
 lto = "thin"

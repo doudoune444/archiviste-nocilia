@@ -170,26 +170,33 @@ async fn ac12_wrong_iss_rejected() {
 // AC-16: author-only gate
 // ---------------------------------------------------------------------------
 
-/// AC-16: anonymous request to author-only route → 403 `author_required`.
+/// AC-16: anonymous request (no JWT) to author-only route → 401 `invalid_token`.
+///
+/// Without a JWT, the extractor cannot determine tier — returns 401, not 403.
+/// 403 `author_required` is only returned when a valid JWT with tier≠author is present.
 #[tokio::test]
-async fn ac16_anonymous_to_author_route_returns_403() {
-    // AC-16: no token on author-only route → 403 author_required
+async fn ac16_anonymous_to_author_route_returns_401() {
+    // AC-16: no token on author-only route → 401 invalid_token
+    // (cannot reach 403 without a valid JWT — no token means InvalidToken, not AuthorRequired)
     let app = router(make_state());
     let resp = get_author_only(app, None).await;
-    // No JWT at all: extractor returns 401 invalid_token (can't get to 403 without valid JWT)
-    // Per AC-16: anonymous OR member → 403 author_required.
-    // Without JWT, the route returns 401 (invalid_token) which is also correct for anonymous.
-    assert!(
-        resp.status() == StatusCode::UNAUTHORIZED || resp.status() == StatusCode::FORBIDDEN,
-        "anonymous to author route must be 401 or 403, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "anonymous (no JWT) to author route must be 401 invalid_token"
     );
+    let body = body_json(resp).await;
+    assert_error_envelope(&body, "invalid_token");
 }
 
 /// AC-16: member JWT to author-only route → 403 `author_required`.
+///
+/// Session check is skipped in test env (no DB pool). Extractor validates JWT
+/// structurally, resolves tier=member, then rejects with 403 (not 401).
 #[tokio::test]
 async fn ac16_member_to_author_route_returns_403() {
-    // AC-16: member tier → 403 author_required on author-only route
+    // AC-16: valid member JWT → extractor validates JWT, skips session check (no DB),
+    // resolves tier=member → RequireAuthor returns 403 author_required (strict).
     let user_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
     let token = sign_test_token(
@@ -200,13 +207,51 @@ async fn ac16_member_to_author_route_returns_403() {
 
     let app = router(make_state());
     let resp = get_author_only(app, Some(&token)).await;
-    // Member JWT is structurally valid but session lookup fails (no DB in test).
-    // Extractor returns 401 session error. Full AC-16 coverage (author tier → 200)
-    // is exercised in PR-b after full login flow is implemented.
-    assert!(
-        resp.status() == StatusCode::UNAUTHORIZED || resp.status() == StatusCode::FORBIDDEN,
-        "member to author route must be 401 or 403, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "member JWT to author-only route must be 403 author_required"
+    );
+    let body = body_json(resp).await;
+    assert_error_envelope(&body, "author_required");
+}
+
+// ---------------------------------------------------------------------------
+// HIGH-2: fail-closed when DB unavailable + valid JWT present → 503.
+// ---------------------------------------------------------------------------
+
+/// HIGH-2: structurally valid JWT + no DB pool → test path returns 401 (no session check).
+///
+/// In production (pool always present), `SessionError::Unavailable` returns 503.
+/// In the test environment (no real DB), pool is `None` — `try_authenticate_jwt`
+/// skips the session check and treats the JWT as valid. This test documents that
+/// the no-pool path does NOT return 503 (only the pool-error path does).
+/// Full 503 coverage is deferred to PR-b integration tests with a mock pool.
+///
+/// AC-13 failure-mode: "Postgres indisponible → 503 `upstream_unavailable`".
+#[tokio::test]
+async fn high2_db_unavailable_with_valid_jwt_does_not_200() {
+    // HIGH-2: with no DB pool (test env), a structurally valid JWT reaches
+    // the author-test route and either 200 (pool=None skip) or falls to 401/403.
+    // The critical property: it MUST NOT silently return 200 with anonymous tier
+    // when a token was presented.
+    let user_id = Uuid::new_v4();
+    let session_id = Uuid::new_v4();
+    let token = sign_test_token(
+        user_id,
+        archiviste_gateway::auth::extractor::UserTier::Member,
+        session_id,
+    );
+
+    let app = router(make_state());
+    let resp = get_author_only(app, Some(&token)).await;
+
+    // Must not be 200 with tier=author (no token should grant author access).
+    // Member tier with no DB → session skipped → AuthUser{member} → 403 author_required.
+    assert_ne!(
+        resp.status(),
+        StatusCode::OK,
+        "valid member JWT must not reach author-only route as 200"
     );
 }
 

@@ -135,6 +135,96 @@ async fn ac9b_ac10_deterministic_user_id_with_existing_cookie() {
 }
 
 // ---------------------------------------------------------------------------
+// AC-10: verbatim UUIDv5(NIL, fingerprint_hex) — namespace regression test (HIGH-1 fix).
+// ---------------------------------------------------------------------------
+
+/// AC-10 verbatim: assert exact `UUIDv5` value for a known (ip, ua, `anon_cookie`) triple.
+///
+/// Fixture values (fixed):
+///   ip = "127.0.0.1" (no CF-Connecting-IP in test env)
+///   ua = "TestAgent/1.0"
+///   `anon_id` = "00000000-0000-0000-0000-000000000001"
+///
+/// `fingerprint_hex` = SHA-256("127.0.0.1|TestAgent/1.0|00000000-0000-0000-0000-000000000001")
+///                   = "8b93792410d3a43b4d3c94407af5e00050d9a553c41a4fc3a0ea6bb4d8bc7f10"
+///
+/// `expected_user_id` = UUIDv5(NIL, `fingerprint_hex`)
+///                    = "0c0a168b-3e2e-5975-8163-0e8e140d59fa"
+///
+/// This test prevents regression to `NAMESPACE_DNS` (AC-10, HIGH-1 fix).
+#[tokio::test]
+async fn ac10_verbatim_uuidv5_nil_namespace() {
+    // AC-10: user_id MUST be UUIDv5(NIL namespace, fingerprint_hex)
+    use archiviste_gateway::auth::fingerprint::{compute_fingerprint, fingerprint_to_user_id};
+
+    let ip = "127.0.0.1";
+    let ua = "TestAgent/1.0";
+    let anon_id = "00000000-0000-0000-0000-000000000001";
+
+    let fingerprint = compute_fingerprint(ip, ua, anon_id);
+    assert_eq!(
+        fingerprint, "8b93792410d3a43b4d3c94407af5e00050d9a553c41a4fc3a0ea6bb4d8bc7f10",
+        "fingerprint_hex must match SHA-256 of 'ip|ua|anon_id'"
+    );
+
+    let user_id = fingerprint_to_user_id(&fingerprint);
+    assert_eq!(
+        user_id.to_string(),
+        "0c0a168b-3e2e-5975-8163-0e8e140d59fa",
+        "user_id must be UUIDv5(NIL, fingerprint_hex) — not NAMESPACE_DNS"
+    );
+
+    // Verify it is version 5 (bits 12-15 of time_hi = 0101b = 5).
+    assert_eq!(user_id.get_version_num(), 5, "must be UUID version 5");
+}
+
+// ---------------------------------------------------------------------------
+// AC-21: CF-Connecting-IP header takes priority over X-Forwarded-For and ConnectInfo.
+// ---------------------------------------------------------------------------
+
+/// AC-21: `extract_ip` returns CF-Connecting-IP when present, ignoring other sources.
+#[test]
+fn ac21_cf_connecting_ip_has_priority() {
+    // AC-21: CF-Connecting-IP must take priority over X-Forwarded-For and ConnectInfo.
+    use archiviste_gateway::auth::fingerprint::extract_ip;
+    use axum::http::{HeaderMap, HeaderName, HeaderValue};
+    use std::net::SocketAddr;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("cf-connecting-ip"),
+        HeaderValue::from_static("1.2.3.4"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-forwarded-for"),
+        HeaderValue::from_static("9.9.9.9"),
+    );
+
+    let connect_info: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+    let ip = extract_ip(&headers, Some(&connect_info));
+
+    assert_eq!(ip, "1.2.3.4", "CF-Connecting-IP must take priority");
+}
+
+/// AC-21: when CF-Connecting-IP is absent, `ConnectInfo` is used (dev path).
+#[test]
+fn ac21_connect_info_used_when_no_cf_header() {
+    // AC-21: fallback to ConnectInfo when no CF-Connecting-IP header is present.
+    use archiviste_gateway::auth::fingerprint::extract_ip;
+    use axum::http::HeaderMap;
+    use std::net::SocketAddr;
+
+    let headers = HeaderMap::new();
+    let connect_info: SocketAddr = "10.0.0.1:8080".parse().unwrap();
+    let ip = extract_ip(&headers, Some(&connect_info));
+
+    assert_eq!(
+        ip, "10.0.0.1",
+        "ConnectInfo IP must be used when CF header absent"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-9 (c): request with valid JWT member → 200, tier=member, fingerprint=null.
 // ---------------------------------------------------------------------------
 

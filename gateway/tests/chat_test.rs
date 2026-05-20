@@ -316,11 +316,17 @@ async fn ac3_ac4_workers_body_and_headers() {
         workers_body["conversation_id"],
         "550e8400-e29b-41d4-a716-446655440000"
     );
-    // SEC-001 AC-14: user_id is now a UUIDv5 fingerprint (not the sentinel).
-    let user_id_str = workers_body["user_id"].as_str().unwrap_or("");
-    assert_eq!(user_id_str.len(), 36, "user_id must be a UUID");
-    // SEC-001 AC-14: user_tier propagated from resolved identity.
-    assert_eq!(workers_body["user_tier"], "anonymous");
+    // SEC-001 AC-14: user_id and user_tier are propagated via X-User-Tier / X-User-Id
+    // outbound headers, NOT in the JSON body (plan line 24 "au lieu de user_id/user_tier
+    // dans le JSON body"). Assert the fields are absent from the body.
+    assert!(
+        workers_body.get("user_id").is_none(),
+        "user_id must NOT appear in workers JSON body (use X-User-Id header instead)"
+    );
+    assert!(
+        workers_body.get("user_tier").is_none(),
+        "user_tier must NOT appear in workers JSON body (use X-User-Tier header instead)"
+    );
     assert!(workers_body["request_id"].as_str().is_some());
     assert_eq!(workers_body["request_id"], response_request_id);
 

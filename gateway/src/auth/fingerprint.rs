@@ -29,9 +29,13 @@ pub fn compute_fingerprint(ip: &str, user_agent: &str, anon_id: &str) -> String 
 }
 
 /// Derive the anonymous `user_id` (`UUIDv5`, NIL namespace) from the fingerprint.
+///
+/// AC-10 verbatim: "namespace = NIL" — `Uuid::nil()` (all-zero) is the NIL namespace
+/// per RFC 4122 §4.3. Using any other namespace (e.g. `NAMESPACE_DNS`) would produce
+/// different UUIDs, breaking all stored anonymous `user_ids`.
 #[must_use]
 pub fn fingerprint_to_user_id(fingerprint_hex: &str) -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, fingerprint_hex.as_bytes())
+    Uuid::new_v5(&Uuid::nil(), fingerprint_hex.as_bytes())
 }
 
 /// Extract client IP from an Axum request.

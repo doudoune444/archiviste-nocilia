@@ -146,13 +146,12 @@ async fn forward_to_workers(
 ) -> (StatusCode, Option<u16>, Response) {
     let url = format!("{}/v1/generate", state.config.workers_url);
 
-    // SEC-001 AC-14: propagate resolved identity to workers via JSON body.
-    // X-User-Tier and X-User-Id headers are also set on the outbound request.
+    // SEC-001 AC-14: propagate resolved identity to workers via outbound headers.
+    // Plan line 24: "propager X-User-Tier + X-User-Id au lieu de user_id/user_tier dans le JSON body".
+    // Identity is NOT duplicated in the JSON body — headers are the canonical transport.
     let workers_body = json!({
         "query": req.query,
         "conversation_id": req.conversation_id,
-        "user_id": identity.user_id.to_string(),
-        "user_tier": identity.tier.as_str(),
         "request_id": request_id,
     });
 
@@ -161,7 +160,7 @@ async fn forward_to_workers(
         .post(&url)
         .header("content-type", "application/json")
         .header("x-request-id", request_id) // AC-4: observational header
-        // SEC-001 AC-14: propagate identity headers to workers.
+        // SEC-001 AC-14: identity propagated via headers only (not JSON body).
         .header("x-user-tier", identity.tier.as_str())
         .header("x-user-id", identity.user_id.to_string())
         .json(&workers_body)

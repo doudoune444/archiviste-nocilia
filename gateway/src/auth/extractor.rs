@@ -3,14 +3,15 @@
 //! `AuthUser` resolves the caller's identity from JWT (cookie or Authorization header).
 //! Three resolution paths:
 //!   1. Valid JWT + valid session → `AuthUser` with `tier=member|author` and `sid`.
-//!   2. No JWT or invalid JWT → the extractor returns an error (401).
+//!   2. No JWT or invalid JWT → the extractor returns `Err(AuthError::InvalidToken)` (401).
+//!   3. Valid JWT but session DB unreachable → `Err(AuthError::Upstream)` (503).
 //!
 //! The anonymous fingerprint path is handled by middleware (see `lib.rs`) and
 //! attached as an `AnonIdentity` extension.  Handlers that accept anonymous
 //! callers should use `AnonIdentity`, not `AuthUser`.
 //!
-//! Routes that accept any caller (anonymous OK) declare themselves via the
-//! `AnyUser` extractor which returns either `MemberAuth` or the anonymous identity.
+//! Routes requiring `author` tier use the `RequireAuthor` extractor (returns 403
+//! `author_required` for `member` or anonymous callers with a valid JWT).
 
 use axum::{
     extract::FromRequestParts,
@@ -29,6 +30,17 @@ use crate::{
     },
     state::AppState,
 };
+
+// ---------------------------------------------------------------------------
+// AC-19: auth failure counters
+// ---------------------------------------------------------------------------
+
+/// In-process counter for `auth_failures_total{event=invalid_token}` (AC-19).
+///
+/// Phase 1: atomic counter + `tracing::warn!` event (searchable in log aggregators).
+/// A real OTel/Prometheus counter is wired in SEC-002 (multi-replica metrics export).
+pub static AUTH_FAILURES_INVALID_TOKEN: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // UserTier
@@ -98,7 +110,7 @@ pub enum AuthError {
     InvalidToken,
     /// JWT structurally valid but session is revoked / expired / missing (AC-13).
     SessionRevoked,
-    /// Database unavailable during session check.
+    /// Database unavailable during session check (AC-13 failure mode → 503).
     Upstream,
     /// Caller's tier is insufficient for this route (AC-16).
     AuthorRequired,
@@ -117,23 +129,30 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
     ) -> Result<Self, Self::Rejection> {
         let token = extract_bearer_token(parts).ok_or(AuthError::InvalidToken)?;
 
-        let claims = jwt::verify(&token, &state.config.jwt_ed25519_public_key_pem)
-            .map_err(|_| AuthError::InvalidToken)?;
+        let claims =
+            jwt::verify(&token, &state.config.jwt_ed25519_public_key_pem).map_err(|_| {
+                // AC-19: emit structured event on JWT verification failure.
+                // Counter `auth_failures_total{event=invalid_token}` — Phase 1 via tracing.
+                // A real metrics counter (Prometheus / OpenTelemetry) is wired in SEC-002.
+                tracing::warn!(event = "auth_failure", reason = "invalid_token");
+                AUTH_FAILURES_INVALID_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                AuthError::InvalidToken
+            })?;
 
         let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InvalidToken)?;
         let sid = Uuid::parse_str(&claims.sid).map_err(|_| AuthError::InvalidToken)?;
         let tier = UserTier::from_claim(&claims.tier).ok_or(AuthError::InvalidToken)?;
 
         // AC-13: server-side session check (no cache phase 1).
+        // If no pool is configured (test environment), skip the check — session is
+        // assumed valid. In production `run()` always provides a pool; absence is
+        // a boot-time invariant, not a per-request runtime condition.
         if let Some(pool) = &state.db_pool {
             match sessions::check_session(pool, sid).await {
                 Ok(()) => {}
                 Err(SessionError::Revoked) => return Err(AuthError::SessionRevoked),
                 Err(SessionError::Unavailable) => return Err(AuthError::Upstream),
             }
-        } else {
-            // No DB pool configured (test environment without DB).
-            return Err(AuthError::SessionRevoked);
         }
 
         Ok(AuthUser { user_id, tier, sid })

@@ -132,7 +132,7 @@ export function chatIteration() {
     conversationId = uuidv4();
   }
 
-  // Pick a prompt round-robin by VU iteration counter.
+  // Pick a prompt at random from the in-domain pool (uniform distribution).
   const prompt = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
 
   const payload = JSON.stringify({

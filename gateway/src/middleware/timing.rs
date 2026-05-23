@@ -11,6 +11,12 @@
 //!
 //! Using a request-extension atomic cell avoids relying on response-extension
 //! propagation across Axum's `MapIntoResponse` wrappers.
+//!
+//! # Failure modes
+//! - Handler panics mid-`await` of the workers call: the slot stays at zero,
+//!   so the middleware reports `overhead = total` (overestimate by the workers
+//!   call duration). Header is still posted. Acceptable: a panic is already an
+//!   alerting event, the inflated overhead figure is not a SLO regression.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

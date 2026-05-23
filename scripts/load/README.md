@@ -52,6 +52,8 @@ Estimate: ~500 tokens in × €0.002/1k + ~200 tokens out × €0.006/1k ≈ €
 **Hard cap: €30/run** (D-3). Set a spending alert in the Mistral console before launching.
 Abort the run (`Ctrl+C`) immediately if the console shows budget nearing the cap.
 
+> ⚠ **500-VU run at full 100 s duration ≈ €100, exceeds the €30 cap.** Either (a) shorten the 500-VU steady window to ~25 s to land near €25, (b) extrapolate from a 100-VU run, or (c) raise the cap explicitly with human sign-off before launching. Do NOT launch the full 500-VU/100 s slice without one of the three.
+
 For a more conservative budget, run 100-VU scenario only and extrapolate.
 
 ## (d) Summary export procedure

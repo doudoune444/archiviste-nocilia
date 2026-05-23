@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Ops
+
+- **OPS-001a (load test scaffold)**: k6 load-test harness for 100/500-VU scenarios against `POST /v1/chat`. Gateway middleware `overhead_header` (`axum::middleware::from_fn`) inserts `X-Gateway-Overhead-Ms` header on every chat response (gateway-only latency = total − workers call duration, measured via shared `Arc<AtomicU64>` request extension). Integration tests cover AC-4 (a–e): header present on 200 and 400, valid integer, overhead < total elapsed, gap ≈ workers delay ± 150 ms margin. `scripts/load/k6/chat-round-trip.js` implements scenarios `chat_100_users` / `chat_500_users` (ramping-vus, 30 s ramp, 60 s steady) with custom `Trend` `gateway_overhead_ms` and `Counter` `gateway_overhead_header_missing`, thresholds per AC-3, `discardResponseBodies: true`. `scripts/load/k6/prompts.json` contains 10 in-domain Nocilia corpus prompts (no PII, no prompt-injection). `scripts/load/README.md` covers pre-reqs (k6 ≥ 0.50, Cloudflare bypass), commands, Mistral budget estimate (€10–100/run, hard cap €30, D-3), summary-export procedure, report procedure. `docs/load-test-report-v1.md` skeleton created with all sections named and `TBD` placeholders pending live run (OPS-001b). `scripts/load/runs/.gitkeep` added for summary JSON commits.
+
 ### Security
 
 - **SEC-001 PR-a (infra auth layer)**: JWT EdDSA (Ed25519) verification with strict `alg` pin (AC-12); anonymous fingerprint identity (`SHA-256(IP|UA|anon_cookie)` → `UUIDv5`, AC-10); `GET /v1/me` returns tier + fingerprint for any caller (AC-9); `AuthUser` / `RequireAuthor` Axum extractors enforce auth gating per route (AC-11, AC-16); `X-User-Tier` + `X-User-Id` headers propagated from gateway to workers replacing hardcoded sentinel (AC-14); server-side session check via `sessions` table (AC-13); `archiviste_anon` cookie generation for anonymous visitors (AC-10); migration `0003_users_auth` adds `users.email`, `users.password_hash`, `sessions` table (AC-20). INV-6 property test: any invalid JWT on an authenticated route returns 401, never 200 with degraded tier.

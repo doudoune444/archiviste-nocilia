@@ -20,7 +20,9 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use crate::{auth::extractor::AnonIdentity, state::AppState, RequestId};
+use crate::{
+    auth::extractor::AnonIdentity, middleware::WorkersCallDuration, state::AppState, RequestId,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -68,6 +70,9 @@ pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(req_id): Extension<RequestId>,
     Extension(identity): Extension<AnonIdentity>,
+    // OPS-001a: optional cell inserted by `overhead_header` middleware.
+    // Absent when the middleware is not applied (e.g. non-chat routes in tests).
+    workers_cell: Option<Extension<WorkersCallDuration>>,
     body: axum::body::Bytes,
 ) -> Response {
     let request_id = req_id.0;
@@ -84,7 +89,7 @@ pub async fn chat(
 
     let query_len = validated.query.len();
     let (gateway_status, upstream_status, response) =
-        forward_to_workers(&state, &request_id, validated, &identity).await;
+        forward_to_workers(&state, &request_id, validated, &identity, workers_cell).await;
 
     let latency_ms = elapsed_ms(start);
     log_request(
@@ -138,11 +143,14 @@ fn parse_and_validate(body: &[u8]) -> Result<ValidatedRequest, &'static str> {
 /// Forward the validated request to workers.
 ///
 /// Returns `(gateway_status, upstream_status_option, response)`.
+/// Writes the workers call duration into `workers_cell` (if present) so that
+/// `overhead_header` middleware can subtract it from total elapsed time.
 async fn forward_to_workers(
     state: &AppState,
     request_id: &str,
     req: ValidatedRequest,
     identity: &AnonIdentity,
+    workers_cell: Option<Extension<WorkersCallDuration>>,
 ) -> (StatusCode, Option<u16>, Response) {
     let url = format!("{}/v1/generate", state.config.workers_url);
 
@@ -155,6 +163,9 @@ async fn forward_to_workers(
         "request_id": request_id,
     });
 
+    // OPS-001a: measure the workers call duration for overhead attribution.
+    // The timer covers the full interaction: request send + response headers + body read.
+    let workers_start = Instant::now();
     let result = state
         .http
         .post(&url)
@@ -167,10 +178,18 @@ async fn forward_to_workers(
         .send()
         .await;
 
-    match result {
+    let outcome = match result {
         Err(ref e) => map_reqwest_error(e, request_id),
-        Ok(resp) => handle_workers_response(resp, request_id).await,
+        Ok(upstream) => handle_workers_response(upstream, request_id).await,
+    };
+
+    // Write the full workers duration (including body read) to the shared slot.
+    let workers_duration = workers_start.elapsed();
+    if let Some(Extension(cell)) = workers_cell {
+        cell.set(workers_duration);
     }
+
+    outcome
 }
 
 /// Map a `reqwest::Error` to the appropriate gateway error.

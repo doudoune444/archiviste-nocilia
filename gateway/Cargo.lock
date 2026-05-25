@@ -64,7 +64,7 @@ dependencies = [
  "mockito",
  "pkcs8",
  "proptest",
- "rand_core 0.6.4",
+ "rand_core 0.9.5",
  "reqwest",
  "ring",
  "rsa",

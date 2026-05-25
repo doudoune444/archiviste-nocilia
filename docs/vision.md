@@ -169,13 +169,13 @@ Beta ship-able après **#2**. Ordre conçu pour minimiser risque public (Cloudfl
 
 ### Ordre suggéré V1 ship public (état 2026-05-25)
 
-État courant : tickets 1→9 mergés sauf compléments UI-002b, SEC-001 PR-b, OPS-001b. Aucun `terraform apply` réel exécuté — DNS `archiviste.nocilia.fr` ne résout pas encore. 5 PRs Dependabot ouvertes (dont `jsonwebtoken 9→10` auth-critique).
+État courant : tickets 1→9 mergés sauf compléments UI-002b, SEC-001 PR-b, OPS-001b. Aucun `terraform apply` réel exécuté — DNS `archiviste.nocilia.fr` ne résout pas encore. Étape A cleared : `jsonwebtoken 10` (OPS-002), `axum-extra 0.12`, `config 0.15`, patch-group mergés ; `rand_core 0.9` déferré (incompat `ed25519-dalek 2.x`, à rouvrir avec 3.x).
 
 Ship-able public après **D**. Trophée portfolio complet après **E**.
 
 | Étape | Travail | Pourquoi maintenant |
 |---|---|---|
-| **A** | Review + merge 5 PRs Dependabot (`jsonwebtoken 10`, `axum-extra`, `rand_core`, `config`, patch-group) | `jsonwebtoken 10` touche le chemin auth SEC-001 — fixer la base avant PR-b. Réduit risque CVE avant exposition publique. |
+| **A** ✅ | Review + merge PRs Dependabot (`jsonwebtoken 10`, `axum-extra 0.12`, `config 0.15`, patch-group). `rand_core 0.9` close-deferred : `OsRng` retiré + ed25519-dalek 2.x pin transitif 0.6. | `jsonwebtoken 10` touche le chemin auth SEC-001 — fixer la base avant PR-b. Réduit risque CVE avant exposition publique. |
 | **B** | **SEC-001 PR-b** — `POST /v1/auth/signup` / `login` / `logout`, argon2id (m=19456,t=2,p=1), throttle login (5 fails / 15 min / email), `Set-Cookie archiviste_session`. AC-1..8, AC-17, AC-18, AC-19 SEC-001. | Sans login auteur impossible → dashboard inutile prod, Mode 4 ACL non démontrable. Bloque B, C, F. |
 | **C** | **UI-002b** — `gateway/static/dashboard.html` + `assets/dashboard.{js,css}` + handler `/dashboard` gated `author_only` (plan ~216 LOC déjà écrit). | Sans page HTML le backend `/v1/tickets` reste invisible. Ferme boucle feedback auteur. |
 | **D** | **Deploy live GCP** — `terraform apply` (Cloud Run + SQL + GCS + Secret Manager + Cloudflare), 1er run `deploy.yml` push main, exécution `scripts/seed_author.sql` en prod, smoke `GET https://archiviste.nocilia.fr/healthz` = 200 + canary promotion 100 %. | **Premier ship public**. Active toutes les fonctionnalités déjà mergées. Pré-requis E. |

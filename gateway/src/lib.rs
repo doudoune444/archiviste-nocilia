@@ -7,6 +7,7 @@ pub mod config;
 pub mod errors;
 pub mod gcs;
 pub mod handlers;
+pub mod middleware;
 pub mod routes;
 pub mod state;
 
@@ -14,7 +15,7 @@ use anyhow::Result;
 use axum::{
     extract::Request,
     http::{HeaderValue, StatusCode},
-    middleware::{self, Next},
+    middleware::Next,
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -318,11 +319,15 @@ const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains; preload";
 
 /// Build the gateway router with all routes wired and shared state attached.
 pub fn router(state: Arc<AppState>) -> Router {
-    // `/v1/chat` sub-router with body limit + error-handler middleware.
+    // `/v1/chat` sub-router with body limit + error-handler + overhead timing middleware.
     let chat_router = Router::new()
         .route("/v1/chat", axum::routing::post(handlers::chat::chat))
         .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB (AC-7)
-        .layer(middleware::from_fn(handle_body_limit_error));
+        .layer(axum::middleware::from_fn(handle_body_limit_error))
+        // OPS-001a: inserts `X-Gateway-Overhead-Ms` on every response (AC-4).
+        .layer(axum::middleware::from_fn(
+            crate::middleware::overhead_header,
+        ));
 
     // Static file routes: index.html at /, assets under /assets/*.
     // ServeDir handles path-traversal rejection natively (AC-5).
@@ -357,11 +362,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(dashboard_api)
         .merge(test_routes)
         .merge(static_router)
-        .layer(middleware::from_fn_with_state(
+        .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             resolve_identity,
         ))
-        .layer(middleware::from_fn(attach_request_id))
+        .layer(axum::middleware::from_fn(attach_request_id))
         .with_state(state)
         // SEC-003 / AC-1 / A02: 5 security headers applied router-wide (static + API).
         .layer(SetResponseHeaderLayer::if_not_present(

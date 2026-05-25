@@ -97,7 +97,7 @@ async def test_happy_path_returns_chunk_shape(
     clean_db: asyncpg.Pool,
     shared_embedder: Embedder,
 ) -> None:
-    """AC-9 + AC-10 + AC-15: returned shape, score in [0,1], timings >= 0."""
+    """AC-9 + AC-10 + AC-15 + GEN-005-AC-2: returned shape includes access_tier, score in [0,1]."""
     [vec] = shared_embedder.encode_batch(["the archiviste keeps the lore"], batch_size=1)
     await _seed_doc(
         clean_db,
@@ -114,21 +114,35 @@ async def test_happy_path_returns_chunk_shape(
     body = response.json()
     assert len(body["chunks"]) == 1
     chunk = body["chunks"][0]
-    assert set(chunk.keys()) == {"chunk_id", "document_id", "source_path", "ord", "text", "score"}
+    # GEN-005 AC-2: access_tier field now present in response.
+    assert set(chunk.keys()) == {
+        "chunk_id",
+        "document_id",
+        "source_path",
+        "ord",
+        "text",
+        "score",
+        "access_tier",
+    }
     assert _UUID_RE.match(chunk["chunk_id"])
     assert _UUID_RE.match(chunk["document_id"])
     assert chunk["source_path"] == "lore/archiviste.md"
     assert chunk["ord"] == 0
     assert 0.0 <= chunk["score"] <= 1.0
+    assert chunk["access_tier"] == "public"
 
 
 @pytest.mark.asyncio
-async def test_acl_filter_anonymous_only_sees_public(
+async def test_retrieve_returns_all_tiers_with_access_tier_field(
     app_client: AsyncClient,
     clean_db: asyncpg.Pool,
     shared_embedder: Embedder,
 ) -> None:
-    """AC-7 + AC-8: anonymous → only `public` chunks, regardless of cosine score."""
+    """GEN-005 AC-2 + U-4: /v1/retrieve returns all tiers (no SQL ACL filter) + access_tier field.
+
+    D-2: SQL ACL filter removed; filtering is now post-retrieval in services/acl.py.
+    user_tier parameter still accepted but ignored for filtering (compat D-2).
+    """
     [vec_pub] = shared_embedder.encode_batch(["public chunk"], batch_size=1)
     [vec_mem] = shared_embedder.encode_batch(["members chunk"], batch_size=1)
     [vec_aut] = shared_embedder.encode_batch(["author chunk"], batch_size=1)
@@ -142,57 +156,45 @@ async def test_acl_filter_anonymous_only_sees_public(
         clean_db, source_path="a.md", text="author", access_tier="author_only", embedding=vec_aut
     )
 
+    # D-2: even as anonymous, retrieve now returns all tiers (ACL moved post-retrieve).
     response = await app_client.post(
         "/v1/retrieve",
         json={"query": "members chunk", "top_k": 10, "user_tier": "anonymous"},
     )
     assert response.status_code == 200
-    paths = {chunk["source_path"] for chunk in response.json()["chunks"]}
-    assert paths == {"p.md"}
-
-
-@pytest.mark.asyncio
-async def test_acl_filter_members_sees_public_and_members(
-    app_client: AsyncClient,
-    clean_db: asyncpg.Pool,
-    shared_embedder: Embedder,
-) -> None:
-    """AC-7: `members` → public + members, never author_only."""
-    [vec] = shared_embedder.encode_batch(["seed"], batch_size=1)
-    await _seed_doc(clean_db, source_path="p.md", text="p", access_tier="public", embedding=vec)
-    await _seed_doc(clean_db, source_path="m.md", text="m", access_tier="members", embedding=vec)
-    await _seed_doc(
-        clean_db, source_path="a.md", text="a", access_tier="author_only", embedding=vec
-    )
-
-    response = await app_client.post(
-        "/v1/retrieve",
-        json={"query": "seed", "top_k": 10, "user_tier": "members"},
-    )
-    paths = {chunk["source_path"] for chunk in response.json()["chunks"]}
-    assert paths == {"p.md", "m.md"}
-
-
-@pytest.mark.asyncio
-async def test_acl_filter_author_only_sees_all(
-    app_client: AsyncClient,
-    clean_db: asyncpg.Pool,
-    shared_embedder: Embedder,
-) -> None:
-    """AC-7: `author_only` user_tier → all three tiers visible."""
-    [vec] = shared_embedder.encode_batch(["seed"], batch_size=1)
-    await _seed_doc(clean_db, source_path="p.md", text="p", access_tier="public", embedding=vec)
-    await _seed_doc(clean_db, source_path="m.md", text="m", access_tier="members", embedding=vec)
-    await _seed_doc(
-        clean_db, source_path="a.md", text="a", access_tier="author_only", embedding=vec
-    )
-
-    response = await app_client.post(
-        "/v1/retrieve",
-        json={"query": "seed", "top_k": 10, "user_tier": "author_only"},
-    )
-    paths = {chunk["source_path"] for chunk in response.json()["chunks"]}
+    chunks = response.json()["chunks"]
+    paths = {chunk["source_path"] for chunk in chunks}
+    # All 3 tiers returned (no SQL filter anymore).
     assert paths == {"p.md", "m.md", "a.md"}
+    # access_tier field present and correct on each chunk.
+    tier_by_path = {chunk["source_path"]: chunk["access_tier"] for chunk in chunks}
+    assert tier_by_path["p.md"] == "public"
+    assert tier_by_path["m.md"] == "members"
+    assert tier_by_path["a.md"] == "author_only"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_all_tiers_returned_regardless_of_user_tier(
+    app_client: AsyncClient,
+    clean_db: asyncpg.Pool,
+    shared_embedder: Embedder,
+) -> None:
+    """GEN-005 AC-2 + U-4: all user_tier values return the same unfiltered chunks."""
+    [vec] = shared_embedder.encode_batch(["seed"], batch_size=1)
+    await _seed_doc(clean_db, source_path="p.md", text="p", access_tier="public", embedding=vec)
+    await _seed_doc(clean_db, source_path="m.md", text="m", access_tier="members", embedding=vec)
+    await _seed_doc(
+        clean_db, source_path="a.md", text="a", access_tier="author_only", embedding=vec
+    )
+
+    # Regardless of user_tier, retrieve returns all 3 tiers (D-2 post GEN-005).
+    for user_tier in ("anonymous", "members", "author_only"):
+        response = await app_client.post(
+            "/v1/retrieve",
+            json={"query": "seed", "top_k": 10, "user_tier": user_tier},
+        )
+        paths = {chunk["source_path"] for chunk in response.json()["chunks"]}
+        assert paths == {"p.md", "m.md", "a.md"}, f"Failed for user_tier={user_tier}"
 
 
 @pytest.mark.asyncio

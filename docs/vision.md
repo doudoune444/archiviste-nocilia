@@ -158,14 +158,31 @@ Budget estimé V1 : **~15-18 €/mois** (Cloud SQL ~11 €, Cloud Run gateway ~1
 Beta ship-able après **#2**. Ordre conçu pour minimiser risque public (Cloudflare rate-limit + cap Mistral console AVANT exposition, hardening app-level V2).
 
 1. **Corpus + golden_qa réels** — tâche auteur (hors-ticket code) : `lore/*.md` contenu canon + `specs/golden_qa.jsonl` ≥ 30 entrées 4 modes. ✅ déjà 46 entrées, à raffiner selon corpus final.
-2. **INFRA-002 deploy GCP beta** — Terraform Cloud Run + Cloud SQL + GCS + Secret Manager + Cloudflare. Embedder switch BGE-M3 → `mistral-embed`. GHA `deploy.yml` WIF + canary + smoke + auto-rollback. **Premier ship public** sur `https://archiviste.nocilia.fr`.
-3. **SEC-003 security headers** — HSTS / CSP / X-Content-Type-Options / Referrer-Policy via tower middleware gateway. Quick win post-deploy.
-4. **GEN-003 Mode 2 off-topic** — refus poli quand intent classifier renvoie `off_topic`. Polish UX immédiatement visible chat.
-5. **GEN-004 Mode 3 lore-gap + ticket** — retrieval < threshold → "noté pour archives" + création ticket auto (table `tickets`, dedup cosine ≥ 0.85). Différenciateur core produit.
-6. **UI-002 dashboard auteur tickets** — page liste tickets lore-gap + liens conversations GCS signed URL. Ferme boucle feedback auteur.
-7. **SEC-001 auth tiers** — JWT + `anonymous` (fingerprint) / `member` (signup) / `author`. Pré-requis Mode 4 ACL + dashboard auteur sécurisé.
-8. **GEN-005 Mode 4 mystère + ACL** — filtrage post-retrieval sur `access_tier`, réponse mystérieuse (timing constant) si `acl_blocked`. Feature 4 modes complète.
-9. **OPS-001 load tests 100/500 users** — k6 scripts + rapport SLO (p95 < 3 s, gateway overhead < 80 ms). Trophy portfolio scaling.
+2. **INFRA-002 deploy GCP beta** — Terraform Cloud Run + Cloud SQL + GCS + Secret Manager + Cloudflare. Embedder switch BGE-M3 → `mistral-embed`. GHA `deploy.yml` WIF + canary + smoke + auto-rollback. **Premier ship public** sur `https://archiviste.nocilia.fr`. ✅ code mergé (a/b/c/d), `terraform apply` réel + 1er deploy = étape D ci-dessous.
+3. **SEC-003 security headers** — HSTS / CSP / X-Content-Type-Options / Referrer-Policy via tower middleware gateway. Quick win post-deploy. ✅
+4. **GEN-003 Mode 2 off-topic** — refus poli quand intent classifier renvoie `off_topic`. Polish UX immédiatement visible chat. ✅
+5. **GEN-004 Mode 3 lore-gap + ticket** — retrieval < threshold → "noté pour archives" + création ticket auto (table `tickets`, dedup cosine ≥ 0.85). Différenciateur core produit. ✅ (a+b)
+6. **UI-002 dashboard auteur tickets** — page liste tickets lore-gap + liens conversations GCS signed URL. Ferme boucle feedback auteur. ⚠️ PR1 backend ✅, PR2 frontend (`UI-002b`) reste à livrer.
+7. **SEC-001 auth tiers** — JWT + `anonymous` (fingerprint) / `member` (signup) / `author`. Pré-requis Mode 4 ACL + dashboard auteur sécurisé. ⚠️ PR-a infra ✅ (JWT verify + `/v1/me` + fingerprint + sessions check). PR-b runtime auth (`POST /v1/auth/{signup,login,logout}` + throttle + argon2id) reste à livrer.
+8. **GEN-005 Mode 4 mystère + ACL** — filtrage post-retrieval sur `access_tier`, réponse mystérieuse (timing constant) si `acl_blocked`. Feature 4 modes complète. ✅
+9. **OPS-001 load tests 100/500 users** — k6 scripts + rapport SLO (p95 < 3 s, gateway overhead < 80 ms). Trophy portfolio scaling. ⚠️ OPS-001a scaffold ✅ ; OPS-001b run live + rapport rempli reste à livrer.
+
+### Ordre suggéré V1 ship public (état 2026-05-25)
+
+État courant : tickets 1→9 mergés sauf compléments UI-002b, SEC-001 PR-b, OPS-001b. Aucun `terraform apply` réel exécuté — DNS `archiviste.nocilia.fr` ne résout pas encore. 5 PRs Dependabot ouvertes (dont `jsonwebtoken 9→10` auth-critique).
+
+Ship-able public après **D**. Trophée portfolio complet après **E**.
+
+| Étape | Travail | Pourquoi maintenant |
+|---|---|---|
+| **A** | Review + merge 5 PRs Dependabot (`jsonwebtoken 10`, `axum-extra`, `rand_core`, `config`, patch-group) | `jsonwebtoken 10` touche le chemin auth SEC-001 — fixer la base avant PR-b. Réduit risque CVE avant exposition publique. |
+| **B** | **SEC-001 PR-b** — `POST /v1/auth/signup` / `login` / `logout`, argon2id (m=19456,t=2,p=1), throttle login (5 fails / 15 min / email), `Set-Cookie archiviste_session`. AC-1..8, AC-17, AC-18, AC-19 SEC-001. | Sans login auteur impossible → dashboard inutile prod, Mode 4 ACL non démontrable. Bloque B, C, F. |
+| **C** | **UI-002b** — `gateway/static/dashboard.html` + `assets/dashboard.{js,css}` + handler `/dashboard` gated `author_only` (plan ~216 LOC déjà écrit). | Sans page HTML le backend `/v1/tickets` reste invisible. Ferme boucle feedback auteur. |
+| **D** | **Deploy live GCP** — `terraform apply` (Cloud Run + SQL + GCS + Secret Manager + Cloudflare), 1er run `deploy.yml` push main, exécution `scripts/seed_author.sql` en prod, smoke `GET https://archiviste.nocilia.fr/healthz` = 200 + canary promotion 100 %. | **Premier ship public**. Active toutes les fonctionnalités déjà mergées. Pré-requis E. |
+| **E** | **OPS-001b** — whitelist IP poste auteur sur Cloudflare, cap Mistral console €30, run k6 100 puis 500 VUs contre URL prod, archive `summary.json` dans `scripts/load/runs/`, remplit `docs/load-test-report-v1.md` (métriques, verdicts SLO p95<3 s + overhead<80 ms, cold-start, budget réel, lien Langfuse), retire whitelist. | Bloqué par D (besoin URL prod). Valide SLO vision §87-92. Trophée portfolio scaling. |
+| **F** | **Polish démo** — README démo + GIF chat + dashboard, runbook rollback testé sur une revision réelle, raffiner `specs/golden_qa.jsonl` selon corpus final, créer projet Langfuse + clé dans Secret Manager pour traces LLM. | Diffusion vitrine. Non bloquant pour ship mais nécessaire avant publication portfolio. |
+
+V1 ship-able après **D**. Trophée portfolio complet après **E**.
 
 **V2 (post-beta, ~1 semaine après)** :
 - **SEC-002** rate-limit app-level `tower_governor` + Redis sliding window (si trafic justifie Memorystore).

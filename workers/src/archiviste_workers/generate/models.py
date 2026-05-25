@@ -9,7 +9,7 @@ from typing import Annotated, Final, Literal
 from pydantic import BaseModel, Field, field_validator
 
 UserTier = Literal["anonymous", "members", "author_only"]
-Mode = Literal["canon", "off_topic", "lore_gap"]
+Mode = Literal["canon", "off_topic", "lore_gap", "mystery"]
 
 # AC-2: score threshold below which Mode 3 lore-gap is triggered. Strict < (D8).
 LORE_GAP_THRESHOLD: Final = 0.45
@@ -66,3 +66,6 @@ class Chunk(BaseModel):
     # AC-2 / R5: score = 1 - cosine_distance, exposed by /v1/retrieve (RET-001).
     # Default 0.0 preserves backward compat with any caller that omits the field.
     score: float = 0.0
+    # U-3: str (not Literal) so fail-closed business logic in acl.py can handle
+    # unknown tiers without Pydantic 422 (D-4). Default "public" for backward compat.
+    access_tier: str = "public"

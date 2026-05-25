@@ -18,6 +18,15 @@ pub struct Config {
     /// Required at boot. Gateway refuses to start if absent or malformed
     /// (failure mode "clé absente → refus démarrage").
     pub jwt_ed25519_public_key_pem: String,
+    /// Ed25519 private key PEM for JWT signing (AC-5, PR-b).
+    ///
+    /// Typed `SecretString` — never logged or exposed in debug output (`security.md` §A09).
+    /// Required at boot; gateway refuses to start if absent.
+    pub jwt_ed25519_private_key_pem: SecretString,
+    /// Key ID embedded in signed JWTs (`kid` header claim — AC-5).
+    ///
+    /// Defaults to `"default"`. Override via `JWT_KID` env var for manual key rotation.
+    pub jwt_kid: String,
     /// Crate version string surfaced via `/healthz`.
     pub version: String,
     /// TCP connect timeout for outbound calls to workers (milliseconds).
@@ -53,6 +62,11 @@ impl Config {
             database_url: std::env::var("DATABASE_URL").context("DATABASE_URL env var required")?,
             jwt_ed25519_public_key_pem: std::env::var("JWT_ED25519_PUBLIC_KEY_PEM")
                 .context("JWT_ED25519_PUBLIC_KEY_PEM env var required")?,
+            jwt_ed25519_private_key_pem: SecretString::from(
+                std::env::var("JWT_ED25519_PRIVATE_KEY_PEM")
+                    .context("JWT_ED25519_PRIVATE_KEY_PEM env var required")?,
+            ),
+            jwt_kid: std::env::var("JWT_KID").unwrap_or_else(|_| "default".to_string()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             connect_timeout_ms: std::env::var("CONNECT_TIMEOUT_MS")
                 .ok()

@@ -55,12 +55,14 @@ mod rsa_fixture {
 /// The `jwt_ed25519_public_key_pem` is taken from the shared Ed25519 test keypair
 /// so that `sign_test_token` JWTs are accepted by the router.
 fn make_config() -> Config {
-    use common::jwt_helpers::test_public_key_pem;
+    use common::jwt_helpers::{test_private_key_pem, test_public_key_pem, TEST_KEY_ID};
     Config {
         bind_addr: "127.0.0.1:0".to_string(),
         workers_url: "http://127.0.0.1:1".to_string(),
         database_url: "postgres://test".to_string(),
         jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
+        jwt_ed25519_private_key_pem: SecretString::from(test_private_key_pem().to_string()),
+        jwt_kid: TEST_KEY_ID.to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 5_000,

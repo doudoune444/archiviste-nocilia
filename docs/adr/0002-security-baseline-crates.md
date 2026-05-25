@@ -1,8 +1,9 @@
 # ADR 0002 — Security baseline crates / libs
 
-- Status: accepted
+- Status: accepted (amended 2026-05-25)
 - Date: 2026-04-29
 - Decider: Doudoune
+- Amendments: 2026-05-25 — OPS-002: jsonwebtoken 9 → 10, backend aws_lc_rs (drops ring transitive dep)
 
 ## Context
 
@@ -19,7 +20,7 @@ App = public web RAG. OWASP A07 (auth failures), A04 (insecure design — no rat
 | CORS | `tower-http::cors::CorsLayer` | (workspace) | Explicit allowlist, no wildcard with credentials. |
 | Security headers | `tower-http::set_header` + `tower-http::cors` | (workspace) | CSP, HSTS, X-Content-Type-Options, Referrer-Policy. |
 | Input validation | `validator` (derive) + `garde` (alt) | `0.18+` | Declarative struct validation, attached to handler extractor. |
-| JWT | `jsonwebtoken` | `9+` | Pin alg via `Algorithm` enum, reject `None`. |
+| JWT | `jsonwebtoken` | `10+ (feature aws_lc_rs)` | Pin alg via `Algorithm` enum, reject `None`. Backend crypto = aws_lc_rs (drops ring transitive dep). |
 | Secret type | `secrecy` | `0.10+` | Redacted Debug. Wraps tokens / passwords / connection strings. |
 | HTTP client (SSRF-safe) | `reqwest` + `hickory-resolver` | latest | `resolve_to_addrs()` for DNS pinning, redirect policy=none. |
 | CSRF (if cookies) | `axum-csrf` or custom double-submit | latest | Required if any session cookie. |
@@ -44,6 +45,7 @@ App = public web RAG. OWASP A07 (auth failures), A04 (insecure design — no rat
 - `requests` for any user-supplied URL — no built-in SSRF guard.
 - `python-jose` `algorithms=["*"]` — alg confusion.
 - Any TLS lib with `verify=False` toggle in prod path.
+- `jsonwebtoken` feature `rust_crypto` — utiliser `aws_lc_rs` (cohérence baseline crypto gateway). Follow-up SEC-XXX — retirer ring de gcs::sign.
 
 ## Consequences
 

@@ -20,6 +20,17 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-05-25 — OPS-002 — aws-lc-sys requires NASM on Windows (x86_64-pc-windows-msvc)
+
+- File: `gateway/Cargo.toml:25`
+- Symptom: `cargo build` panics in `aws-lc-sys v0.41.0` build script: `NASM command not found! Build cannot continue.` on `x86_64-pc-windows-msvc` (Windows 11, dev machine). NASM is not installed in the worktree environment.
+- Why blocked: `jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }` was applied per AC-1. `aws_lc_rs` chains `aws-lc-rs` → `aws-lc-sys` which on Windows MSVC requires NASM for assembly crypto routines. The dev environment does not have NASM (`nasm.exe`) on PATH. The build cannot proceed without it. This is a platform/toolchain gap, not a code issue.
+- Suggested resolution:
+  1. **Install NASM on Windows dev machine**: download from https://www.nasm.us/ (or `winget install nasm`), add to PATH, re-run `cargo build`. This is the clean path — OQ-3 in the plan was scoped to CI (ubuntu-latest has NASM), but Windows dev also needs it.
+  2. **Alternative — use `aws_lc_rs` with `fips` = false and pre-generated bindings**: `aws-lc-rs` provides pre-generated bindings for common targets (`AWS_LC_SYS_PREBUILT_NASM=1` env var or the `prebuilt-nasm` feature) which avoids NASM assembly compilation. Check if `aws-lc-sys` 0.41.0 supports `AWS_LC_SYS_PREBUILT_NASM=1` on Windows — if yes, this can be documented as a dev-env workaround without changing the `Cargo.toml` feature set.
+  3. **Alternative — CI-only verification**: if the Windows dev build is not a CI requirement (CI runs Ubuntu), the blocker is local-only. Human decision: accept "build on Windows dev requires NASM" as an environment pre-req (document in `docs/runbook/` or `README`) and proceed. CI ubuntu-latest already has NASM.
+- Status: resolved — NASM installed via `winget install nasm`, found at `C:\Users\bapti\AppData\Local\bin\NASM\nasm.exe`. `cargo build` passes. CI (ubuntu-latest) already has NASM. `use_pem` feature also required in `jsonwebtoken` features (PEM key loading gated on this feature in v10).
+
 ## 2026-05-20 — SEC-001 — sessions.rs: `sqlx::query_as` runtime violates security.md §A03 (compile-checked SQL macro required)
 
 - File: `gateway/src/auth/sessions.rs:50`

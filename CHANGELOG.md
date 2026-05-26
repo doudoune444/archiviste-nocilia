@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **UI-002b (dashboard auteur frontend)**: `GET /dashboard` route (author-gated via `RequireAuthor` extractor) serves `gateway/static/dashboard.html` compiled-in via `include_str!`. Static assets `dashboard.css` + `dashboard.js` served under `/assets/` by existing `ServeDir` (no auth required, no secret content). `dashboard.js` fetches `GET /v1/tickets` (credentials: same-origin), renders rows via `textContent` only (XSS-safe, AC-14), supports "Charger plus" offset pagination (AC-18), shows "Aucun ticket ouvert." on empty list (AC-17), shows "Erreur de chargement. Réessayez." with optional req-id on any error (AC-16), opens conversations via `window.open(url, '_blank', 'noopener,noreferrer')` (AC-15). All 4 UI-001 security headers (CSP/nosniff/Referrer-Policy/X-Frame-Options) present router-wide without modification (AC-12). No inline script/style/event handlers in `dashboard.html` (AC-13). Integration tests cover AC-1, AC-3, AC-4, AC-11, AC-12, AC-13 (11 tests green).
+
 ### Ops
 
 - **OPS-002 (jsonwebtoken bump)**: bump `jsonwebtoken` 9 → 10 (`aws_lc_rs` backend, drops `ring` transitive dep). `jsonwebtoken` subtree now chains `aws-lc-rs` / `aws-lc-sys`; `ring` no longer pulled via JWT path. `use_pem` feature retained so existing PEM-based Ed25519 key loading compiles without source changes. ADR-0002 amended: JWT row version `10+ (feature aws_lc_rs)`, Forbidden entry `jsonwebtoken feature "rust_crypto"`, Status `accepted (amended 2026-05-25)`. Windows dev build requires NASM (`winget install nasm`). Pre-existing `cargo deny` failures (webpki-roots CDLA-Permissive-2.0, rsa RUSTSEC-2023-0071) pre-date this ticket.

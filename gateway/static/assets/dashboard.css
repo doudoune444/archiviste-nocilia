@@ -1,0 +1,115 @@
+/* Dashboard auteur — palette UI-001, breakpoint >= 768px (AC-12, UI-002b) */
+
+:root {
+  --color-bg: #0f0f0f;
+  --color-surface: #1a1a1a;
+  --color-border: #2e2e2e;
+  --color-text: #e8e8e8;
+  --color-text-muted: #888;
+  --color-accent: #8b7355;
+  --color-error-bg: #2e1a1a;
+  --color-error-text: #e07070;
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  min-height: 100dvh;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+header {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 1rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+#dashboard-error {
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  border: 1px solid #4a2020;
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+#dashboard-error small {
+  display: block;
+  margin-top: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+#tickets-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+#tickets-table th,
+#tickets-table td {
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+#tickets-table th {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#load-more-container {
+  margin-top: 1rem;
+  text-align: center;
+}
+
+button {
+  background: var(--color-accent);
+  border: none;
+  border-radius: 4px;
+  color: var(--color-bg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+}
+
+button:not(:disabled):hover {
+  filter: brightness(1.15);
+}
+
+@media (min-width: 768px) {
+  #tickets-table td:nth-child(3) {
+    max-width: 500px;
+  }
+}

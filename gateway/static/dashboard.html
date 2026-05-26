@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard auteur — Archiviste de Nocilia</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Tickets lore-gap</h1>
+    </header>
+    <div id="dashboard-error" role="alert" hidden></div>
+    <table id="tickets-table">
+      <thead>
+        <tr>
+          <th scope="col">Priorité</th>
+          <th scope="col">Catégorie</th>
+          <th scope="col">Question</th>
+          <th scope="col">Créé le</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody id="tickets-tbody"></tbody>
+    </table>
+    <div id="load-more-container"></div>
+  </main>
+  <script src="/assets/dashboard.js" defer></script>
+</body>
+</html>

@@ -1,59 +1,37 @@
 #!/usr/bin/env bash
-# seed_author.sh — generate the author account SQL INSERT (SEC-001 AC-15).
+# seed_author.sh — author-tier seed (manual one-shot, humain-authored).
 #
-# Usage (local, never run in CI):
-#   ./scripts/seed_author.sh
+# Plan SEC-001 PR-b mandate (specs/plans/SEC-001.md L45):
+#   "agent squelette commenté: prompt password local, calcul argon2id,
+#    émet SQL INSERT à exécuter manuellement — humain rédige le contenu réel".
 #
-# Outputs an SQL statement to stdout that the HUMAN must review and execute
-# manually against Cloud SQL using gcloud sql connect / psql.
+# This is a deliberate skeleton. The previous CWE-94 implementation
+# interpolated $AUTHOR_PASSWORD into a Python heredoc — a password
+# containing `"`, `\`, `$`, or newline could break out of the Python
+# string literal and execute arbitrary code in the local seed shell.
 #
-# This script NEVER commits the hash or the password. Rule: secret-hygiene.md.
+# Humain to implement before D-step deploy:
+#   1. Prompt for AUTHOR_EMAIL + AUTHOR_PASSWORD interactively
+#      (`read -r email; read -rs password`). Never via argv / env exported.
+#   2. Compute argon2id hash with EXACTLY m=19456, t=2, p=1
+#      via stdin (e.g. `argon2 "$salt" -id -m 14 -t 2 -p 1 <<<"$password"`)
+#      or python passing the password via `os.environ`/stdin — NEVER
+#      string-interpolated into source.
+#   3. Emit SQL on stdout:
+#        INSERT INTO users (id, email, password_hash, tier, created_at)
+#        VALUES (gen_random_uuid(), LOWER('<email>'), '<hash>', 'author', NOW());
+#   4. Operator pipes the SQL into psql against the prod DB manually.
+#      No automatic execution by this script.
 #
-# Prerequisites:
-#   - Python 3.12+ with 'argon2-cffi' installed (pip install argon2-cffi).
-#   - Run from repo root.
+# AC-15 invariant: only this script (or a manual DML) creates tier='author'.
+# The application never promotes a user to 'author' at runtime.
 #
-# AC-15 constraints enforced by migration (not this script):
-#   - Only 'author' tier can be inserted via this seed; the application enforces
-#     that signup always creates 'member' tier.
-#   - No endpoint promotes a user to 'author' at runtime.
+# References:
+#   - specs/acceptance/SEC-001.md AC-15
+#   - specs/plans/SEC-001.md L45 (PR-b files to touch)
+#   - .claude/rules/secret-hygiene.md (no secret in argv / process listing)
 
 set -euo pipefail
 
-echo "=== Archiviste author seed generator ==="
-echo "This script prints SQL only. You must execute it manually."
-echo ""
-
-read -rsp "Author email: " AUTHOR_EMAIL
-echo
-read -rsp "Author password (min 12 chars): " AUTHOR_PASSWORD
-echo
-echo ""
-
-# Validate minimum password length locally (AC-1 / AC-15)
-if [ "${#AUTHOR_PASSWORD}" -lt 12 ]; then
-    echo "ERROR: password must be at least 12 characters." >&2
-    exit 1
-fi
-
-# Compute argon2id hash (m=19456 KiB, t=2, p=1 — matches AC-1 parameters).
-HASH=$(python3 - <<PYEOF
-from argon2 import PasswordHasher
-ph = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1, hash_len=32, salt_len=16)
-print(ph.hash("${AUTHOR_PASSWORD}"))
-PYEOF
-)
-
-EMAIL_LOWER=$(echo "$AUTHOR_EMAIL" | tr '[:upper:]' '[:lower:]' | xargs)
-
-echo "--- Copy and execute the following SQL against Cloud SQL (psql / gcloud sql connect): ---"
-echo ""
-echo "INSERT INTO users (id, email, password_hash, tier)"
-echo "VALUES (gen_random_uuid(), '${EMAIL_LOWER}', '${HASH}', 'author')"
-echo "ON CONFLICT DO NOTHING;"
-echo ""
-echo "--- Verify with: SELECT id, tier, email FROM users WHERE tier = 'author'; ---"
-echo ""
-echo "WARNING: the hash above is sensitive. Do NOT commit this output or store it in files."
-# Clear variables from shell memory (best-effort; shell history not cleared)
-unset AUTHOR_PASSWORD HASH
+echo "scripts/seed_author.sh: stub — humain to implement (see header)." >&2
+exit 64

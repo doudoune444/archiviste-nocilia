@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
 
+[features]
+# Expose test-only constructors (new_with_mocks, new_with_lookup, new_with_all_mocks)
+# for integration tests in other crates. Never enabled in production builds.
+test-utils = []
+
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1.52", features = ["full"] }
@@ -23,6 +28,9 @@ thiserror = "1"
 anyhow = "1"
 config = "0.15"
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+argon2 = { version = "0.5", features = ["std"] }
+regex = { version = "1", default-features = false, features = ["std"] }
+unicode-normalization = "0.1"
 sha2 = "0.10"
 secrecy = { version = "0.10", features = ["serde"] }
 axum-extra = { version = "0.12", features = ["cookie"] }
@@ -31,6 +39,7 @@ base64 = "0.22"
 hex = "0.4"
 
 [dev-dependencies]
+archiviste-gateway = { path = ".", features = ["test-utils"] }
 proptest = "1"
 hyper = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }

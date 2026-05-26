@@ -36,6 +36,7 @@ pub const TEST_KEY_ID: &str = "test-key-runtime";
 struct TestKeypair {
     encoding_key: EncodingKey,
     public_key_pem: String,
+    private_key_pem: String,
 }
 
 /// Generate an Ed25519 keypair and return an `EncodingKey` + public PEM.
@@ -58,9 +59,12 @@ fn generate_keypair() -> TestKeypair {
         .to_public_key_pem(LineEnding::LF)
         .expect("Ed25519 public key PEM encoding must succeed");
 
+    let private_key_pem = private_pem.to_string();
+
     TestKeypair {
         encoding_key,
         public_key_pem,
+        private_key_pem,
     }
 }
 
@@ -73,6 +77,11 @@ fn keypair() -> &'static TestKeypair {
 /// Return the test Ed25519 public key PEM (cached, stable within a test process).
 pub fn test_public_key_pem() -> &'static str {
     &keypair().public_key_pem
+}
+
+/// Return the test Ed25519 private key PEM (cached, stable within a test process).
+pub fn test_private_key_pem() -> &'static str {
+    &keypair().private_key_pem
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +102,10 @@ pub fn make_test_config(workers_url: &str) -> Config {
         workers_url: workers_url.to_string(),
         database_url: "postgres://test".to_string(),
         jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
+        jwt_ed25519_private_key_pem: secrecy::SecretString::from(
+            test_private_key_pem().to_string(),
+        ),
+        jwt_kid: TEST_KEY_ID.to_string(),
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,

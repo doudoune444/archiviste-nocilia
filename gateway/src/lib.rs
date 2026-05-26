@@ -17,7 +17,7 @@ use axum::{
     http::{HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
@@ -303,6 +303,64 @@ async fn handle_body_limit_error(req: Request, next: Next) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Auth sub-router: body-limit 4 KiB + Content-Type enforcement (AC-17)
+// ---------------------------------------------------------------------------
+
+/// Middleware: reject requests with `Content-Type` ≠ `application/json` (AC-17).
+///
+/// Applied only to the auth sub-router.
+async fn require_json_content_type(req: Request, next: Next) -> Response {
+    let is_json = req
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+
+    if !is_json {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            )],
+            Json(json!({
+                "error": "unsupported_media_type",
+            })),
+        )
+            .into_response();
+    }
+
+    next.run(req).await
+}
+
+/// Convert body-limit 413 into the proper JSON error for auth routes (AC-17).
+async fn handle_auth_body_limit_error(req: Request, next: Next) -> Response {
+    let request_id = req
+        .extensions()
+        .get::<RequestId>()
+        .map_or_else(|| Uuid::new_v4().to_string(), |r| r.0.clone());
+
+    let resp = next.run(req).await;
+
+    if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            )],
+            Json(json!({
+                "error": "payload_too_large",
+                "request_id": request_id,
+            })),
+        )
+            .into_response();
+    }
+
+    resp
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -335,6 +393,17 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route_service("/", ServeFile::new("static/index.html"))
         .nest_service("/assets", ServeDir::new("static/assets"));
 
+    // Auth sub-router: body limit 4 KiB + Content-Type: application/json enforcement (AC-17).
+    let auth_router = Router::new()
+        .route("/v1/auth/signup", post(routes::auth::signup))
+        .route("/v1/auth/login", post(routes::auth::login))
+        .route("/v1/auth/logout", post(routes::auth::logout))
+        // AC-17: 4 KiB body limit, stricter than the general 1 MiB chat limit.
+        .layer(RequestBodyLimitLayer::new(4_096))
+        .layer(axum::middleware::from_fn(handle_auth_body_limit_error))
+        // AC-17: require Content-Type: application/json.
+        .layer(axum::middleware::from_fn(require_json_content_type));
+
     // Public API routes (AC-11: marker #[public] — all handlers accept anonymous).
     let public_api = Router::new().route("/v1/me", get(routes::me::me));
 
@@ -358,6 +427,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
         .merge(chat_router)
+        .merge(auth_router)
         .merge(public_api)
         .merge(dashboard_api)
         .merge(test_routes)

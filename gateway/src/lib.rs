@@ -409,7 +409,10 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     // Author-gated dashboard API routes (UI-002 PR1 — AC-5..AC-12, AC-19..AC-23).
     // `RequireAuthor` extractor gates each handler — no `#[public]` marker (AC-11).
+    // UI-002b PR2: GET /dashboard (AC-1, AC-11) added — custom handler so RequireAuthor
+    // extractor can gate it (a bare ServeFile carries no extractor, plan R3).
     let dashboard_api = Router::new()
+        .route("/dashboard", get(handlers::dashboard::serve_dashboard))
         .route("/v1/tickets", get(handlers::tickets::list_tickets))
         .route(
             "/v1/conversations/{id}/signed-url",

@@ -20,6 +20,22 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-05-27 — INFRA-002 — cloudflare provider 4.52 dropped `bot_fight_mode` arg + deprecated resources
+
+- File : `infra/terraform/cloudflare.tf:63` (bot_fight_mode), L33 (`value` → `content`), L71 (`cloudflare_rate_limit` deprecated 11+ months past EOL)
+- Symptom : `terraform apply` fails parse with `Error: Unsupported argument — An argument named "bot_fight_mode" is not expected here.` on `cloudflare_zone_settings_override.nocilia_fr`. Provider installé : `cloudflare/cloudflare v4.52.7` (latest 4.x, pinned `~> 4` in versions.tf). Warnings additionnels : `cloudflare_record.value` deprecated → `content` ; `cloudflare_rate_limit` deprecation phase ended June 15th 2025 (warning text says "still fully supported during the phase" mais cette phase est terminée depuis 11+ mois en mai 2026 — runtime apply incertain).
+- Why blocked : INFRA-002 PR-b (cloudflare.tf) écrit contre provider CF ~4.30-ish où `bot_fight_mode` était dans `cloudflare_zone_settings_override`. Provider 4.5x l'a déplacé vers `cloudflare_bot_management` (paid plans) ou exige toggle manuel UI sur plan Free. Code mergé main ne s'applique plus. `cloudflare_rate_limit` deprecated post-EOL = runtime apply à risque.
+- Suggested resolution :
+  1. **Option A (retenue)** — branche `fix/INFRA-002-cf-provider-compat` :
+     - retirer `bot_fight_mode` du settings_override → CF UI step 11 (manuel one-shot)
+     - fix `value` → `content`
+     - drop `cloudflare_rate_limit.archiviste_fr` resource → CF UI step 12 (manuel one-shot, V2 SEC-002 migrera vers app-level tower_governor + Redis qui rendra CF perimeter rule redundant)
+     - documenter steps 11 + 12 dans `docs/runbook/bootstrap-gcp.md`
+     - Spec AC-8 amendée scope : bot_fight + rate-limit via runbook humain au lieu de Terraform.
+  2. Option B — pin provider `= 4.40.0`. Fragile, retarde inéluctable migration.
+  3. Option C — upgrade provider `~> 5` : refactor lourd, hors-scope V1.
+- Status : open
+
 ## 2026-05-25 — OPS-002 — aws-lc-sys requires NASM on Windows (x86_64-pc-windows-msvc)
 
 - File: `gateway/Cargo.toml:25`

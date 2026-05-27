@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-05-27 — INFRA-002 — Cloud SQL IAM authentication rejected: `cloudsql.iam_authentication` flag missing on instance
+
+- File : `infra/terraform/cloud_sql.tf:8` (resource `google_sql_database_instance.archiviste_db` `settings {}`)
+- Symptom : `psql` connection via `cloud-sql-proxy --auto-iam-authn` fails for both CLOUD_IAM_SERVICE_ACCOUNT (`archiviste-runtime@flamme-496014.iam`) and CLOUD_IAM_USER (`<operator-email>`) with `FATAL: Cloud SQL IAM <service account|user> authentication failed for user "..."`. Proxy reaches the instance (no network error, no 403 from impersonation after token-creator grant), Cloud SQL itself rejects the token at auth time. `gcloud sql instances describe archiviste-db --format="value(settings.databaseFlags)"` returns empty.
+- Why blocked : Cloud SQL requires the instance-level database flag `cloudsql.iam_authentication=on` to accept any IAM auth token. `cloud_sql.tf` declares the SA IAM user (`google_sql_user.archiviste_runtime` type `CLOUD_IAM_SERVICE_ACCOUNT`) and the runtime SA has `roles/cloudsql.client` + `roles/cloudsql.instanceUser`, but the flag itself was never added to `settings {}`. Without it, IAM auth is structurally impossible regardless of user/role setup. Bootstrap runbook §8 verification cannot pass → `deploy.yml` first run would crash on Cloud SQL connect from gateway/workers.
+- Suggested resolution : add `database_flags { name = "cloudsql.iam_authentication" value = "on" }` inside `settings {}` of `google_sql_database_instance.archiviste_db`. Per GCP docs the flag is dynamic (no restart, no data loss). Apply via fix PR `fix/INFRA-002-sql-iam-auth-flag` + `terraform apply`. Re-run runbook §8 verification after apply.
+- Status : open
+
 ## 2026-05-27 — INFRA-002 — cloudflare provider 4.52 dropped `bot_fight_mode` arg + deprecated resources
 
 - File : `infra/terraform/cloudflare.tf:63` (bot_fight_mode), L33 (`value` → `content`), L71 (`cloudflare_rate_limit` deprecated 11+ months past EOL)

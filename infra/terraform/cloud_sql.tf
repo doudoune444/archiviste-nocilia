@@ -43,9 +43,11 @@ resource "google_sql_database" "archiviste" {
 # HIGH-4: DATABASE_URL references user "archiviste" — must exist or connections fail with
 # "FATAL: role archiviste does not exist". IAM auth type = no password to manage,
 # cohérent avec Cloud SQL Auth Proxy sidecar (proxy handles TLS + IAM token exchange).
-# Cloud SQL IAM SA user name must be the full SA email.
+# Cloud SQL IAM SA user name MUST be the SA email with ".gserviceaccount.com" stripped
+# (per Cloud SQL API: "Database username for Cloud IAM service account should be created
+# without .gserviceaccount.com suffix").
 resource "google_sql_user" "archiviste_runtime" {
   instance = google_sql_database_instance.archiviste_db.name
-  name     = google_service_account.archiviste_runtime.email
+  name     = trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com")
   type     = "CLOUD_IAM_SERVICE_ACCOUNT"
 }

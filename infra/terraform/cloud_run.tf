@@ -59,7 +59,9 @@ resource "google_cloud_run_v2_service" "gateway" {
         # HIGH-5: SA email contains '@' which must be percent-encoded as '%40' in RFC 3986
         # userinfo. Without encoding, the URL parser splits on the first '@' and treats the
         # domain suffix as the hostname — connection fails with "invalid hostname".
-        value = "postgresql+asyncpg://${replace(google_service_account.archiviste_runtime.email, "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
+        # Cloud SQL IAM SA username has ".gserviceaccount.com" stripped (see cloud_sql.tf
+        # google_sql_user.archiviste_runtime). DATABASE_URL must match exactly.
+        value = "postgresql+asyncpg://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
       }
 
       # HIGH-1: gateway requires WORKERS_URL at boot (gateway/src/config.rs:40).
@@ -130,7 +132,9 @@ resource "google_cloud_run_v2_service" "workers" {
         # HIGH-5: SA email contains '@' which must be percent-encoded as '%40' in RFC 3986
         # userinfo. Without encoding, the URL parser splits on the first '@' and treats the
         # domain suffix as the hostname — connection fails with "invalid hostname".
-        value = "postgresql+asyncpg://${replace(google_service_account.archiviste_runtime.email, "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
+        # Cloud SQL IAM SA username has ".gserviceaccount.com" stripped (see cloud_sql.tf
+        # google_sql_user.archiviste_runtime). DATABASE_URL must match exactly.
+        value = "postgresql+asyncpg://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
       }
 
       # AC-5: MISTRAL_API_KEY injected via Secret Manager secret_key_ref.

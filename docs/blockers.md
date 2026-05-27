@@ -84,3 +84,16 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
   3. After settings update, re-run `/impl FOUND-003`.
   Alternative : human applies the patches presented in the agent's report by hand.
 - Status : resolved by PR #20 (chore(claude): widen impl permissions, merged 2026-05-06)
+
+## 2026-05-27 — INFRA-002 — Cloud SQL `ipv4_enabled = false` impossible without private network
+
+- File : `infra/terraform/cloud_sql.tf:23`
+- Symptom : `terraform apply` fails with
+  `Error 400: Invalid request: At least one of Public IP or Private IP or PSC connectivity must be enabled.`
+- Why blocked : Original spec set `ipv4_enabled = false` assuming Cloud SQL Auth Proxy sidecar (Cloud Run annotation `run.googleapis.com/cloudsql-instances`) provides connectivity layer by itself. Incorrect — the SQL instance requires one of public IP, private IP (VPC peering), or PSC. The proxy routes traffic via Google backbone but the instance still needs an IP type defined.
+- Suggested resolution (3 options) :
+  1. **(a) Public IP + no `authorized_networks`** (chosen V1) — instance has public IP but firewall closed (deny all direct connections). Proxy connects via Google internal layer. Defense: `ssl_mode = ENCRYPTED_ONLY` + IAM-only auth (no password). Zero extra cost. Pragmatic.
+  2. **(b) Private IP via VPC peering** — adds `google_compute_network` + `google_service_networking_connection` + Cloud Run requires Serverless VPC Connector (~€10/mo). Matches original spec intent (no public IP at all).
+  3. **(c) Private Service Connect (PSC)** — newer pattern, lower cost than VPC connector. Requires PSC endpoint setup.
+- Decision : option (a) for V1 — pragmatic, no extra cost, defense-in-depth via IAM + SSL + empty authorized_networks. Re-evaluate in V2 if compliance audit demands no-public-IP.
+- Status : resolved by PR (fix/INFRA-002-cloud-sql-ipv4)

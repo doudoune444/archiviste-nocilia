@@ -6,7 +6,8 @@ resource "google_sql_database_instance" "archiviste_db" {
   region           = var.region
 
   settings {
-    tier = "db-f1-micro"
+    tier    = "db-f1-micro"
+    edition = "ENTERPRISE"
 
     disk_size = 10
     disk_type = "PD_SSD"

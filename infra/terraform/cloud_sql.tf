@@ -12,6 +12,16 @@ resource "google_sql_database_instance" "archiviste_db" {
     disk_size = 10
     disk_type = "PD_SSD"
 
+    # Required for CLOUD_IAM_SERVICE_ACCOUNT / CLOUD_IAM_USER login. Without this flag,
+    # Cloud SQL rejects all IAM tokens at the auth layer with
+    # "Cloud SQL IAM <user|service account> authentication failed", even when the
+    # google_sql_user resource exists and the principal has roles/cloudsql.instanceUser.
+    # See docs/blockers.md 2026-05-27 INFRA-002 entry.
+    database_flags {
+      name  = "cloudsql.iam_authentication"
+      value = "on"
+    }
+
     backup_configuration {
       enabled                        = true
       point_in_time_recovery_enabled = true

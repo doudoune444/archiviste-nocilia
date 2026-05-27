@@ -39,8 +39,10 @@ resource "google_cloud_run_v2_service" "gateway" {
       image = "${local.ar_base}/gateway:latest"
 
       resources {
+        # Cloud Run v2 with cloud_sql_instance volume forces CPU always-allocated,
+        # which requires memory ≥ 512Mi (Cloud Run hard constraint, not a policy choice).
         limits = {
-          memory = "256Mi"
+          memory = "512Mi"
         }
       }
 

@@ -106,3 +106,19 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 - Why blocked : Original spec instructed pushing `gcr.io/google-containers/pause:3.9` as a placeholder to satisfy Cloud Run's image-must-exist requirement. `pause` is a no-op infinite-sleep container that never listens on any port — Cloud Run startup probe fails systematically.
 - Suggested resolution : replace placeholder image with Google's official Cloud Run hello sample (`us-docker.pkg.dev/cloudrun/container/hello`) which is designed exactly for this case — listens on `$PORT` env var, returns 200 on `/`. Also requires forcing a new Cloud Run revision via `gcloud run services update --image=...` because Cloud Run pins by image digest at first deploy; subsequent pushes to the same `:latest` tag do not auto-redeploy without an explicit trigger.
 - Status : resolved by PR (fix/INFRA-002-runbook-cloud-run-placeholder)
+
+## 2026-05-27 — INFRA-002 — Cloud Run domain mapping unavailable in europe-west9
+
+- File : `infra/terraform/cloudflare.tf:38` (resource `google_cloud_run_domain_mapping.archiviste_fr`)
+- Symptom : `terraform apply` fails with
+  `Error 501: Creating domain mappings is not allowed in europe-west9.`
+- Why blocked : `google_cloud_run_domain_mapping` is available only in a limited set of regions (us-central1, us-east1/4, us-west1, europe-west1, asia-east1, asia-northeast1). europe-west9 (Paris) is not in the list. The original spec assumed mapping availability without checking the regional matrix.
+- Decision (option a, chosen) : drop the domain mapping resource. Cloudflare already serves as the reverse proxy (CF orange-cloud proxied=true), so the GCP-side TLS termination via `ghs.googlehosted.com` is redundant. New flow:
+  - DNS: CNAME `archiviste.nocilia.fr` → \<gateway\>.run.app (Cloud Run actual hostname via `gateway.uri`)
+  - CF terminates TLS at edge with its own cert
+  - CF → Cloud Run over HTTPS, SNI = *.run.app (Google cert), Full Strict satisfied
+  - Cloud Run service uses INGRESS_TRAFFIC_ALL, accepts client Host header forwarded by CF
+- Alternatives rejected :
+  - (b) Migrate region to europe-west1 — supports mappings, but requires destroying Cloud SQL (data loss risk in future even if V1 empty) and full state churn.
+  - (c) Global LB + Serverless NEG — +€18/mo, more Terraform surface area.
+- Status : resolved by PR (fix/INFRA-002-drop-domain-mapping)

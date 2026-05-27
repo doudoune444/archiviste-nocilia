@@ -26,26 +26,25 @@ data "cloudflare_zone" "nocilia_net" {
 }
 
 # DNS: archiviste.nocilia.fr → Cloud Run gateway (proxied through Cloudflare).
+#
+# Region constraint: google_cloud_run_domain_mapping is NOT available in europe-west9.
+# Supported regions are limited (us-central1, us-east1/4, us-west1, europe-west1,
+# asia-east1, asia-northeast1). Rather than relocate the whole stack to europe-west1,
+# we drop the domain mapping entirely and rely on Cloudflare as the reverse proxy:
+#  - CNAME archiviste.nocilia.fr → <gateway>.run.app (the actual Cloud Run hostname)
+#  - Cloudflare proxied (orange cloud) terminates TLS at edge with its own cert
+#  - Origin connection: CF → Cloud Run over HTTPS, SNI = *.run.app (Google cert)
+#  - Cloud Run service uses INGRESS_TRAFFIC_ALL, accepts client Host header forwarded
+#    by CF (gateway app does not strictly validate Host).
+# This is the documented Cloud Run + Cloudflare integration pattern when domain
+# mappings are unavailable. No GLB / Serverless NEG cost overhead.
 resource "cloudflare_record" "archiviste_fr" {
   zone_id = data.cloudflare_zone.nocilia_fr.id
   name    = "archiviste"
   type    = "CNAME"
-  content = "ghs.googlehosted.com"
+  # Strip "https://" scheme from gateway.uri to get bare hostname for CNAME content.
+  content = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
   proxied = true
-}
-
-# Cloud Run custom domain mapping for gateway.
-resource "google_cloud_run_domain_mapping" "archiviste_fr" {
-  location = var.region
-  name     = var.domain
-
-  metadata {
-    namespace = var.project_id
-  }
-
-  spec {
-    route_name = google_cloud_run_v2_service.gateway.name
-  }
 }
 
 # AC-8: TLS Full Strict + Security Level medium + Challenge TTL + Brotli + HTTPS upgrade.

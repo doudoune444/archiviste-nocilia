@@ -22,8 +22,11 @@ resource "google_sql_database_instance" "archiviste_db" {
     }
 
     ip_configuration {
-      # No public IP — Cloud SQL Auth Proxy sidecar via Unix socket only.
-      ipv4_enabled = false
+      # Public IP required by Cloud SQL (instance needs connectivity type).
+      # Connection routed via Cloud SQL Auth Proxy sidecar (Cloud Run annotation
+      # run.googleapis.com/cloudsql-instances) over Google backbone, not public internet.
+      # No authorized_networks = direct public access denied; only proxy + IAM auth allowed.
+      ipv4_enabled = true
       # MED-4: defense-in-depth — reject unencrypted connections even though proxy handles TLS.
       ssl_mode = "ENCRYPTED_ONLY"
     }

@@ -97,3 +97,12 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
   3. **(c) Private Service Connect (PSC)** — newer pattern, lower cost than VPC connector. Requires PSC endpoint setup.
 - Decision : option (a) for V1 — pragmatic, no extra cost, defense-in-depth via IAM + SSL + empty authorized_networks. Re-evaluate in V2 if compliance audit demands no-public-IP.
 - Status : resolved by PR (fix/INFRA-002-cloud-sql-ipv4)
+
+## 2026-05-27 — INFRA-002 — Cloud Run placeholder image `pause:3.9` cannot pass startup probe
+
+- File : `docs/runbook/bootstrap-gcp.md` step 4b
+- Symptom : `terraform apply` of `google_cloud_run_v2_service.workers` fails with
+  `The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout.`
+- Why blocked : Original spec instructed pushing `gcr.io/google-containers/pause:3.9` as a placeholder to satisfy Cloud Run's image-must-exist requirement. `pause` is a no-op infinite-sleep container that never listens on any port — Cloud Run startup probe fails systematically.
+- Suggested resolution : replace placeholder image with Google's official Cloud Run hello sample (`us-docker.pkg.dev/cloudrun/container/hello`) which is designed exactly for this case — listens on `$PORT` env var, returns 200 on `/`. Also requires forcing a new Cloud Run revision via `gcloud run services update --image=...` because Cloud Run pins by image digest at first deploy; subsequent pushes to the same `:latest` tag do not auto-redeploy without an explicit trigger.
+- Status : resolved by PR (fix/INFRA-002-runbook-cloud-run-placeholder)

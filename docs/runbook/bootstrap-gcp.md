@@ -65,18 +65,37 @@ cloudflare_api_token  = "<CF_API_TOKEN>"
 
 ### 4b. Push placeholder images
 
+Cloud Run requires the first revision to pass the HTTP startup probe on `PORT=8080`.
+A no-op container (e.g. `pause`) cannot satisfy this — use Google's official Cloud Run
+hello sample which listens on `$PORT` by default. The image was also relocated from
+`gcr.io/google-containers/*` (deprecated) to `registry.k8s.io/*` for pause and
+`us-docker.pkg.dev/cloudrun/container/hello` for the Cloud Run sample.
+
 ```bash
 # Target: europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/{gateway,workers}:latest
 gcloud auth configure-docker europe-west9-docker.pkg.dev
 
-docker pull gcr.io/google-containers/pause:3.9
-docker tag gcr.io/google-containers/pause:3.9 \
+docker pull us-docker.pkg.dev/cloudrun/container/hello
+docker tag us-docker.pkg.dev/cloudrun/container/hello \
   europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/gateway:latest
 docker push europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/gateway:latest
 
-docker tag gcr.io/google-containers/pause:3.9 \
+docker tag us-docker.pkg.dev/cloudrun/container/hello \
   europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/workers:latest
 docker push europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/workers:latest
+```
+
+If a previous bootstrap attempt deployed a broken placeholder (e.g. `pause`), the
+existing Cloud Run revision is pinned to that digest. Force a new revision after
+pushing the working image:
+
+```bash
+gcloud run services update archiviste-workers \
+  --image=europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/workers:latest \
+  --region=europe-west9
+gcloud run services update archiviste-gateway \
+  --image=europe-west9-docker.pkg.dev/<PROJECT_ID>/archiviste/gateway:latest \
+  --region=europe-west9
 ```
 
 ### 4c. Full apply

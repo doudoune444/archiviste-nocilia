@@ -175,3 +175,36 @@ Add as GitHub Actions secrets:
 - `GCP_WIF_PROVIDER` = value of `wif_provider` output
 - `GCP_SA_EMAIL` = value of `gha_deploy_sa_email` output
 - `GCP_PROJECT_ID` = `<PROJECT_ID>`
+
+## 11. Toggle Cloudflare Bot Fight Mode (one-shot manual UI)
+
+Cloudflare provider 4.52+ removed `bot_fight_mode` from `cloudflare_zone_settings_override`
+(now on paid plans only via `cloudflare_bot_management`). On Free plan, enable it once
+manually:
+
+1. Dashboard CF → zone `nocilia.fr` → **Security** → **Bots**
+2. Toggle **Bot Fight Mode** to ON
+3. Verify on `archiviste.nocilia.fr` after deploy — challenge page should appear for
+   obvious bot traffic.
+
+This is a single per-zone one-shot toggle, not a recurring action. Tracked in
+`docs/blockers.md` 2026-05-27 INFRA-002 entry.
+
+## 12. Configure Cloudflare rate-limit rule (one-shot manual UI)
+
+`cloudflare_rate_limit` Terraform resource is deprecated 11+ months past EOL
+(June 2025). Modern `cloudflare_ruleset` http_ratelimit migration deferred to V2
+SEC-002 (which adds app-level tower_governor + Redis, making CF perimeter rule
+redundant). For V1, configure manually once:
+
+1. Dashboard CF → zone `nocilia.fr` → **Security** → **WAF** → **Rate limiting rules**
+2. **Create rule**:
+   - Rule name: `100 req/min/IP archiviste`
+   - If incoming requests match: **Field** `Hostname` **Operator** `equals` **Value** `archiviste.nocilia.fr`
+   - When rate exceeds: `100 requests` per `1 minute`
+   - Then: **Block** (or **Managed Challenge** for softer UX)
+   - Duration: `5 minutes`
+3. Deploy.
+
+Free plan allows 1 rate-limit rule per zone. AC-8 spec amended — see
+`docs/blockers.md` 2026-05-27 INFRA-002 entry.

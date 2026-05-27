@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **INFRA-002 (cloudflare provider compat)**: `cloudflare/cloudflare` provider 4.52+ removed `bot_fight_mode` from `cloudflare_zone_settings_override` (moved to `cloudflare_bot_management`, paid plans only). `terraform apply` failed with `Unsupported argument`. Fix: drop `bot_fight_mode = "on"` from `infra/terraform/cloudflare.tf:54` settings block; rename `cloudflare_record.archiviste_fr.value` → `content` (v4.52 deprecation); drop `cloudflare_rate_limit.archiviste_fr` resource entirely (deprecated since June 2025 EOL, 11+ months past in 2026-05 → runtime apply incertain). Both Bot Fight Mode and rate-limit rule now configured manually one-shot via CF UI per `docs/runbook/bootstrap-gcp.md` steps 11 + 12 (Free plan). Spec AC-8 amended in scope: bot_fight + rate-limit via operator runbook instead of Terraform. V2 SEC-002 will replace CF perimeter rate-limit with app-level tower_governor + Redis. See `docs/blockers.md` 2026-05-27 INFRA-002 entry.
+
 ### Added
 
 - **UI-002b (dashboard auteur frontend)**: `GET /dashboard` route (author-gated via `RequireAuthor` extractor) serves `gateway/static/dashboard.html` compiled-in via `include_str!`. Static assets `dashboard.css` + `dashboard.js` served under `/assets/` by existing `ServeDir` (no auth required, no secret content). `dashboard.js` fetches `GET /v1/tickets` (credentials: same-origin), renders rows via `textContent` only (XSS-safe, AC-14), supports "Charger plus" offset pagination (AC-18), shows "Aucun ticket ouvert." on empty list (AC-17), shows "Erreur de chargement. Réessayez." with optional req-id on any error (AC-16), opens conversations via `window.open(url, '_blank', 'noopener,noreferrer')` (AC-15). All 4 UI-001 security headers (CSP/nosniff/Referrer-Policy/X-Frame-Options) present router-wide without modification (AC-12). No inline script/style/event handlers in `dashboard.html` (AC-13). Integration tests cover AC-1, AC-3, AC-4, AC-11, AC-12, AC-13 (11 tests green).

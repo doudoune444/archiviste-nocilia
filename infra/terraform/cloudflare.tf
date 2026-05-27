@@ -30,7 +30,7 @@ resource "cloudflare_record" "archiviste_fr" {
   zone_id = data.cloudflare_zone.nocilia_fr.id
   name    = "archiviste"
   type    = "CNAME"
-  value   = "ghs.googlehosted.com"
+  content = "ghs.googlehosted.com"
   proxied = true
 }
 
@@ -48,9 +48,13 @@ resource "google_cloud_run_domain_mapping" "archiviste_fr" {
   }
 }
 
-# AC-8: TLS Full Strict + Bot Fight Mode ON + Security Level medium + Challenge TTL.
+# AC-8: TLS Full Strict + Security Level medium + Challenge TTL + Brotli + HTTPS upgrade.
 # ssl = "strict" is the provider v4 value for Cloudflare "Full (strict)" mode.
-# bot_fight_mode = "on" requires Zone:Bot Management scope on the API token.
+# Bot Fight Mode is NOT managed here: Cloudflare provider 4.52+ removed `bot_fight_mode`
+# from cloudflare_zone_settings_override (moved to cloudflare_bot_management on paid plans
+# only; Free plan = manual UI toggle). Operator enables it once via CF UI per
+# docs/runbook/bootstrap-gcp.md step 11. Spec AC-8 amended — see docs/blockers.md
+# 2026-05-27 INFRA-002 entry.
 resource "cloudflare_zone_settings_override" "nocilia_fr" {
   zone_id = data.cloudflare_zone.nocilia_fr.id
 
@@ -60,29 +64,15 @@ resource "cloudflare_zone_settings_override" "nocilia_fr" {
     challenge_ttl    = 1800
     brotli           = "on"
     always_use_https = "on"
-    bot_fight_mode   = "on"
   }
 }
 
-# Rate-limit rule: 100 req/min/IP on archiviste.nocilia.fr.
-resource "cloudflare_rate_limit" "archiviste_fr" {
-  zone_id   = data.cloudflare_zone.nocilia_fr.id
-  threshold = 100
-  period    = 60
-  description = "100 req/min/IP on archiviste.nocilia.fr"
-
-  match {
-    request {
-      url_pattern = "archiviste.nocilia.fr/*"
-      schemes     = ["HTTPS"]
-    }
-  }
-
-  action {
-    mode    = "challenge"
-    timeout = 300
-  }
-}
+# Rate-limit: NOT managed here. `cloudflare_rate_limit` resource is deprecated since
+# June 2025 (11+ months past EOL by 2026-05). Modern replacement = `cloudflare_ruleset`
+# http_ratelimit phase, deferred to V2 SEC-002 which adds app-level tower_governor +
+# Redis sliding window (CF perimeter rate-limit becomes redundant). For V1, operator
+# configures 1 rule manually via CF UI per docs/runbook/bootstrap-gcp.md step 12.
+# Spec AC-8 amended in scope — see docs/blockers.md 2026-05-27 INFRA-002 entry.
 
 # AC-8: 4 × 301 redirects archiviste.nocilia.{com,org,eu,net} → https://archiviste.nocilia.fr/$1.
 # Cloudflare free plan quota = 3 Page Rules per zone.

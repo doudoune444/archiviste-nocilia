@@ -9,6 +9,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **INFRA-002 PR-e**: provision JWT Ed25519 keypair (both keys via Secret Manager) + GCS signing placeholder env vars on archiviste-gateway Cloud Run (unblocks gateway boot, AC-14).
+
 - **INFRA-002 (cloudflare provider compat)**: `cloudflare/cloudflare` provider 4.52+ removed `bot_fight_mode` from `cloudflare_zone_settings_override` (moved to `cloudflare_bot_management`, paid plans only). `terraform apply` failed with `Unsupported argument`. Fix: drop `bot_fight_mode = "on"` from `infra/terraform/cloudflare.tf:54` settings block; rename `cloudflare_record.archiviste_fr.value` → `content` (v4.52 deprecation); drop `cloudflare_rate_limit.archiviste_fr` resource entirely (deprecated since June 2025 EOL, 11+ months past in 2026-05 → runtime apply incertain). Both Bot Fight Mode and rate-limit rule now configured manually one-shot via CF UI per `docs/runbook/bootstrap-gcp.md` steps 11 + 12 (Free plan). Spec AC-8 amended in scope: bot_fight + rate-limit via operator runbook instead of Terraform. V2 SEC-002 will replace CF perimeter rate-limit with app-level tower_governor + Redis. See `docs/blockers.md` 2026-05-27 INFRA-002 entry.
 
 ### Added

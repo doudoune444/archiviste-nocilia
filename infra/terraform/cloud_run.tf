@@ -57,7 +57,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       env {
-        name  = "DATABASE_URL"
+        name = "DATABASE_URL"
         # HIGH-5: SA email contains '@' which must be percent-encoded as '%40' in RFC 3986
         # userinfo. Without encoding, the URL parser splits on the first '@' and treats the
         # domain suffix as the hostname — connection fails with "invalid hostname".
@@ -76,6 +76,46 @@ resource "google_cloud_run_v2_service" "gateway" {
       volume_mounts {
         name       = "cloudsql"
         mount_path = "/cloudsql"
+      }
+
+      # PR-e: gateway boot contract (gateway/src/config.rs:58-87).
+      # Both JWT keys via Secret Manager — verification key not strictly secret,
+      # but symmetric storage = symmetric rotation (gcloud only, no terraform apply).
+      env {
+        name = "JWT_ED25519_PUBLIC_KEY_PEM"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.jwt_ed25519_public_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "JWT_ED25519_PRIVATE_KEY_PEM"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.jwt_ed25519_private_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      # PR-e: GCS signing — interim placeholder for V1 unblock only.
+      # Verified safe: Config::from_env (gateway/src/config.rs:81-84) does NOT parse
+      # this PEM at boot — only `SecretString::from(env::var(...))`. The sole parse
+      # site is `sign_get` (gateway/src/gcs/sign.rs:64-67), reachable only from the
+      # signed-URL handler, which has no pre-auth route in V1 (auth tier MVP is
+      # hardcoded anonymous per INFRA-002 non-goals). SEC-004 drops the field
+      # entirely; this placeholder disappears with the refactor.
+      env {
+        name  = "GCS_SIGNING_SA_EMAIL"
+        value = google_service_account.archiviste_runtime.email
+      }
+
+      env {
+        name  = "GCS_SIGNING_PRIVATE_KEY_PEM"
+        value = "placeholder-removed-by-SEC-004"
       }
     }
   }
@@ -130,7 +170,7 @@ resource "google_cloud_run_v2_service" "workers" {
       }
 
       env {
-        name  = "DATABASE_URL"
+        name = "DATABASE_URL"
         # HIGH-5: SA email contains '@' which must be percent-encoded as '%40' in RFC 3986
         # userinfo. Without encoding, the URL parser splits on the first '@' and treats the
         # domain suffix as the hostname — connection fails with "invalid hostname".

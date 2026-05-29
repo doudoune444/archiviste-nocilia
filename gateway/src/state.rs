@@ -11,8 +11,8 @@ use crate::{
         throttle::ThrottleStore,
         user_lookup::{PgUserLookup, UserLookup},
     },
+    auth_metadata::TokenProvider,
     config::Config,
-    gcs::token::TokenProvider,
 };
 
 /// Process-wide state shared across handlers via Axum extractors.
@@ -53,22 +53,27 @@ pub struct AppState {
     /// Production uses `PgSessionRevoker` backed by `db_pool`.
     /// Tests inject an in-memory implementation for AC-8 happy path (N-5 fix).
     pub session_revoker: Option<Arc<dyn SessionRevoker>>,
-    /// Bearer token provider for IAM `signBlob` calls (SEC-004 AC-3).
+    /// GCS IAM signBlob token provider (SEC-004 / SEC-005 AC-3).
     ///
-    /// Holds a dedicated HTTP client with 2 s / 5 s timeouts (AC-6).
-    /// Shared across all signing requests via `Arc`; token is cached with
-    /// refresh-ahead semantics inside `TokenProvider`.
-    pub token_provider: Arc<TokenProvider>,
+    /// Uses the default service-account scope.  Shared across all signing
+    /// requests via `Arc`; token is cached with refresh-ahead semantics.
+    pub gcs_token_provider: Arc<TokenProvider>,
+    /// Cloud SQL IAM auth token provider (SEC-005 AC-3).
+    ///
+    /// Uses the `sqlservice.admin` scope.  Separate instance from
+    /// `gcs_token_provider` — independent cache (AC-2).
+    pub sql_token_provider: Arc<TokenProvider>,
 }
 
 impl AppState {
     /// Build the application state from a loaded configuration.
     ///
-    /// Constructs a `TokenProvider` pointing at the real Cloud Run metadata server.
+    /// Constructs both `TokenProvider` instances pointing at the real Cloud Run
+    /// metadata server.
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP client or `TokenProvider` cannot be constructed.
+    /// Returns an error if the HTTP client or any `TokenProvider` cannot be constructed.
     pub fn new(config: Config) -> Result<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
@@ -76,7 +81,8 @@ impl AppState {
             .pool_idle_timeout(Duration::from_secs(90))
             .build()?;
 
-        let token_provider = Arc::new(TokenProvider::new()?);
+        let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
+        let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
 
         Ok(Self {
             config,
@@ -86,25 +92,59 @@ impl AppState {
             user_lookup: None,
             session_creator: None,
             session_revoker: None,
-            token_provider,
+            gcs_token_provider,
+            sql_token_provider,
         })
     }
 
-    /// Build state with an already-constructed pool (production boot path).
+    /// Build state with an already-constructed pool and SQL token provider (production boot path).
+    ///
+    /// The `sql_token_provider` is passed in because `run()` performs a fail-fast
+    /// token fetch before pool construction; we reuse that same provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client or GCS `TokenProvider` cannot be constructed.
+    pub fn new_with_pool_and_sql_token_provider(
+        config: Config,
+        pool: PgPool,
+        sql_token_provider: Arc<TokenProvider>,
+    ) -> Result<Self> {
+        let http = Client::builder()
+            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
+            .timeout(Duration::from_millis(config.request_timeout_ms))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()?;
+
+        let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
+
+        let lookup: Arc<dyn UserLookup> = Arc::new(PgUserLookup(pool.clone()));
+        let creator: Arc<dyn SessionCreator> = Arc::new(PgSessionCreator(pool.clone()));
+        let revoker: Arc<dyn SessionRevoker> = Arc::new(PgSessionRevoker(pool.clone()));
+
+        Ok(Self {
+            config,
+            http,
+            db_pool: Some(pool),
+            throttle: Arc::new(ThrottleStore::new()),
+            user_lookup: Some(lookup),
+            session_creator: Some(creator),
+            session_revoker: Some(revoker),
+            gcs_token_provider,
+            sql_token_provider,
+        })
+    }
+
+    /// Build state with an already-constructed pool (legacy test helper, deprecated for production).
+    ///
+    /// Uses default metadata-server providers for both GCS and SQL scopes.
     ///
     /// # Errors
     ///
     /// Returns an error if the HTTP client cannot be constructed.
     pub fn new_with_pool(config: Config, pool: PgPool) -> Result<Self> {
-        let mut state = Self::new(config)?;
-        let lookup: Arc<dyn UserLookup> = Arc::new(PgUserLookup(pool.clone()));
-        let creator: Arc<dyn SessionCreator> = Arc::new(PgSessionCreator(pool.clone()));
-        let revoker: Arc<dyn SessionRevoker> = Arc::new(PgSessionRevoker(pool.clone()));
-        state.db_pool = Some(pool);
-        state.user_lookup = Some(lookup);
-        state.session_creator = Some(creator);
-        state.session_revoker = Some(revoker);
-        Ok(state)
+        let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
+        Self::new_with_pool_and_sql_token_provider(config, pool, sql_token_provider)
     }
 
     /// Build state with custom `UserLookup` only (partial test injection path).
@@ -155,7 +195,9 @@ impl AppState {
         Ok(state)
     }
 
-    /// Build state with an injected `TokenProvider` (test ctor for IAM mock injection).
+    /// Build state with injected GCS `TokenProvider` (test ctor for IAM mock injection).
+    ///
+    /// Sets only `gcs_token_provider`; `sql_token_provider` uses the default metadata server.
     ///
     /// # Errors
     ///
@@ -163,13 +205,15 @@ impl AppState {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_with_token_provider(
         config: Config,
-        token_provider: Arc<TokenProvider>,
+        gcs_token_provider: Arc<TokenProvider>,
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
             .timeout(Duration::from_millis(config.request_timeout_ms))
             .pool_idle_timeout(Duration::from_secs(90))
             .build()?;
+
+        let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
 
         Ok(Self {
             config,
@@ -179,11 +223,12 @@ impl AppState {
             user_lookup: None,
             session_creator: None,
             session_revoker: None,
-            token_provider,
+            gcs_token_provider,
+            sql_token_provider,
         })
     }
 
-    /// Build state with a pool and an injected `TokenProvider` (DB + IAM mock injection).
+    /// Build state with a pool and an injected GCS `TokenProvider` (DB + IAM mock injection).
     ///
     /// # Errors
     ///
@@ -192,9 +237,9 @@ impl AppState {
     pub fn new_with_pool_and_token_provider(
         config: Config,
         pool: PgPool,
-        token_provider: Arc<TokenProvider>,
+        gcs_token_provider: Arc<TokenProvider>,
     ) -> Result<Self> {
-        let mut state = Self::new_with_token_provider(config, token_provider)?;
+        let mut state = Self::new_with_token_provider(config, gcs_token_provider)?;
         let lookup: Arc<dyn UserLookup> = Arc::new(PgUserLookup(pool.clone()));
         let creator: Arc<dyn SessionCreator> = Arc::new(PgSessionCreator(pool.clone()));
         let revoker: Arc<dyn SessionRevoker> = Arc::new(PgSessionRevoker(pool.clone()));

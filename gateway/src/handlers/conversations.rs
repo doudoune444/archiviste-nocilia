@@ -84,7 +84,7 @@ pub async fn signed_url(
     // AC-9: TTL = SIGNED_URL_TTL_SECONDS = 300 s, method = GET strictly.
     // AC-12: sign_get takes &TokenProvider (no SA private key in config — SEC-004).
     let url = sign::sign_get(
-        &state.token_provider,
+        &state.gcs_token_provider,
         &state.config.gcs_signing_sa_email,
         &state.config.gcs_bucket,
         object,

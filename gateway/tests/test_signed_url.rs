@@ -277,16 +277,22 @@ async fn sec004_token_refresh_ahead() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-3, AC-9(h): retry-on-401 — signBlob 401 then 200
+// AC-3, AC-9(h): retry-on-401 — signBlob 401 then 200 (cache-hit scenario)
 // ---------------------------------------------------------------------------
 
-/// AC-3 / AC-9(h): signBlob responds 401 then 200 → URL returned.
-/// metadata.expect(2) (cache invalidated after 401), signBlob.expect(2).
+/// AC-3 / AC-9(h): retry-on-401 on a CACHE-HIT scenario.
+///
+/// Setup: first sign_get succeeds (warms the cache). Second sign_get hits
+/// signBlob 401 (stale cached token) then 200 after invalidate+retry.
+/// metadata.expect(1) — token cached after first call, NOT re-fetched before
+/// the 401; retry after invalidation fetches a second token → metadata.expect(2) total.
+/// signBlob.expect(3): 1 success (first call) + 1 fail (401) + 1 retry success.
 #[tokio::test]
 async fn sec004_retry_on_401() {
-    // AC-3 / AC-9(h): retry-on-401 — cache invalidated, second fetch succeeds
+    // AC-3 / AC-9(h): retry-on-401 — cache invalidated after 401, retry succeeds
     let mut server = mockito::Server::new_async().await;
 
+    // Metadata serves the same body on both calls (first warm + post-invalidation retry).
     let meta = server
         .mock(
             "GET",
@@ -299,7 +305,20 @@ async fn sec004_retry_on_401() {
         .create_async()
         .await;
 
-    // First signBlob call returns 401, second returns 200.
+    // First sign_get: signBlob returns 200.
+    let _sign_ok_first = server
+        .mock(
+            "POST",
+            "/v1/projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com:signBlob",
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(r#"{{"signedBlob":"{}"}}"#, fake_signed_blob_b64()))
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Second sign_get: signBlob returns 401 (simulates stale cached token).
     let _sign_401 = server
         .mock(
             "POST",
@@ -310,7 +329,8 @@ async fn sec004_retry_on_401() {
         .create_async()
         .await;
 
-    let _sign_200 = server
+    // Second sign_get retry: signBlob returns 200 after cache invalidation.
+    let _sign_ok_retry = server
         .mock(
             "POST",
             "/v1/projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com:signBlob",
@@ -326,6 +346,19 @@ async fn sec004_retry_on_401() {
         Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
     let now = chrono::Utc::now();
 
+    // First call — warms the cache (metadata.expect count: 1).
+    sign_get(
+        &token_provider,
+        "sa@project.iam.gserviceaccount.com",
+        "bucket",
+        "obj",
+        now,
+        Some(&server.url()),
+    )
+    .await
+    .expect("first sign_get must succeed (cache warm-up)");
+
+    // Second call — token served from cache → 401 triggers invalidate+retry.
     let url = sign_get(
         &token_provider,
         "sa@project.iam.gserviceaccount.com",
@@ -335,7 +368,7 @@ async fn sec004_retry_on_401() {
         Some(&server.url()),
     )
     .await
-    .expect("sign_get must succeed after 401 retry");
+    .expect("second sign_get must succeed after 401 retry");
 
     assert!(url.contains("X-Goog-Signature="), "URL must have signature");
     meta.assert_async().await;
@@ -533,19 +566,98 @@ async fn sec004_metadata_token_fail_returns_503() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-5, AC-6, AC-9(f): timeout → reason_code=timeout + elapsed < 6 s
+// AC-5, AC-6, AC-9(f): signBlob timeout → reason_code=timeout + elapsed < 6 s
 // ---------------------------------------------------------------------------
 
-/// AC-5 / AC-6 / AC-9(f): closed TCP port → reqwest fails with a network error quickly.
-/// Asserts `reason_code=network` and that elapsed < 6 s (AC-6 oracle: 5 s total timeout).
+/// AC-6 / AC-9(f): signBlob mock delays > 5 s via `with_chunked_body` +
+/// `std::thread::sleep(6 s)` — reqwest total timeout fires at 5 s.
+/// Asserts `reason_code=timeout` AND `start.elapsed() < 6 s` (AC-6 oracle).
+///
+/// Pattern from `overhead_header_test.rs:125/165`.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn sec004_signblob_timeout_logs_timeout() {
+    // AC-6 / AC-9(f): signBlob hangs > 5 s → timeout fires, reason_code=timeout, elapsed < 6 s
+    let mut server = mockito::Server::new_async().await;
+
+    // Metadata responds instantly with a valid token.
+    let _meta = server
+        .mock(
+            "GET",
+            "/computeMetadata/v1/instance/service-accounts/default/token",
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"access_token":"test-token","expires_in":3600,"token_type":"Bearer"}"#)
+        .create_async()
+        .await;
+
+    // signBlob mock blocks for 6 s — the 5 s total timeout must fire first.
+    let _sign = server
+        .mock(
+            "POST",
+            "/v1/projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com:signBlob",
+        )
+        .with_status(200)
+        .with_chunked_body(|w| {
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            std::io::Write::write_all(w, b"{\"signedBlob\":\"\"}")
+        })
+        .create_async()
+        .await;
+
+    let token_provider =
+        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+
+    let start = std::time::Instant::now();
+    let err = sign_get(
+        &token_provider,
+        "sa@project.iam.gserviceaccount.com",
+        "bucket",
+        "obj",
+        chrono::Utc::now(),
+        Some(&server.url()),
+    )
+    .await
+    .expect_err("must fail on signBlob timeout");
+
+    let elapsed = start.elapsed();
+    // AC-6: total timeout = 5 s, so the error must arrive before 6 s.
+    assert!(
+        elapsed.as_secs() < 6,
+        "must fail within 6 s (AC-6 oracle); elapsed={elapsed:?}"
+    );
+    assert_eq!(
+        err.reason_code(),
+        "timeout",
+        "reason_code must be timeout, got {}",
+        err.reason_code()
+    );
+    // AC-5: no sensitive data in log.
+    assert!(!logs_contain("test-token"), "log must not contain token");
+}
+
+// ---------------------------------------------------------------------------
+// AC-5, AC-6, AC-9(f): network error (ECONNREFUSED) → reason_code=network
+// ---------------------------------------------------------------------------
+
+/// AC-5 / AC-6 / AC-9(f): closed TCP port → ECONNREFUSED → `reason_code=network`.
+///
+/// Binds an OS-assigned port, records the address, drops the listener, then
+/// connects to the now-refused port. This gives an instant ECONNREFUSED on
+/// all platforms (Linux and Windows) without relying on reserved port numbers.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn sec004_network_error_logs_network() {
-    // AC-5 / AC-6 / AC-9(f): network error on closed port → reason_code=network, fast fail
-    // Port 1 is reserved and almost always refused (ECONNREFUSED) on Linux/Windows.
+    // AC-5 / AC-6 / AC-9(f): ECONNREFUSED on closed port → reason_code=network, fast fail.
+    // Bind then drop to get a guaranteed ECONNREFUSED URL on any platform.
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let refused_addr = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    drop(listener); // port now closed — any connect attempt gets ECONNREFUSED
+
     let token_provider = Arc::new(
-        TokenProvider::with_base_url("http://127.0.0.1:1".to_string())
-            .expect("TokenProvider::with_base_url"),
+        TokenProvider::with_base_url(refused_addr.clone()).expect("TokenProvider::with_base_url"),
     );
 
     let start = std::time::Instant::now();
@@ -555,17 +667,17 @@ async fn sec004_network_error_logs_network() {
         "bucket",
         "obj",
         chrono::Utc::now(),
-        Some("http://127.0.0.1:1"),
+        Some(&refused_addr),
     )
     .await
     .expect_err("must fail on network error");
 
     let elapsed = start.elapsed();
-    // Network error → either "network" (ECONNREFUSED) or "timeout" (connect timeout).
-    let code = err.reason_code();
-    assert!(
-        code == "network" || code == "timeout",
-        "reason_code must be network or timeout, got {code}"
+    assert_eq!(
+        err.reason_code(),
+        "network",
+        "ECONNREFUSED must produce reason_code=network, got {}",
+        err.reason_code()
     );
     assert!(
         elapsed.as_secs() < 6,

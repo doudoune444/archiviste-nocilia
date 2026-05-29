@@ -11,6 +11,18 @@ use secrecy::SecretString;
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+/// TCP connect timeout for the signing HTTP client (AC-6).
+///
+/// Shared by `TokenProvider` (metadata fetch) and `sign_get` (signBlob POST)
+/// via `TokenProvider::client()` — a single shared client for both call legs.
+pub(crate) const CONNECT_TIMEOUT_SECS: u64 = 2;
+
+/// Total request timeout for the signing HTTP client (AC-6).
+///
+/// Shared by `TokenProvider` (metadata fetch) and `sign_get` (signBlob POST)
+/// via `TokenProvider::client()` — a single shared client for both call legs.
+pub(crate) const TOTAL_TIMEOUT_SECS: u64 = 5;
+
 /// Path to the default service-account token on the GCE/Cloud Run metadata server.
 const METADATA_TOKEN_PATH: &str = "/computeMetadata/v1/instance/service-accounts/default/token";
 
@@ -47,7 +59,9 @@ struct CachedToken {
 /// Thread-safe bearer token provider with refresh-ahead cache (AC-3).
 ///
 /// Holds a dedicated `reqwest::Client` with 2 s connect / 5 s total timeouts
-/// (AC-6). The metadata base URL is injectable for testing.
+/// (AC-6). The same client is reused for both metadata token fetches and
+/// signBlob POST calls via `TokenProvider::client()`. The metadata base URL
+/// is injectable for testing.
 pub struct TokenProvider {
     client: reqwest::Client,
     metadata_base_url: String,
@@ -69,12 +83,8 @@ impl TokenProvider {
     /// Returns an error if the HTTP client cannot be constructed.
     pub fn with_base_url(metadata_base_url: String) -> Result<Self, TokenError> {
         let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(
-                crate::gcs::sign::CONNECT_TIMEOUT_SECS,
-            ))
-            .timeout(std::time::Duration::from_secs(
-                crate::gcs::sign::TOTAL_TIMEOUT_SECS,
-            ))
+            .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(TOTAL_TIMEOUT_SECS))
             .build()
             .map_err(|_| TokenError::Network)?;
 
@@ -85,22 +95,34 @@ impl TokenProvider {
         })
     }
 
+    /// Return the shared HTTP client for IAM signBlob calls.
+    ///
+    /// Both metadata token fetches and signBlob POST calls reuse this single
+    /// client (same 2 s / 5 s timeouts, same connection pool — AC-6).
+    pub(crate) fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     /// Return a valid bearer token, refreshing the cache if necessary.
+    ///
+    /// Returns `(token, from_cache)` where `from_cache` is `true` if the
+    /// returned token was served from the cache (i.e. was already present and
+    /// still fresh). A `false` value means the token was just fetched — a
+    /// subsequent `401` from signBlob is a hard auth failure, not a stale-cache
+    /// issue, and should NOT trigger an invalidate+retry cycle.
     ///
     /// First call = fetch lazy. Subsequent calls reuse the cache until the
     /// token enters the refresh-ahead window (`now >= expires_at - 60 s`).
-    /// On a `401` from `signBlob`, call `invalidate` and retry — see
-    /// `sign::sign_get` for the retry logic.
     ///
     /// # Errors
     /// Returns `TokenError` on fetch failure.
-    pub async fn get_or_refresh(&self) -> Result<SecretString, TokenError> {
+    pub async fn get_or_refresh(&self) -> Result<(SecretString, bool), TokenError> {
         // Fast path: read-lock only.
         {
             let guard = self.cache.read().await;
             if let Some(cached) = guard.as_ref() {
                 if Utc::now() < cached.expires_at - Duration::seconds(REFRESH_AHEAD_SECS) {
-                    return Ok(cached.bearer.clone());
+                    return Ok((cached.bearer.clone(), true));
                 }
             }
         }
@@ -108,18 +130,19 @@ impl TokenProvider {
         let mut guard = self.cache.write().await;
         if let Some(cached) = guard.as_ref() {
             if Utc::now() < cached.expires_at - Duration::seconds(REFRESH_AHEAD_SECS) {
-                return Ok(cached.bearer.clone());
+                return Ok((cached.bearer.clone(), true));
             }
         }
         let fresh = self.fetch_token().await?;
         let bearer = fresh.bearer.clone();
         *guard = Some(fresh);
-        Ok(bearer)
+        Ok((bearer, false))
     }
 
     /// Evict the cached token so the next `get_or_refresh` forces a fresh fetch.
     ///
-    /// Called by `sign_get` after receiving a `401` from `signBlob` (AC-3 retry-on-401).
+    /// Called by `sign_get` after receiving a `401` from `signBlob` when the
+    /// token WAS served from cache (AC-3 retry-on-401).
     pub async fn invalidate(&self) {
         *self.cache.write().await = None;
     }

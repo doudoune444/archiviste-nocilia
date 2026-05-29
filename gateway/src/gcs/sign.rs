@@ -12,11 +12,6 @@ use thiserror::Error;
 
 use crate::gcs::token::{classify_reqwest_error, TokenError, TokenProvider};
 
-/// TCP connect timeout for the dedicated signing HTTP client (AC-6).
-pub const CONNECT_TIMEOUT_SECS: u64 = 2;
-/// Total request timeout for the dedicated signing HTTP client (AC-6).
-pub const TOTAL_TIMEOUT_SECS: u64 = 5;
-
 /// Base URL of the IAM credentials API (injectable in tests via `TokenProvider` URL args).
 const IAM_BASE_URL_DEFAULT: &str = "https://iamcredentials.googleapis.com";
 
@@ -89,20 +84,13 @@ struct SignBlobResponse {
     signed_blob: String,
 }
 
-/// Dedicated HTTP client for IAM signBlob calls (2 s / 5 s — AC-6).
-fn build_sign_client() -> Result<reqwest::Client, SignError> {
-    reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(std::time::Duration::from_secs(TOTAL_TIMEOUT_SECS))
-        .build()
-        .map_err(|_| SignError::Network)
-}
-
 /// Generate a GCS V4 signed GET URL via IAM `signBlob` (AC-2).
 ///
 /// Calls the metadata server to obtain a bearer token (AC-3), then calls
 /// `POST iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:signBlob`.
-/// On a `401` response, invalidates the token cache and retries once (AC-3).
+/// On a `401` response, invalidates the token cache and retries once **only if the
+/// token was served from cache** (AC-3). A fresh token returning 401 is a hard
+/// auth failure.
 ///
 /// The `iam_base_url` parameter allows injecting a mock server URL in tests.
 /// Production callers should pass `None` (uses `IAM_BASE_URL_DEFAULT`).
@@ -117,7 +105,7 @@ pub async fn sign_get(
     now: DateTime<Utc>,
     iam_base_url: Option<&str>,
 ) -> Result<SignedUrl, SignError> {
-    let client = build_sign_client()?;
+    let client = token_provider.client();
     let iam_base = iam_base_url.unwrap_or(IAM_BASE_URL_DEFAULT);
     let iam_url = format!("{iam_base}/v1/projects/-/serviceAccounts/{sa_email}:signBlob");
 
@@ -126,7 +114,7 @@ pub async fn sign_get(
     let payload_b64 =
         base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, sts.as_bytes());
 
-    let sig_hex = call_sign_blob(&client, token_provider, &iam_url, &payload_b64).await?;
+    let sig_hex = call_sign_blob(client, token_provider, &iam_url, &payload_b64).await?;
 
     let host = format!("{bucket}.storage.googleapis.com");
     Ok(format!(
@@ -161,14 +149,17 @@ fn build_string_to_sign(
     (qs, sts)
 }
 
-/// Call the IAM `signBlob` endpoint; retry once on 401 after cache invalidation.
+/// Call the IAM `signBlob` endpoint; retry once on 401 if token was from cache.
+///
+/// If the token was freshly fetched (not from cache) and signBlob returns 401,
+/// this is a hard auth failure — no retry, no extra metadata roundtrip.
 async fn call_sign_blob(
     client: &reqwest::Client,
     token_provider: &TokenProvider,
     iam_url: &str,
     payload_b64: &str,
 ) -> Result<String, SignError> {
-    let token = token_provider.get_or_refresh().await?;
+    let (token, from_cache) = token_provider.get_or_refresh().await?;
     let body = SignBlobRequest {
         payload: payload_b64.to_string(),
     };
@@ -182,10 +173,10 @@ async fn call_sign_blob(
         .map_err(|e| SignError::from(classify_reqwest_error(&e)))?;
 
     let status = resp.status();
-    if status.as_u16() == 401 {
-        // Retry once after invalidating the stale cached token (AC-3).
+    if status.as_u16() == 401 && from_cache {
+        // Stale cached token — invalidate and retry once (AC-3).
         token_provider.invalidate().await;
-        let fresh_token = token_provider.get_or_refresh().await?;
+        let (fresh_token, _) = token_provider.get_or_refresh().await?;
         let retry_resp = client
             .post(iam_url)
             .bearer_auth(fresh_token.expose_secret())
@@ -204,7 +195,8 @@ async fn parse_sign_blob_response(resp: reqwest::Response) -> Result<String, Sig
     let status = resp.status().as_u16();
     match status {
         200 => {
-            let body: SignBlobResponse = resp.json().await.map_err(|_| SignError::SignBlob5xx)?;
+            // Body read can time out independently of headers — classify correctly.
+            let body: SignBlobResponse = resp.json().await.map_err(|e| classify_body_error(&e))?;
             let sig_bytes = base64::engine::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
                 &body.signed_blob,
@@ -215,6 +207,18 @@ async fn parse_sign_blob_response(resp: reqwest::Response) -> Result<String, Sig
         403 => Err(SignError::SignBlob403),
         429 => Err(SignError::SignBlob429),
         _ => Err(SignError::SignBlob5xx),
+    }
+}
+
+/// Classify a reqwest error that occurred while reading a response body.
+///
+/// A timeout during body read is a `SignError::Timeout`; any other error
+/// (connection reset, decode failure) is a `SignError::SignBlob5xx`.
+fn classify_body_error(e: &reqwest::Error) -> SignError {
+    if e.is_timeout() {
+        SignError::Timeout
+    } else {
+        SignError::SignBlob5xx
     }
 }
 

@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-05-29 — INFRA-002 — PR-f: gateway empty password on Cloud SQL IAM (Cloud Run integrated proxy does not inject token)
+
+- File : `infra/terraform/cloud_run.tf:73` + `gateway/src/lib.rs:495`
+- Symptom : after PR-f merge (DATABASE_URL `postgres://<sa>@localhost/archiviste?host=/cloudsql/...`), gateway boot crashes on sqlx pool connect. sqlx returns the empty password supplied in the URL (no password component between `:` and `@`) verbatim to Cloud SQL, which rejects the IAM auth handshake (`password authentication failed for user "archiviste-runtime@flamme-496014.iam"`). Cloud SQL instance has `cloudsql.iam_authentication=on` (PR #77) and SA is granted `roles/cloudsql.client` + `roles/cloudsql.instanceUser` (PR-e). The PG password slot must contain a short-lived IAM OAuth access token (1h TTL) fetched from the metadata server — Cloud Run v2's integrated proxy provides the Unix socket but does NOT transparently inject this token client-side, contrary to the initial design assumption in runbook §8.
+- Why blocked : `--auto-iam-authn` flag on a sidecar `cloud-sql-proxy` is the standard token-injection path, but Cloud Run v2 integrated proxy (`run.googleapis.com/cloudsql-instances` annotation) does not expose this flag. Tried documenting the empty-password path in PR-f assuming proxy-side injection; verification deploy proves the assumption wrong. No client-side token injection exists today in `lib.rs:495` (`PgPoolOptions::new().connect(&config.database_url)` is a one-shot connect with the URL as-is). Workers (`asyncpg`) likely has the same latent bug — unverified, prod workers status unknown.
+- Suggested resolution : two-step. (1) Ship SEC-004 — gateway GCS signing via metadata-server OAuth (`TokenProvider` at `gateway/src/gcs/token.rs`, cached 5-min, mockable). (2) Ship SEC-005 (new ticket) — reuse `TokenProvider` (renamed to `gateway/src/auth_metadata/token.rs` as part of SEC-005) with `sqlx::PgPoolOptions::before_acquire` hook injecting a fresh IAM token (scope `https://www.googleapis.com/auth/sqlservice.admin`) per connection acquisition. Workers symmetry decided at SEC-005 plan time (gateway-only vs gateway+workers single PR ≤300 LOC). Fallback Option A (PG password in Secret Manager) explicitly rejected by operator.
+- Status : open — SEC-004 spec ready, SEC-005 to be authored after SEC-004 ships
+
 ## 2026-05-27 — INFRA-002 — Cloud SQL IAM authentication rejected: `cloudsql.iam_authentication` flag missing on instance
 
 - File : `infra/terraform/cloud_sql.tf:8` (resource `google_sql_database_instance.archiviste_db` `settings {}`)

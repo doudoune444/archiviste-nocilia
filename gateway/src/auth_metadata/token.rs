@@ -187,7 +187,10 @@ impl TokenProvider {
     async fn fetch_token(&self) -> Result<CachedToken, TokenError> {
         let mut url = format!("{}{}", self.metadata_base_url, METADATA_TOKEN_PATH);
         if let Some((key, value)) = self.scope.as_query_pair() {
-            url = format!("{url}?{key}={value}");
+            // MED-4: percent-encode the scope value per AC-2 oracle
+            // (`scopes=https%3A%2F%2F...`).  No new crate needed — we encode only
+            // the characters that appear in OAuth scope strings.
+            url = format!("{url}?{key}={}", percent_encode_scope(value));
         }
 
         let resp = self
@@ -211,6 +214,31 @@ impl TokenProvider {
     }
 }
 
+/// Hex digit table for nibble values 0..=15 (uppercase ASCII).
+const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
+
+/// Percent-encode a scope string for use as a query-string value.
+///
+/// Only characters that appear in OAuth scope URLs need encoding: `:` → `%3A`,
+/// `/` → `%2F`.  Alphanumerics, `-`, `_`, `.`, `~` are unreserved (RFC 3986
+/// §2.3) and are left as-is.  This avoids adding a new crate for a single use.
+fn percent_encode_scope(scope: &str) -> String {
+    let mut out = String::with_capacity(scope.len() * 3);
+    for b in scope.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                out.push(HEX_UPPER[usize::from(b >> 4)] as char);
+                out.push(HEX_UPPER[usize::from(b & 0xF)] as char);
+            }
+        }
+    }
+    out
+}
+
 /// Map a `reqwest::Error` to a `TokenError`.
 pub(crate) fn classify_reqwest_error(e: &reqwest::Error) -> TokenError {
     if e.is_timeout() {
@@ -232,15 +260,16 @@ mod tests {
 
     use super::*;
 
-    /// AC-2: `for_cloud_sql()` appends `?scopes=https%3A%2F%2F...sqlservice.admin`
-    /// to the metadata URL.  Verified via a mockito server that asserts the query param.
+    /// AC-2: `for_cloud_sql()` appends `?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin`
+    /// (percent-encoded per RFC 3986 §3.4) to the metadata URL.
+    /// Verified via a mockito server that asserts the exact encoded query string.
     #[tokio::test]
     async fn for_cloud_sql_uses_sqlservice_admin_scope() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock(
                 "GET",
-                "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/sqlservice.admin",
+                "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
             )
             .with_status(200)
             .with_header("content-type", "application/json")

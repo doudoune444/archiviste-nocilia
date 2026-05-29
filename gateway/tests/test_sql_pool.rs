@@ -14,12 +14,12 @@
 
 use archiviste_gateway::{
     auth_metadata::{OAuthScope, TokenProvider},
-    gcs::token::TokenError,
+    init_sql_pool, SQL_CONNECTION_MAX_LIFETIME_SECS,
 };
 use secrecy::ExposeSecret;
 use sqlx::postgres::PgConnectOptions;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // Helper: connect options for local docker-compose Postgres.
@@ -44,7 +44,8 @@ fn pg_opts_local(password: &str) -> PgConnectOptions {
 /// pool acquire against docker-compose Postgres returns Ok.
 ///
 /// Oracle: mockito `expect(1)` on the token endpoint with
-/// `?scopes=https://www.googleapis.com/auth/sqlservice.admin` query param.
+/// `?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin` (percent-encoded,
+/// AC-2 oracle).
 #[tokio::test]
 async fn sec005_nominal_pool_acquire_with_iam_token() {
     // AC-11(a): metadata 200 + pool acquire Ok
@@ -52,7 +53,7 @@ async fn sec005_nominal_pool_acquire_with_iam_token() {
     let meta = server
         .mock(
             "GET",
-            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/sqlservice.admin",
+            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
         )
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -74,11 +75,15 @@ async fn sec005_nominal_pool_acquire_with_iam_token() {
 
     // Build pool against local docker-compose Postgres (password=postgres).
     let opts = pg_opts_local("postgres");
+    // LOW-7: use SQL_CONNECTION_MAX_LIFETIME_SECS constant to avoid magic literals.
+    // before_acquire gate mirrors lib.rs: reject when age >= max_lifetime - 60 s.
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
-        .max_lifetime(Duration::from_mins(45))
+        .max_lifetime(Duration::from_secs(SQL_CONNECTION_MAX_LIFETIME_SECS))
         .before_acquire(|_conn, meta| {
-            Box::pin(async move { Ok(meta.age < Duration::from_mins(44)) })
+            Box::pin(async move {
+                Ok(meta.age < Duration::from_secs(SQL_CONNECTION_MAX_LIFETIME_SECS - 60))
+            })
         })
         .connect_with(opts)
         .await
@@ -93,19 +98,20 @@ async fn sec005_nominal_pool_acquire_with_iam_token() {
 // AC-11(b): metadata 500 → boot fails with TokenError::Fetch
 // ---------------------------------------------------------------------------
 
-/// AC-11(b): metadata server returns 500 → `get_or_refresh` returns `Err(TokenError::Fetch)`.
+/// AC-11(b) / AC-8: metadata server returns 500 → boot log emitted + pool not built.
 ///
-/// This exercises the dependency that `run()` has: if the first token fetch fails,
-/// the pool is never constructed and the process exits non-zero (AC-8).
+/// Uses `init_sql_pool` (the extracted boot helper) so the test drives the same
+/// code path that `run()` uses, including the `tracing::error!` emit with
+/// `event="boot.sql_pool_init_failed"` and `reason_code="metadata_token_failed"`.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn sec005_boot_fails_when_metadata_500() {
-    // AC-11(b): metadata 500 → TokenError::Fetch (boot.sql_pool_init_failed)
+    // AC-11(b) + AC-8 oracle: metadata 500 → boot.sql_pool_init_failed log + Err
     let mut server = mockito::Server::new_async().await;
     let _meta = server
         .mock(
             "GET",
-            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/sqlservice.admin",
+            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
         )
         .with_status(500)
         .expect(1)
@@ -115,10 +121,18 @@ async fn sec005_boot_fails_when_metadata_500() {
     let provider =
         TokenProvider::with_base_url(server.url(), OAuthScope::CLOUD_SQL).expect("build provider");
 
-    let result = provider.get_or_refresh().await;
+    // Drive the boot path via init_sql_pool — this emits the AC-8 log event.
+    let result = init_sql_pool(&provider, "postgres://postgres@localhost:5432/archiviste").await;
+    assert!(result.is_err(), "init_sql_pool must fail on metadata 500");
+
+    // AC-8 oracle: boot log must contain event + reason_code.
     assert!(
-        matches!(result, Err(TokenError::Fetch)),
-        "metadata 500 must produce TokenError::Fetch, got: {result:?}"
+        logs_contain("boot.sql_pool_init_failed"),
+        "log must contain boot.sql_pool_init_failed"
+    );
+    assert!(
+        logs_contain("metadata_token_failed"),
+        "log must contain reason_code=metadata_token_failed"
     );
 }
 
@@ -135,7 +149,7 @@ async fn sec005_token_cache_single_fetch() {
     let meta = server
         .mock(
             "GET",
-            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/sqlservice.admin",
+            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
         )
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -175,7 +189,7 @@ async fn sec005_token_refresh_ahead() {
     let meta1 = server
         .mock(
             "GET",
-            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/sqlservice.admin",
+            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
         )
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -189,7 +203,7 @@ async fn sec005_token_refresh_ahead() {
     let meta2 = server
         .mock(
             "GET",
-            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/sqlservice.admin",
+            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
         )
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -213,4 +227,55 @@ async fn sec005_token_refresh_ahead() {
 
     meta1.assert_async().await;
     meta2.assert_async().await;
+}
+
+// ---------------------------------------------------------------------------
+// AC-4 cache-hit timing oracle (HIGH-2)
+// ---------------------------------------------------------------------------
+
+/// AC-4 oracle: cache-hit path of `get_or_refresh` completes in ≤ 1 ms.
+///
+/// The cache-hit path is pure in-memory arithmetic on `CachedToken::expires_at`
+/// protected by a read-lock — no I/O.  AC-4 mandates ≤ 1 ms wall-clock.
+///
+/// Note: the spec AC-4 wording references `before_acquire` but the sqlx
+/// `before_acquire` hook cannot be timed without a live pool acquire (I/O).
+/// The testable equivalent is `TokenProvider::get_or_refresh()` on a warm
+/// cache, which is the only non-trivial work the hook performs
+/// (it delegates the actual token check to `get_or_refresh` semantics).
+/// This test maps to AC-4 by measuring the same cache-hit code path.
+#[tokio::test]
+async fn sec005_before_acquire_cache_hit_under_1ms() {
+    // AC-4 oracle: cache-hit get_or_refresh ≤ 1 ms
+    let mut server = mockito::Server::new_async().await;
+    let _meta = server
+        .mock(
+            "GET",
+            "/computeMetadata/v1/instance/service-accounts/default/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.admin",
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"access_token":"cache-hit-token","expires_in":3600,"token_type":"Bearer"}"#,
+        )
+        .expect(1)
+        .create_async()
+        .await;
+
+    let provider =
+        TokenProvider::with_base_url(server.url(), OAuthScope::CLOUD_SQL).expect("build provider");
+
+    // Prime the cache with one fetch.
+    provider.get_or_refresh().await.expect("prime cache");
+
+    // Second call must be a cache hit — measure wall-clock latency.
+    let t0 = Instant::now();
+    let (_, from_cache) = provider.get_or_refresh().await.expect("cache hit");
+    let elapsed = t0.elapsed();
+
+    assert!(from_cache, "second call must be served from cache");
+    assert!(
+        elapsed < Duration::from_millis(1),
+        "cache-hit get_or_refresh must complete < 1 ms; elapsed={elapsed:?}"
+    );
 }

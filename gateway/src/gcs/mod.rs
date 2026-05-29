@@ -5,6 +5,5 @@ pub mod sign;
 // to preserve SEC-004 call sites (`gcs::token::TokenProvider`) without churn.
 /// SEC-004 backward-compat re-exports for legacy `gcs::token` callers.
 pub mod token {
-    pub(crate) use crate::auth_metadata::token::classify_reqwest_error;
     pub use crate::auth_metadata::token::{OAuthScope, TokenError, TokenProvider};
 }

@@ -38,9 +38,8 @@ pub struct Config {
     /// In tests, set to a low value (e.g. 200) to test AC-8 without waiting 35 s.
     pub request_timeout_ms: u64,
     /// Service-account email used as `X-Goog-Credential` in V4 signed URLs (AC-21).
+    /// Signing is performed via IAM `signBlob` — no SA private key required (SEC-004 AC-1).
     pub gcs_signing_sa_email: String,
-    /// PKCS#8 RSA private key PEM for GCS V4 signing (AC-21, secret-hygiene: never logged).
-    pub gcs_signing_private_key_pem: SecretString,
     /// GCS bucket name (e.g. `archiviste-conversations`).
     pub gcs_bucket: String,
 }
@@ -78,10 +77,6 @@ impl Config {
                 .unwrap_or(35_000),
             gcs_signing_sa_email: std::env::var("GCS_SIGNING_SA_EMAIL")
                 .context("GCS_SIGNING_SA_EMAIL env var required")?,
-            gcs_signing_private_key_pem: SecretString::from(
-                std::env::var("GCS_SIGNING_PRIVATE_KEY_PEM")
-                    .context("GCS_SIGNING_PRIVATE_KEY_PEM env var required")?,
-            ),
             gcs_bucket: std::env::var("GCS_BUCKET").context("GCS_BUCKET env var required")?,
         })
     }

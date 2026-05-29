@@ -110,8 +110,7 @@ pub fn make_test_config(workers_url: &str) -> Config {
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,
         gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
-        // Empty string — placeholder; will fail at sign_get() if actually invoked.
-        gcs_signing_private_key_pem: secrecy::SecretString::from(String::new()),
+        // SEC-004: no SA private key — signing via IAM signBlob; no field here.
         gcs_bucket: "archiviste-conversations".to_string(),
     }
 }

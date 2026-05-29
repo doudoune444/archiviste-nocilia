@@ -167,6 +167,35 @@ cat boot-metrics.json
 Note Windows : `make`, `bash` et les scripts POSIX supposent Git Bash, WSL,
 ou un shell équivalent.
 
+## §5 — GCS V4 signing via IAM signBlob (SEC-004)
+
+La gateway signe les URLs GCS via `iamcredentials.googleapis.com/v1/.../signBlob`
+en utilisant le token OAuth du metadata server Cloud Run — pas de clé SA privée.
+
+### Vérification post-déploiement
+
+```bash
+# Vérifier que le signing fonctionne depuis le container déployé.
+curl -sH "Authorization: Bearer <author-jwt>" \
+  https://<gateway-host>/v1/conversations/<test-conv-id>/signed-url
+# Attendu : 200 + {"signed_url":"https://archiviste-conversations.storage.googleapis.com/...","expires_at":"..."}
+# Si 503 : inspecter les logs Cloud Run pour event=dashboard.signing_failed + reason_code.
+```
+
+### Local dev
+
+Endpoint `/v1/conversations/{id}/signed-url` retourne 503 en local dev sans configuration
+IAM — c'est le comportement attendu (pas de fallback, `secret-hygiene.md`).
+Activation locale (rarement exercée — UI-002 dev typiquement contre données stagées) :
+
+```bash
+gcloud auth application-default login
+gcloud iam service-accounts add-iam-policy-binding \
+  archiviste-runtime@<project>.iam.gserviceaccount.com \
+  --role=roles/iam.serviceAccountTokenCreator \
+  --member=user:<dev-email>
+```
+
 ## Ingestion lore (ING-001)
 
 Pipeline CLI one-shot : parcourt `lore/`, parse frontmatter YAML, normalise

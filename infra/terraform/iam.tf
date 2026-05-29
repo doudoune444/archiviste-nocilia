@@ -58,3 +58,12 @@ resource "google_storage_bucket_iam_member" "runtime_storage" {
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.archiviste_runtime.email}"
 }
+
+# SEC-004 AC-7: self-impersonation for IAM signBlob (GCS V4 signing).
+# archiviste-runtime SA needs serviceAccountTokenCreator on itself so
+# iamcredentials.signBlob accepts its own access token.
+resource "google_service_account_iam_member" "runtime_token_creator_self" {
+  service_account_id = google_service_account.archiviste_runtime.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.archiviste_runtime.email}"
+}

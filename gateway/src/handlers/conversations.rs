@@ -9,7 +9,6 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use secrecy::ExposeSecret;
 use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -83,20 +82,24 @@ pub async fn signed_url(
 
     let now = Utc::now();
     // AC-9: TTL = SIGNED_URL_TTL_SECONDS = 300 s, method = GET strictly.
+    // AC-12: sign_get takes &TokenProvider (no SA private key in config — SEC-004).
     let url = sign::sign_get(
+        &state.token_provider,
         &state.config.gcs_signing_sa_email,
-        state.config.gcs_signing_private_key_pem.expose_secret(),
         &state.config.gcs_bucket,
         object,
         now,
+        None,
     )
+    .await
     .map_err(|e| {
-        // Failure mode: SA signing failed — warn log (AC-23), key details never surfaced.
+        // AC-5: failure log — reason_code ∈ {6 codes}, never log token/signed_blob/string_to_sign.
         tracing::warn!(
             event = "dashboard.signing_failed",
             request_id = %request_id,
             user_id = %author.0.user_id,
-            reason = %e,
+            latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+            reason_code = e.reason_code(),
         );
         ApiError::UpstreamUnavailable
     })?;

@@ -58,12 +58,19 @@ resource "google_cloud_run_v2_service" "gateway" {
 
       env {
         name = "DATABASE_URL"
+        # PR-f: gateway uses sqlx (Rust), which rejects URLs with an empty host
+        # component ("error with configuration: empty host" — sqlx::Error::Configuration
+        # via url::Url::host_str returning None on `postgres://@/db`). Provide `localhost`
+        # as a syntactic placeholder; the `?host=/cloudsql/...` query param overrides
+        # to the Unix-domain socket exposed by the integrated Cloud SQL Auth Proxy.
+        # Scheme is plain `postgres://` (no `+asyncpg` driver hint — Python/SQLAlchemy
+        # convention only; sqlx does not understand it).
         # HIGH-5: SA email contains '@' which must be percent-encoded as '%40' in RFC 3986
         # userinfo. Without encoding, the URL parser splits on the first '@' and treats the
-        # domain suffix as the hostname — connection fails with "invalid hostname".
-        # Cloud SQL IAM SA username has ".gserviceaccount.com" stripped (see cloud_sql.tf
-        # google_sql_user.archiviste_runtime). DATABASE_URL must match exactly.
-        value = "postgresql+asyncpg://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
+        # domain suffix as the hostname. Cloud SQL IAM SA username has ".gserviceaccount.com"
+        # stripped (see cloud_sql.tf google_sql_user.archiviste_runtime). Password is empty
+        # — Cloud Run integrated proxy injects the IAM access token transparently.
+        value = "postgres://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@localhost/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
       }
 
       # HIGH-1: gateway requires WORKERS_URL at boot (gateway/src/config.rs:40).

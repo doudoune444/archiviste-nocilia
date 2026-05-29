@@ -117,6 +117,46 @@ echo -n "<YOUR_MISTRAL_API_KEY>" | \
 
 This must happen BEFORE the first `deploy.yml` GHA run — workers boot fails without it.
 
+## 5b. Bootstrap JWT Ed25519 keypair + GCS signing placeholder
+
+The gateway refuses to boot without 4 env vars (`gateway/src/config.rs:58-87`).
+Terraform provisions the *plumbing* (2 Secret Manager secrets for the JWT keys +
+an inline placeholder for the unused GCS signing field). The operator generates
+the keypair and pushes both versions one-shot below.
+
+### Generate the Ed25519 JWT keypair
+
+```bash
+openssl genpkey -algorithm ED25519 -out /tmp/jwt-private.pem
+openssl pkey -in /tmp/jwt-private.pem -pubout -out /tmp/jwt-public.pem
+```
+
+### Push both keys to Secret Manager
+
+```bash
+gcloud secrets versions add JWT_ED25519_PRIVATE_KEY_PEM \
+  --data-file=/tmp/jwt-private.pem
+gcloud secrets versions add JWT_ED25519_PUBLIC_KEY_PEM \
+  --data-file=/tmp/jwt-public.pem
+```
+
+Rotation: re-run the two `versions add` calls only. No `terraform apply` needed;
+the next Cloud Run revision picks up `version = "latest"` automatically.
+
+### Clean up local key material
+
+```bash
+shred -u /tmp/jwt-private.pem /tmp/jwt-public.pem
+```
+
+### GCS signing placeholder — DO NOT generate a real key
+
+`GCS_SIGNING_PRIVATE_KEY_PEM` is set to the literal sentinel string
+`"placeholder-removed-by-SEC-004"` directly in `infra/terraform/cloud_run.tf`.
+`Config::from_env` performs no parsing at boot; the only PEM-parsing site
+(`sign_get` in `gateway/src/gcs/sign.rs`) is unreachable in V1 (no pre-auth
+route invokes the signer). SEC-004 drops the field entirely.
+
 ## 6. Bootstrap pgvector extension
 
 Cloud SQL `db-f1-micro` Postgres 16. First set the `postgres` superuser password (Cloud SQL

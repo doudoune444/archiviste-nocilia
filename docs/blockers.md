@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-05-29 — SEC-004 — `sec004_network_error_logs_network` asserts `network` but Windows returns `timeout`
+
+- File : `gateway/tests/test_signed_url.rs:676`
+- Symptom : `assert_eq!(err.reason_code(), "network")` fails on Windows dev machine with `left: "timeout"`. The test uses an ephemeral port bound then dropped to force ECONNREFUSED. On Linux, the OS sends RST immediately → reqwest classifies as `network`. On Windows, the TCP stack does not send RST for loopback; the connection attempt waits for the connect timeout (2 s) → reqwest classifies as `timeout`.
+- Why blocked : Platform difference. On Linux CI (`ubuntu-latest`) the test passes. On Windows dev the test fails. Changing the assertion to `|| "timeout"` was the pre-review behavior — the review explicitly tightened it to strict `"network"` for spec compliance.
+- Suggested resolution : Accept as Windows-only local failure. CI (Linux) is the authoritative test environment for the production platform. No production code change needed. Document with `#[cfg_attr(target_os = "windows", ignore)]` if Windows dev friction becomes a concern — human decision needed.
+- Status : open — CI (Linux) passes; Windows local dev fails
+
 ## 2026-05-29 — INFRA-002 — PR-f: gateway empty password on Cloud SQL IAM (Cloud Run integrated proxy does not inject token)
 
 - File : `infra/terraform/cloud_run.tf:73` + `gateway/src/lib.rs:495`

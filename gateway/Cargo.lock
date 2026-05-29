@@ -57,8 +57,6 @@ dependencies = [
  "rand_core 0.6.4",
  "regex",
  "reqwest",
- "ring",
- "rsa",
  "secrecy",
  "serde",
  "serde_json",

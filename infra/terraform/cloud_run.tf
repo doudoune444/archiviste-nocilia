@@ -108,21 +108,10 @@ resource "google_cloud_run_v2_service" "gateway" {
         }
       }
 
-      # PR-e: GCS signing — interim placeholder for V1 unblock only.
-      # Verified safe: Config::from_env (gateway/src/config.rs:81-84) does NOT parse
-      # this PEM at boot — only `SecretString::from(env::var(...))`. The sole parse
-      # site is `sign_get` (gateway/src/gcs/sign.rs:64-67), reachable only from the
-      # signed-URL handler, which has no pre-auth route in V1 (auth tier MVP is
-      # hardcoded anonymous per INFRA-002 non-goals). SEC-004 drops the field
-      # entirely; this placeholder disappears with the refactor.
+      # SEC-004: GCS signing via IAM signBlob (AC-8); private key env removed.
       env {
         name  = "GCS_SIGNING_SA_EMAIL"
         value = google_service_account.archiviste_runtime.email
-      }
-
-      env {
-        name  = "GCS_SIGNING_PRIVATE_KEY_PEM"
-        value = "placeholder-removed-by-SEC-004"
       }
     }
   }

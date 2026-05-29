@@ -149,13 +149,15 @@ the next Cloud Run revision picks up `version = "latest"` automatically.
 shred -u /tmp/jwt-private.pem /tmp/jwt-public.pem
 ```
 
-### GCS signing placeholder — DO NOT generate a real key
+### GCS signing — no key required
 
-`GCS_SIGNING_PRIVATE_KEY_PEM` is set to the literal sentinel string
-`"placeholder-removed-by-SEC-004"` directly in `infra/terraform/cloud_run.tf`.
-`Config::from_env` performs no parsing at boot; the only PEM-parsing site
-(`sign_get` in `gateway/src/gcs/sign.rs`) is unreachable in V1 (no pre-auth
-route invokes the signer). SEC-004 drops the field entirely.
+GCS V4 signed URLs are now generated via IAM `signBlob` auto-impersonation
+(SEC-004). The gateway calls `iamcredentials.googleapis.com` using a bearer
+token obtained from the Cloud Run metadata server. No SA private key is needed
+and `GCS_SIGNING_PRIVATE_KEY_PEM` no longer exists in the configuration.
+
+See `docs/runbook.md §5` for the full post-deploy verification procedure and
+the local-dev `gcloud` commands.
 
 ## 6. Bootstrap pgvector extension
 

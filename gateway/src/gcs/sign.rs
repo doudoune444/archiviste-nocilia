@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
-use crate::gcs::token::{classify_reqwest_error, TokenError, TokenProvider};
+use crate::auth_metadata::token::{classify_reqwest_error, TokenError, TokenProvider};
 
 /// Base URL of the IAM credentials API (injectable in tests via `TokenProvider` URL args).
 const IAM_BASE_URL_DEFAULT: &str = "https://iamcredentials.googleapis.com";

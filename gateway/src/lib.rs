@@ -3,6 +3,7 @@
 //! Exposes the public REST API and proxies internal calls to the workers tier.
 
 pub mod auth;
+pub mod auth_metadata;
 pub mod config;
 pub mod errors;
 pub mod gcs;
@@ -11,7 +12,7 @@ pub mod middleware;
 pub mod routes;
 pub mod state;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::Request,
     http::{HeaderValue, StatusCode},
@@ -20,9 +21,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use secrecy::ExposeSecret;
 use serde::Serialize;
 use serde_json::json;
-use std::{net::SocketAddr, sync::Arc};
+use sqlx::postgres::PgConnectOptions;
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use tower_http::{
     limit::RequestBodyLimitLayer,
     services::{ServeDir, ServeFile},
@@ -40,9 +43,124 @@ use crate::{
         },
         jwt,
     },
+    auth_metadata::TokenProvider,
     config::Config,
     state::AppState,
 };
+
+/// Maximum lifetime for a Cloud SQL connection before it is recycled.
+///
+/// Set to 45 min — safely below the Cloud SQL IAM token TTL of 60 min.
+/// Combined with the `before_acquire` gate and the background refresher,
+/// no physical connection ever outlives its token (SEC-005 AC-5).
+///
+/// `pub` so integration tests can import the constant and express the 44/45 min
+/// boundary without magic literals (SEC-005 review LOW-7).
+pub const SQL_CONNECTION_MAX_LIFETIME_SECS: u64 = 45 * 60;
+
+/// Spawn a background task that refreshes the Cloud SQL IAM token every 30 min
+/// and updates the pool's connect options so future physical connections use the
+/// fresh token.
+///
+/// On refresh failure the task logs a warning and retries at the next tick.
+/// The prior connect options remain in effect; combined with `max_lifetime = 45 min`
+/// any connection established before a failed refresh will be recycled within 45 min,
+/// well within the 60 min token TTL (SEC-005 failure mode).
+fn spawn_sql_token_refresher(
+    pool: sqlx::PgPool,
+    token_provider: Arc<TokenProvider>,
+    database_url: String,
+) {
+    tokio::spawn(async move {
+        // MED-5: first tick at now + 30 min so the refresher does not run immediately
+        // at boot (boot already holds a fresh token from the fail-fast fetch above).
+        let start = tokio::time::Instant::now() + Duration::from_mins(30);
+        let mut interval = tokio::time::interval_at(start, Duration::from_mins(30));
+        loop {
+            interval.tick().await;
+            match token_provider.get_or_refresh().await {
+                Ok((token, _)) => match PgConnectOptions::from_str(&database_url) {
+                    Ok(opts) => {
+                        pool.set_connect_options(opts.password(token.expose_secret()));
+                    }
+                    Err(e) => {
+                        // MED-3: URL-parse failure is not an auth failure — map to `network`
+                        // (config-shape failure of the connection target).
+                        tracing::warn!(
+                            event = "sql_pool.token_refresh_failed",
+                            reason_code = "network",
+                            error = %e,
+                        );
+                    }
+                },
+                Err(e) => {
+                    // MED-3: use a distinct event for background refresh failures so the
+                    // AC-14 runbook grep (`grep sql_pool.connection_failed`) stays clean.
+                    tracing::warn!(
+                        event = "sql_pool.token_refresh_failed",
+                        reason_code = "metadata_token_failed",
+                        error = %e,
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// Fetch the initial Cloud SQL IAM token and build the sqlx pool.
+///
+/// Extracted from `run()` so integration tests can drive the boot log path
+/// without a full TCP listener (SEC-005 HIGH-1 / AC-8).
+///
+/// On token-fetch failure, logs `event="boot.sql_pool_init_failed"` with
+/// `reason_code="metadata_token_failed"` and returns the `TokenError`.
+///
+/// On pool-connect failure, logs the same event with
+/// `reason_code="cloud_sql_auth_failed"` and returns the sqlx error.
+///
+/// # Errors
+///
+/// Returns an error if the token fetch or pool construction fails.
+pub async fn init_sql_pool(
+    token_provider: &TokenProvider,
+    database_url: &str,
+) -> Result<sqlx::PgPool> {
+    let (initial_token, _) = token_provider.get_or_refresh().await.map_err(|e| {
+        tracing::error!(
+            event = "boot.sql_pool_init_failed",
+            reason_code = "metadata_token_failed",
+            phase = "boot",
+            error = %e,
+        );
+        anyhow::anyhow!("boot.sql_pool_init_failed reason_code=metadata_token_failed: {e}")
+    })?;
+
+    let opts = PgConnectOptions::from_str(database_url)
+        .context("boot.sql_pool_init_failed reason_code=cloud_sql_auth_failed")?
+        .password(initial_token.expose_secret());
+
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .max_lifetime(Duration::from_secs(SQL_CONNECTION_MAX_LIFETIME_SECS))
+        .before_acquire(|_conn, meta| {
+            Box::pin(async move {
+                Ok::<bool, sqlx::Error>(
+                    meta.age < Duration::from_secs(SQL_CONNECTION_MAX_LIFETIME_SECS - 60),
+                )
+            })
+        })
+        .connect_with(opts)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                event = "boot.sql_pool_init_failed",
+                reason_code = "cloud_sql_auth_failed",
+                phase = "boot",
+                error = %e,
+            );
+            anyhow::anyhow!("boot.sql_pool_init_failed reason_code=cloud_sql_auth_failed: {e}")
+        })
+}
 
 // ---------------------------------------------------------------------------
 // Request-id middleware (R2)
@@ -491,13 +609,28 @@ async fn author_test_handler(
 pub async fn run(config: Config) -> Result<()> {
     let addr = config.bind_addr.clone();
 
-    // Production: connect to Postgres and verify the public key loads.
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&config.database_url)
-        .await?;
+    // SEC-005 AC-8: build provider (HTTP client only — no I/O yet).
+    let sql_token_provider = Arc::new(
+        TokenProvider::for_cloud_sql()
+            .context("boot.sql_pool_init_failed reason_code=metadata_token_failed")?,
+    );
 
-    let state = Arc::new(AppState::new_with_pool(config, pool)?);
+    // SEC-005 AC-8: fetch initial token + build pool.  Fail-fast if metadata unreachable.
+    // init_sql_pool emits `boot.sql_pool_init_failed` with the appropriate reason_code.
+    let pool = init_sql_pool(&sql_token_provider, &config.database_url).await?;
+
+    // SEC-005 AC-4: background refresher updates pool connect options every 30 min.
+    spawn_sql_token_refresher(
+        pool.clone(),
+        Arc::clone(&sql_token_provider),
+        config.database_url.clone(),
+    );
+
+    let state = Arc::new(AppState::new_with_pool_and_sql_token_provider(
+        config,
+        pool,
+        sql_token_provider,
+    )?);
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

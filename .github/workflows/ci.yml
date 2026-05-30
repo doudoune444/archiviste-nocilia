@@ -33,6 +33,19 @@ jobs:
   gateway:
     name: gateway (rust)
     runs-on: ubuntu-latest
+    # SEC-005 AC-11: Postgres service required for test_sql_pool.rs integration tests.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: archiviste
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: gateway

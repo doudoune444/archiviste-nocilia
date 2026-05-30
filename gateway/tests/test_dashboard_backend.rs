@@ -543,7 +543,11 @@ async fn ac8_ac9_signed_url_200_shape_and_ttl(pool: sqlx::PgPool) {
     // iam_base_url to AppState (test-only) + handler reads it. Added to state.rs.
 
     let token_provider = Arc::new(
-        TokenProvider::with_base_url(mock_server.url()).expect("TokenProvider::with_base_url"),
+        TokenProvider::with_base_url(
+            mock_server.url(),
+            archiviste_gateway::gcs::token::OAuthScope::GCS_DEFAULT,
+        )
+        .expect("TokenProvider::with_base_url"),
     );
 
     // Use make_state_with_pool_and_iam to inject the token_provider.

@@ -10,7 +10,7 @@
 
 use archiviste_gateway::gcs::{
     sign::{sign_get, SIGNED_URL_TTL_SECONDS},
-    token::TokenProvider,
+    token::{OAuthScope, TokenProvider},
 };
 use std::sync::Arc;
 
@@ -83,8 +83,10 @@ async fn sec004_nominal_returns_v4_url() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
     let now = chrono::Utc::now();
     let url = sign_get(
         &token_provider,
@@ -164,8 +166,10 @@ async fn sec004_token_cache_reuse() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
     let now = chrono::Utc::now();
 
     sign_get(
@@ -243,8 +247,10 @@ async fn sec004_token_refresh_ahead() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
     let now = chrono::Utc::now();
 
     sign_get(
@@ -342,8 +348,10 @@ async fn sec004_retry_on_401() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
     let now = chrono::Utc::now();
 
     // First call — warms the cache (metadata.expect count: 1).
@@ -406,8 +414,10 @@ async fn sec004_signblob_403_returns_503() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
 
     let err = sign_get(
         &token_provider,
@@ -460,8 +470,10 @@ async fn sec004_signblob_429_returns_503() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
 
     let err = sign_get(
         &token_provider,
@@ -509,8 +521,10 @@ async fn sec004_signblob_500_returns_503() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
 
     let err = sign_get(
         &token_provider,
@@ -547,8 +561,10 @@ async fn sec004_metadata_token_fail_returns_503() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
 
     let err = sign_get(
         &token_provider,
@@ -606,8 +622,10 @@ async fn sec004_signblob_timeout_logs_timeout() {
         .create_async()
         .await;
 
-    let token_provider =
-        Arc::new(TokenProvider::with_base_url(server.url()).expect("TokenProvider::with_base_url"));
+    let token_provider = Arc::new(
+        TokenProvider::with_base_url(server.url(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
+    );
 
     let start = std::time::Instant::now();
     let err = sign_get(
@@ -657,7 +675,8 @@ async fn sec004_network_error_logs_network() {
     drop(listener); // port now closed — any connect attempt gets ECONNREFUSED
 
     let token_provider = Arc::new(
-        TokenProvider::with_base_url(refused_addr.clone()).expect("TokenProvider::with_base_url"),
+        TokenProvider::with_base_url(refused_addr.clone(), OAuthScope::GCS_DEFAULT)
+            .expect("TokenProvider::with_base_url"),
     );
 
     let start = std::time::Instant::now();

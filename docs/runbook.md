@@ -167,6 +167,64 @@ cat boot-metrics.json
 Note Windows : `make`, `bash` et les scripts POSIX supposent Git Bash, WSL,
 ou un shell équivalent.
 
+## §8 — Cloud SQL IAM authentication (SEC-005)
+
+SEC-005 remplace l'hypothèse INFRA-002 PR-f « le proxy Cloud Run v2 injecte le
+token IAM dans le slot password » (hypothèse fausse — voir `docs/blockers.md`
+2026-05-29 §INFRA-002 PR-f). Les pools sqlx (gateway) et asyncpg (workers)
+fetchent eux-mêmes un token IAM frais (`sqlservice.admin`) depuis le metadata
+server et l'injectent dans chaque nouvelle connexion physique.
+
+### Mécanisme (gateway / sqlx)
+
+1. Au boot, `run()` fetch un premier token (`GET metadata.google.internal/…/token?scopes=sqlservice.admin`). Échec → exit non-zéro + log `event=boot.sql_pool_init_failed reason_code=metadata_token_failed`.
+2. `PgPoolOptions.connect_with(PgConnectOptions.password(token))` établit le pool.
+3. Un background task (`tokio::spawn`) rafraîchit le token toutes les 30 min via `pool.set_connect_options(new_opts)`.
+4. `max_lifetime = 45 min` garantit que toute connexion physique est recyclée avant l'expiration du token (TTL IAM = 60 min).
+5. `before_acquire` gate ferme les connexions proches de l'expiration (défense en profondeur).
+
+### Vérification post-déploiement
+
+```bash
+# Steady state : aucun event sql_pool.connection_failed ne doit apparaître.
+gcloud run services logs read archiviste-gateway --limit=100 \
+  | grep sql_pool.connection_failed
+# Attendu : 0 lignes.
+
+gcloud run services logs read archiviste-workers --limit=100 \
+  | grep sql_pool.connection_failed
+# Attendu : 0 lignes.
+
+# Vérifier les bindings Cloud SQL (INFRA-002 PR-e) si boot échoue.
+gcloud projects get-iam-policy <PROJECT> \
+  --flatten="bindings[].members" \
+  --filter="bindings.role:roles/cloudsql.instanceUser" \
+  --format="table(bindings.members)"
+```
+
+### Local dev
+
+Connexion locale via docker-compose Postgres (password=`postgres`) — pas de
+metadata server disponible hors Cloud Run. Le mécanisme IAM n'est pas exercé
+en dev local : `DATABASE_URL` utilise le mot de passe littéral `postgres`.
+
+Pour tester le chemin IAM en local (optionnel) :
+
+```bash
+# 1. ADC — identité GCP locale
+gcloud auth application-default login
+
+# 2. Binding roles/cloudsql.instanceUser (déjà fait INFRA-002 PR-e pour le SA runtime).
+#    Pour un dev qui veut se connecter directement :
+gcloud projects add-iam-policy-binding <PROJECT> \
+  --role=roles/cloudsql.instanceUser \
+  --member=user:<dev-email>
+```
+
+Les bindings `roles/cloudsql.client` et `roles/cloudsql.instanceUser` sur le SA
+`archiviste-runtime` ont été provisionnés par INFRA-002 PR-e. Voir §5 pour le
+setup GCS signBlob (même SA, scope distinct).
+
 ## §5 — GCS V4 signing via IAM signBlob (SEC-004)
 
 La gateway signe les URLs GCS via `iamcredentials.googleapis.com/v1/.../signBlob`

@@ -34,9 +34,10 @@ def _classify_pool_init_error(exc: BaseException) -> str:
     """Map a pool-init exception to an AC-10 reason_code string.
 
     reason_code ∈ {"metadata_token_failed","cloud_sql_auth_failed","timeout","network"} (AC-10).
+    TokenFetchError carries .reason_code at raise-site (MED-2 — no substring matching).
     """
     if isinstance(exc, TokenFetchError):
-        return _classify_token_fetch_error(exc)
+        return exc.reason_code
     if isinstance(exc, asyncpg.PostgresError):
         return "cloud_sql_auth_failed"
     if isinstance(exc, TimeoutError):
@@ -44,15 +45,6 @@ def _classify_pool_init_error(exc: BaseException) -> str:
     if isinstance(exc, OSError):
         return "network"
     return "cloud_sql_auth_failed"
-
-
-def _classify_token_fetch_error(exc: TokenFetchError) -> str:
-    msg = str(exc)
-    if "timeout" in msg:
-        return "timeout"
-    if "network" in msg:
-        return "network"
-    return "metadata_token_failed"
 
 
 @asynccontextmanager
@@ -66,7 +58,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sql_token_provider = SqlTokenProvider()
     try:
         pool = await create_pool(settings.database_url, token_provider=sql_token_provider)
-    except Exception as exc:
+    except (TokenFetchError, asyncpg.PostgresError, OSError, TimeoutError) as exc:
         reason = _classify_pool_init_error(exc)
         logger.error("boot.sql_pool_init_failed", reason_code=reason, phase="boot")
         raise

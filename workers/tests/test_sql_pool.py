@@ -8,13 +8,16 @@ AC-9: lifespan fail-fast on metadata 500.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import respx
+import structlog.testing
 from fastapi import FastAPI
 from httpx import Response
+from pydantic import SecretStr
 
 from archiviste_workers.auth_metadata.token import (
     CLOUD_SQL_SCOPE,
@@ -22,6 +25,7 @@ from archiviste_workers.auth_metadata.token import (
     SqlTokenProvider,
     TokenFetchError,
 )
+from archiviste_workers.db import create_pool
 from archiviste_workers.main import lifespan
 
 if TYPE_CHECKING:
@@ -38,6 +42,13 @@ def _mock_token_response(
     expires_in: int = 3600,
 ) -> dict[str, Any]:
     return {"access_token": access_token, "expires_in": expires_in, "token_type": "Bearer"}
+
+
+def _database_url() -> str:
+    return os.environ.get(
+        "DATABASE_URL",
+        "postgres://postgres:postgres@localhost:5432/archiviste",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +100,52 @@ async def test_create_pool_injects_token_callback_wired(
 
 
 # ---------------------------------------------------------------------------
+# AC-12 (a) part 3: end-to-end token_provider injection against real Postgres
+# AC-12 requires the callable path is exercised, not just the bare pool path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.real_token_provider
+@respx.mock(base_url="http://metadata.test")
+async def test_create_pool_with_token_provider_against_postgres(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """AC-12(a) part 3: create_pool with token_provider= authenticates against docker Postgres.
+
+    We mock SqlTokenProvider.get_or_refresh() to return the LOCAL postgres password
+    (SecretStr("postgres")) so asyncpg's password= callable path is exercised end-to-end
+    against the docker-compose Postgres.  Assertions:
+    - provider.get_or_refresh() called >= 1 time during pool establishment
+    - pool.acquire() succeeds
+    - SELECT 1 returns 1
+    """
+    # AC-12(a) oracle: metadata mock not needed here; we mock at the provider level
+    # to return the local postgres password so the asyncpg callable path authenticates.
+    provider = AsyncMock(spec=SqlTokenProvider)
+    provider.get_or_refresh = AsyncMock(return_value=SecretStr("postgres"))
+    provider.aclose = AsyncMock()
+
+    # Use a URL without embedded password so asyncpg uses the password= callable.
+    # docker-compose Postgres: user=postgres, db=archiviste, password=postgres.
+    url = _database_url()
+    # Strip embedded password from URL so asyncpg calls our callback instead.
+    # postgres://postgres:postgres@localhost:5432/archiviste → postgres://postgres@localhost:5432/archiviste
+    url_no_pw = url.replace(":postgres@", "@")
+
+    pool = await create_pool(url_no_pw, token_provider=provider)
+    try:
+        async with pool.acquire() as conn:
+            result = await conn.fetchval("SELECT 1")
+        assert result == 1
+    finally:
+        await pool.close()
+
+    # Provider must have been called at least once during pool establishment (min_size=1).
+    assert provider.get_or_refresh.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
 # AC-12 (b): boot fails when metadata returns 500
 # AC-9: TokenFetchError raised (not swallowed)
 # ---------------------------------------------------------------------------
@@ -105,7 +162,7 @@ async def test_boot_fails_on_metadata_500(
     try:
         with pytest.raises(TokenFetchError) as exc_info:
             await provider.get_or_refresh()
-        assert "metadata_token_failed" in str(exc_info.value)
+        assert exc_info.value.reason_code == "metadata_token_failed"
     finally:
         await provider.aclose()
 
@@ -213,11 +270,20 @@ async def test_secret_str_redacted_in_repr(
 
 # ---------------------------------------------------------------------------
 # AC-9: lifespan propagates exception when metadata fails (no silent catch)
+# Asserts structlog event emitted, reason_code field present, no bearer leakage.
 # ---------------------------------------------------------------------------
 
 
 async def test_lifespan_fails_on_metadata_500() -> None:
-    """AC-9: lifespan raises on token fetch failure; no silent catch."""
+    """AC-9: lifespan raises TokenFetchError; structlog emits boot.sql_pool_init_failed.
+
+    Assertions:
+    - raises TokenFetchError (exact type, not broad Exception)
+    - structlog event 'boot.sql_pool_init_failed' captured
+    - reason_code='metadata_token_failed' in captured log fields
+    - AC-10: no Bearer / eyJ / token mock value in any captured log field
+    """
+    # AC-9: mock provider raises TokenFetchError so create_pool propagates it.
     mock_provider = AsyncMock(spec=SqlTokenProvider)
     mock_provider.get_or_refresh = AsyncMock(side_effect=TokenFetchError("metadata_token_failed"))
     mock_provider.aclose = AsyncMock()
@@ -231,9 +297,23 @@ async def test_lifespan_fails_on_metadata_500() -> None:
             "archiviste_workers.main.create_pool",
             side_effect=TokenFetchError("metadata_token_failed"),
         ),
+        structlog.testing.capture_logs() as captured,
     ):
         app = FastAPI(lifespan=lifespan)
 
-        with pytest.raises((TokenFetchError, Exception)):
+        with pytest.raises(TokenFetchError):
             async with app.router.lifespan_context(app):
                 pass
+
+    # AC-9: structlog event emitted
+    boot_events = [e for e in captured if e.get("event") == "boot.sql_pool_init_failed"]
+    assert boot_events, f"Expected 'boot.sql_pool_init_failed' in captured logs, got: {captured}"
+
+    # AC-10: reason_code field present
+    assert boot_events[0].get("reason_code") == "metadata_token_failed", boot_events[0]
+
+    # AC-10: bearer redaction — no raw token value in any log field
+    all_log_str = str(captured)
+    assert "Bearer" not in all_log_str
+    assert "eyJ" not in all_log_str
+    assert "test-iam-token" not in all_log_str

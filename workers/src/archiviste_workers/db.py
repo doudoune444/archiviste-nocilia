@@ -57,6 +57,9 @@ async def create_pool(
         kwargs["password"] = _password_cb
         kwargs["max_inactive_connection_lifetime"] = _MAX_INACTIVE_CONNECTION_LIFETIME_SECS
 
+    # asyncpg.create_pool returns Pool | None; raise explicitly so callers get a
+    # clear error rather than a downstream AttributeError (MED-3 — no bare assert).
     pool = await asyncpg.create_pool(normalize_database_url(database_url), **kwargs)
-    assert pool is not None  # asyncpg.create_pool returns Pool | None — assert for type narrowing
+    if pool is None:
+        raise RuntimeError("asyncpg.create_pool returned None — check database_url and credentials")
     return pool

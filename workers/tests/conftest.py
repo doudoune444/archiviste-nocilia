@@ -83,7 +83,7 @@ def _silence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _mock_sql_token_provider_in_main() -> Iterator[None]:
+def _mock_sql_token_provider_in_main(request: pytest.FixtureRequest) -> Iterator[None]:
     """Patch SqlTokenProvider and create_pool in main.py for tests using lifespan().
 
     SEC-005: lifespan() now creates a SqlTokenProvider that fetches from
@@ -92,7 +92,14 @@ def _mock_sql_token_provider_in_main() -> Iterator[None]:
     create_pool call so docker-compose Postgres (password auth) still works.
     Tests in test_sql_pool.py create their own SqlTokenProvider instances
     directly (not patched here).
+
+    Tests marked @pytest.mark.real_token_provider bypass this fixture so they
+    can exercise the real token_provider= codepath against docker Postgres (AC-12(a) part 3).
     """
+    if request.node.get_closest_marker("real_token_provider") is not None:
+        yield
+        return
+
     mock_provider = AsyncMock()
     mock_provider.get_or_refresh = AsyncMock(return_value=SecretStr("test-iam-token"))
     mock_provider.aclose = AsyncMock()

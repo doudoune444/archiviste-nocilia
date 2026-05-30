@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import httpx
 from pydantic import SecretStr
@@ -23,9 +24,19 @@ CLOUD_SQL_SCOPE = "https://www.googleapis.com/auth/sqlservice.admin"
 REFRESH_AHEAD_SECONDS = 60
 _HTTP_ERROR_THRESHOLD = 400
 
+TokenReasonCode = Literal["timeout", "network", "metadata_token_failed"]
+
 
 class TokenFetchError(Exception):
-    """Raised when the metadata server returns an error or is unreachable."""
+    """Raised when the metadata server returns an error or is unreachable.
+
+    Carries a reason_code set at raise-site so callers can classify without
+    substring-matching the message (MED-2).
+    """
+
+    def __init__(self, reason_code: TokenReasonCode) -> None:
+        super().__init__(reason_code)
+        self.reason_code: TokenReasonCode = reason_code
 
 
 @dataclass
@@ -64,18 +75,18 @@ class SqlTokenProvider:
         Refresh-ahead: if now >= expires_at - REFRESH_AHEAD_SECONDS, re-fetch.
         Double-checked locking avoids concurrent fetches.
         """
-        if self._is_cache_valid():
-            return self._cached.bearer  # type: ignore[union-attr]
+        cached = self._cached
+        if cached is not None and self._is_cache_valid(cached):
+            return cached.bearer
         async with self._lock:
-            if self._is_cache_valid():
-                return self._cached.bearer  # type: ignore[union-attr]
+            cached = self._cached
+            if cached is not None and self._is_cache_valid(cached):
+                return cached.bearer
             self._cached = await self._fetch()
             return self._cached.bearer
 
-    def _is_cache_valid(self) -> bool:
-        if self._cached is None:
-            return False
-        threshold = self._cached.expires_at - timedelta(seconds=REFRESH_AHEAD_SECONDS)
+    def _is_cache_valid(self, cached: _CachedToken) -> bool:
+        threshold = cached.expires_at - timedelta(seconds=REFRESH_AHEAD_SECONDS)
         return datetime.now(UTC) < threshold
 
     async def _fetch(self) -> _CachedToken:

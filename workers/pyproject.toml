@@ -50,6 +50,7 @@ dev = [
     "pip-audit>=2.7",
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",
+    "respx>=0.21",
 ]
 # Fallback local embedder for V2 self-hosted scenario (cf vision.md Q7).
 # transformers already in runtime (used by chunker tokenizer); sentence-transformers adds model weights.
@@ -126,6 +127,7 @@ markers = [
     "integration: integration tests requiring docker compose",
     "slow: slow tests skipped by default",
     "timing: timing-constant tests (AC-15); may be skipped on noisy CI",
+    "real_token_provider: exercises token_provider= codepath against real Postgres; bypasses _mock_sql_token_provider_in_main autouse",
 ]
 
 [tool.coverage.run]

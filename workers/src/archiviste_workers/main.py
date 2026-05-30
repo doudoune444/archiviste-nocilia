@@ -3,10 +3,12 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import asyncpg
 import structlog
 from fastapi import FastAPI
 
 from archiviste_workers import __version__
+from archiviste_workers.auth_metadata.token import SqlTokenProvider, TokenFetchError
 from archiviste_workers.conversation.gcs_storage import (
     GcsConversationStorage,
     build_client,
@@ -28,16 +30,48 @@ from archiviste_workers.settings import Settings
 logger = structlog.get_logger()
 
 
+def _classify_pool_init_error(exc: BaseException) -> str:
+    """Map a pool-init exception to an AC-10 reason_code string.
+
+    reason_code ∈ {"metadata_token_failed","cloud_sql_auth_failed","timeout","network"} (AC-10).
+    """
+    if isinstance(exc, TokenFetchError):
+        return _classify_token_fetch_error(exc)
+    if isinstance(exc, asyncpg.PostgresError):
+        return "cloud_sql_auth_failed"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, OSError):
+        return "network"
+    return "cloud_sql_auth_failed"
+
+
+def _classify_token_fetch_error(exc: TokenFetchError) -> str:
+    msg = str(exc)
+    if "timeout" in msg:
+        return "timeout"
+    if "network" in msg:
+        return "network"
+    return "metadata_token_failed"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     app.state.settings = settings
 
-    # RET-001 review HIGH: use db.create_pool so the pgvector codec is registered
-    # on every connection. Raw asyncpg.create_pool would fail to encode list[float]
-    # as `vector` for the retrieve SQL `c.embedding <=> $1` bind.
-    pool = await create_pool(settings.database_url)
+    # SEC-005: fetch IAM token at boot (fail-fast); pass provider so each new
+    # physical connection receives a fresh token (asyncpg password= callable, OQ-2).
+    # RET-001: create_pool registers pgvector codec on every connection.
+    sql_token_provider = SqlTokenProvider()
+    try:
+        pool = await create_pool(settings.database_url, token_provider=sql_token_provider)
+    except Exception as exc:
+        reason = _classify_pool_init_error(exc)
+        logger.error("boot.sql_pool_init_failed", reason_code=reason, phase="boot")
+        raise
     app.state.db_pool = pool
+    app.state.sql_token_provider = sql_token_provider
 
     gcs_client = build_client(emulator_host=settings.gcs_emulator_host)
     storage = GcsConversationStorage(bucket_name=settings.gcs_bucket, client=gcs_client)
@@ -72,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await http_client.aclose()
         await pool.close()
+        await sql_token_provider.aclose()
         logger.info("workers.shutdown")
 
 

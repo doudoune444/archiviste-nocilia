@@ -50,6 +50,7 @@ dev = [
     "pip-audit>=2.7",
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",
+    "respx>=0.21",
 ]
 # Fallback local embedder for V2 self-hosted scenario (cf vision.md Q7).
 # transformers already in runtime (used by chunker tokenizer); sentence-transformers adds model weights.

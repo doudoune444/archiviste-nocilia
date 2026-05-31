@@ -89,3 +89,28 @@ Total realistic shrinkage: **~50 LOC**, bringing prod-only diff from ~386 to ~33
 ## Summary
 
 PR-A is functionally correct, security-clean, and lint-clean. All 12 tests pass. The three Critical items (missing `exp_not_numeric` test, `fetch_id_token` signature drift vs spec, audience=metadata-URL aliasing in 3 integration tests) are low-effort fixes; address them and the PR ships. The LOC overshoot (+947 prod+test) is acknowledged by spec — a ~50 LOC trim via dropping the custom percent-encoder is worth doing but not blocking. Bearer hygiene (`SecretString`, no JWT in logs) is correct. AC-8 (no boot warm-up) confirmed by grep.
+
+---
+
+## Re-review pass (commit a78c207)
+
+### Verdict
+**APPROVE**
+
+### Critical issues remaining
+None. All three critical findings from the prior review are resolved:
+- **Critical #1** (`exp_not_numeric` test): `id_token.rs` `exp_fallback_on_exp_not_numeric` added with `tracing_test::traced_test`, asserts both fallback window (`now+55min ±1s`) and `logs_contain("exp_not_numeric")`. AC-3 now has 6 sub-tests covering all 5 declared reasons + the happy path.
+- **Critical #2** (signature drift): Spec amended on main (`specs/acceptance/SEC-006.md`, commit 99cb1a6) — AC-1/AC-2 now say "audience capturée au constructeur" and `fetch_id_token()` parameterless. Implementation matches.
+- **Critical #3** (audience aliasing): tests (a)/(d) now use `workers_url_for_audience = workers_server.url()`; test (b) uses distinct synthetic `http://test-workers-b.invalid`. All three use `Matcher::UrlEncoded("audience".into(), workers_url_for_audience.clone())` for strict assertion. Audience and metadata URLs no longer aliased.
+
+### Major fix verified
+`percent_encode_audience` + `hex_nibble` + the test duplicate are all gone (`rg percent_encode_audience` returns 0 hits). `fetch_from_metadata` uses `.query(&[("audience", &self.audience)])`.
+
+### Regression spot-checks
+- AC-1 invariant: `git diff main -- gateway/src/auth_metadata/token.rs` = 0 lines.
+- AC-8 invariant: `rg workers_id_token_provider gateway/src/lib.rs` = 0 hits.
+- Bearer hygiene: only `event`, `reason`, `request_id`, `latency_ms`, `reason_code` fields in `tracing::warn!` macros. No `bearer`/`payload`/`jwt`/full-`audience` leak.
+- No new `unwrap`/`expect` on user input, no clippy regressions, no new deps.
+
+### Test sanity
+Re-ran locally: `cargo test --lib auth_metadata::id_token` = **9/9 passed**; `cargo test --test test_chat_workers_auth` = **4/4 passed** (~5s incl. the timeout test). 4 pre-existing `test_dashboard_backend` failures unchanged (require Postgres host, not regressions; `git diff main -- gateway/tests/test_dashboard_backend.rs` = 0).

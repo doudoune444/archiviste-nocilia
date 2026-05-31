@@ -21,7 +21,8 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    auth::extractor::AnonIdentity, middleware::WorkersCallDuration, state::AppState, RequestId,
+    auth::extractor::AnonIdentity, auth_metadata::token::TokenError,
+    middleware::WorkersCallDuration, state::AppState, RequestId,
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,29 @@ async fn forward_to_workers(
 ) -> (StatusCode, Option<u16>, Response) {
     let url = format!("{}/v1/generate", state.config.workers_url);
 
+    // SEC-006 AC-6: fetch a Google-signed ID-token before the workers call.
+    // On any failure, return 503 immediately — no fallback, no retry (spec non-goal).
+    let id_token_start = Instant::now();
+    let id_token = match state.workers_id_token_provider.fetch_id_token().await {
+        Ok(t) => t,
+        Err(e) => {
+            let latency_ms = elapsed_ms(id_token_start);
+            let reason_code = classify_id_token_error(&e);
+            tracing::warn!(
+                event = "chat.id_token_failed",
+                request_id,
+                latency_ms,
+                reason_code,
+            );
+            let resp = build_error(
+                request_id,
+                "upstream_unavailable",
+                StatusCode::SERVICE_UNAVAILABLE,
+            );
+            return (StatusCode::SERVICE_UNAVAILABLE, None, resp);
+        }
+    };
+
     // SEC-001 AC-14: propagate resolved identity to workers via outbound headers.
     // Plan line 24: "propager X-User-Tier + X-User-Id au lieu de user_id/user_tier dans le JSON body".
     // Identity is NOT duplicated in the JSON body — headers are the canonical transport.
@@ -174,6 +198,8 @@ async fn forward_to_workers(
         // SEC-001 AC-14: identity propagated via headers only (not JSON body).
         .header("x-user-tier", identity.tier.as_str())
         .header("x-user-id", identity.user_id.to_string())
+        // SEC-006 AC-6: attach Google-signed ID-token for Cloud Run IAM.
+        .bearer_auth(secrecy::ExposeSecret::expose_secret(&id_token))
         .json(&workers_body)
         .send()
         .await;
@@ -332,4 +358,18 @@ fn build_passthrough(request_id: &str, bytes: axum::body::Bytes) -> Response {
 fn elapsed_ms(start: Instant) -> i64 {
     // Latency fits i64 unless elapsed > 292M years; fallback prevents panic on overflow.
     i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+/// Map a `TokenError` from the ID-token fetch to the AC-6 `reason_code`.
+///
+/// Mapping:
+/// - `Fetch` (metadata 4xx/5xx or unparseable body) → `"metadata_token_failed"`
+/// - `Timeout` → `"timeout"`
+/// - `Network` (DNS/TCP/TLS) → `"network"`
+fn classify_id_token_error(err: &TokenError) -> &'static str {
+    match err {
+        TokenError::Fetch => "metadata_token_failed",
+        TokenError::Timeout => "timeout",
+        TokenError::Network => "network",
+    }
 }

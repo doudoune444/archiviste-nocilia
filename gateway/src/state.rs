@@ -11,7 +11,7 @@ use crate::{
         throttle::ThrottleStore,
         user_lookup::{PgUserLookup, UserLookup},
     },
-    auth_metadata::TokenProvider,
+    auth_metadata::{IdTokenProvider, TokenProvider},
     config::Config,
 };
 
@@ -63,6 +63,12 @@ pub struct AppState {
     /// Uses the `sqlservice.admin` scope.  Separate instance from
     /// `gcs_token_provider` — independent cache (AC-2).
     pub sql_token_provider: Arc<TokenProvider>,
+    /// Google-signed ID-token provider for gateway→workers calls (SEC-006 AC-5).
+    ///
+    /// Audience = `config.workers_url` (Cloud Run service URL).  Cached with
+    /// 60-second refresh-ahead semantics — independent cache from the OAuth
+    /// access token providers above.
+    pub workers_id_token_provider: Arc<IdTokenProvider>,
 }
 
 impl AppState {
@@ -83,6 +89,8 @@ impl AppState {
 
         let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
         let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
+        let workers_id_token_provider =
+            Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
 
         Ok(Self {
             config,
@@ -94,6 +102,7 @@ impl AppState {
             session_revoker: None,
             gcs_token_provider,
             sql_token_provider,
+            workers_id_token_provider,
         })
     }
 
@@ -117,6 +126,8 @@ impl AppState {
             .build()?;
 
         let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
+        let workers_id_token_provider =
+            Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
 
         let lookup: Arc<dyn UserLookup> = Arc::new(PgUserLookup(pool.clone()));
         let creator: Arc<dyn SessionCreator> = Arc::new(PgSessionCreator(pool.clone()));
@@ -132,6 +143,7 @@ impl AppState {
             session_revoker: Some(revoker),
             gcs_token_provider,
             sql_token_provider,
+            workers_id_token_provider,
         })
     }
 
@@ -214,6 +226,8 @@ impl AppState {
             .build()?;
 
         let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
+        let workers_id_token_provider =
+            Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
 
         Ok(Self {
             config,
@@ -225,6 +239,43 @@ impl AppState {
             session_revoker: None,
             gcs_token_provider,
             sql_token_provider,
+            workers_id_token_provider,
+        })
+    }
+
+    /// Build state with an injected `IdTokenProvider` for workers ID-token mock injection (SEC-006).
+    ///
+    /// Used by `test_chat_workers_auth.rs` to point the ID-token fetch at a mockito server
+    /// instead of the real Cloud Run metadata server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be constructed.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_with_id_token_provider(
+        config: Config,
+        workers_id_token_provider: Arc<IdTokenProvider>,
+    ) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
+            .timeout(Duration::from_millis(config.request_timeout_ms))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()?;
+
+        let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
+        let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
+
+        Ok(Self {
+            config,
+            http,
+            db_pool: None,
+            throttle: Arc::new(ThrottleStore::new()),
+            user_lookup: None,
+            session_creator: None,
+            session_revoker: None,
+            gcs_token_provider,
+            sql_token_provider,
+            workers_id_token_provider,
         })
     }
 

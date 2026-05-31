@@ -13,7 +13,7 @@
 mod common;
 use common::jwt_helpers::make_test_config;
 
-use archiviste_gateway::{router, state::AppState};
+use archiviste_gateway::{auth_metadata::IdTokenProvider, router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -31,7 +31,8 @@ fn make_state_for_property(workers_url: &str) -> Arc<AppState> {
     config.connect_timeout_ms = 200;
     // 1000 ms gives headroom on loaded CI runners (MEDIUM finding #7).
     config.request_timeout_ms = 1_000;
-    Arc::new(AppState::new(config).unwrap())
+    let id_token_provider = Arc::new(IdTokenProvider::new_stub_always_valid().unwrap());
+    Arc::new(AppState::new_with_id_token_provider(config, id_token_provider).unwrap())
 }
 
 /// Valid error code values per the spec.

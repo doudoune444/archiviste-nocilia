@@ -9,7 +9,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
-use common::jwt_helpers::make_test_config;
+use common::jwt_helpers::make_app_state;
 
 use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn make_state(workers_url: &str) -> Arc<AppState> {
-    Arc::new(AppState::new(make_test_config(workers_url)).unwrap())
+    make_app_state(workers_url)
 }
 
 async fn post_chat(app: axum::Router, body: &str) -> axum::response::Response {

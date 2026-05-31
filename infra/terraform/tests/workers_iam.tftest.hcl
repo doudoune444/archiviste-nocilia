@@ -1,7 +1,7 @@
 # SEC-006 AC-10: Terraform test fixture for the workers_iam_no_public_invoker
 # check block (infra/terraform/checks.tf).
 #
-# Requires Terraform >= 1.6 (already enforced by versions.tf).
+# Requires Terraform >= 1.7 (override_resource feature; enforced by versions.tf).
 # Run: terraform -chdir=infra/terraform test
 #
 # Two cases:
@@ -33,5 +33,10 @@ run "accepts_runtime_sa" {
     values = {
       member = "serviceAccount:archiviste-runtime@my-project.iam.gserviceaccount.com"
     }
+  }
+
+  assert {
+    condition     = google_cloud_run_v2_service_iam_member.workers_runtime_invoker.member == "serviceAccount:archiviste-runtime@my-project.iam.gserviceaccount.com"
+    error_message = "workers_runtime_invoker member must be the archiviste-runtime SA (SEC-006 AC-10)."
   }
 }

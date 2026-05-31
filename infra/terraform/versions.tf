@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.6"
+  # >= 1.7 required: tests/workers_iam.tftest.hcl uses override_resource blocks
+  # which are a Terraform 1.7+ feature.
+  required_version = ">= 1.7"
 
   required_providers {
     google = {

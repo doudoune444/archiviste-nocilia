@@ -116,6 +116,30 @@ pub fn make_test_config(workers_url: &str) -> Config {
 }
 
 // ---------------------------------------------------------------------------
+// AppState factory (SEC-006: injects stub IdTokenProvider so tests don't need
+// a live Cloud Run metadata server)
+// ---------------------------------------------------------------------------
+
+/// Build an `AppState` for tests that exercise the chat forwarding path.
+///
+/// Injects a stub `IdTokenProvider` (pre-seeded cache, no metadata server call)
+/// so that existing tests do not break when SEC-006 wires ID-token fetching into
+/// `forward_to_workers`.  Tests that need to verify the ID-token fetch itself
+/// should use `AppState::new_with_id_token_provider` with a mockito server.
+#[allow(clippy::expect_used)]
+pub fn make_app_state(workers_url: &str) -> std::sync::Arc<archiviste_gateway::state::AppState> {
+    let config = make_test_config(workers_url);
+    let id_token_provider = std::sync::Arc::new(
+        archiviste_gateway::auth_metadata::IdTokenProvider::new_stub_always_valid()
+            .expect("stub IdTokenProvider construction must not fail"),
+    );
+    std::sync::Arc::new(
+        archiviste_gateway::state::AppState::new_with_id_token_provider(config, id_token_provider)
+            .expect("AppState construction must not fail in tests"),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Token signing helpers
 // ---------------------------------------------------------------------------
 

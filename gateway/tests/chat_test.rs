@@ -5,9 +5,9 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
-use common::jwt_helpers::make_test_config;
+use common::jwt_helpers::{make_app_state, make_test_config};
 
-use archiviste_gateway::{router, state::AppState};
+use archiviste_gateway::{auth_metadata::IdTokenProvider, router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -19,8 +19,11 @@ use tower::ServiceExt;
 // ---------------------------------------------------------------------------
 
 /// Build an `AppState` pointing at `workers_url` with tight timeouts for CI.
+///
+/// Uses a stub `IdTokenProvider` (pre-seeded cache) so the test does not need
+/// a live Cloud Run metadata server (SEC-006).
 fn make_state(workers_url: &str) -> Arc<AppState> {
-    Arc::new(AppState::new(make_test_config(workers_url)).unwrap())
+    make_app_state(workers_url)
 }
 
 /// Build a state with a tight `request_timeout_ms` for AC-8 timeout tests.
@@ -32,7 +35,8 @@ fn make_state_with_short_timeout(workers_url: &str) -> Arc<AppState> {
     let mut config = make_test_config(workers_url);
     config.connect_timeout_ms = 50;
     config.request_timeout_ms = 500;
-    Arc::new(AppState::new(config).unwrap())
+    let id_token_provider = Arc::new(IdTokenProvider::new_stub_always_valid().unwrap());
+    Arc::new(AppState::new_with_id_token_provider(config, id_token_provider).unwrap())
 }
 
 async fn post_chat(app: axum::Router, body: &str) -> axum::response::Response {

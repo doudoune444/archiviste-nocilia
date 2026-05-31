@@ -6,9 +6,9 @@
 #![allow(clippy::expect_used)]
 
 mod common;
-use common::jwt_helpers::make_test_config;
+use common::jwt_helpers::{make_app_state, make_test_config};
 
-use archiviste_gateway::{router, state::AppState};
+use archiviste_gateway::{auth_metadata::IdTokenProvider, router, state::AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -20,7 +20,7 @@ use tower::ServiceExt;
 // ---------------------------------------------------------------------------
 
 fn make_state() -> Arc<AppState> {
-    Arc::new(AppState::new(make_test_config("http://127.0.0.1:1")).unwrap())
+    make_app_state("http://127.0.0.1:1")
 }
 
 async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
@@ -325,7 +325,16 @@ async fn ac17_chat_endpoint_has_security_headers() {
         .create_async()
         .await;
 
-    let state = Arc::new(AppState::new(make_test_config(&server.url())).unwrap());
+    let state = {
+        let id_token_provider = Arc::new(IdTokenProvider::new_stub_always_valid().unwrap());
+        Arc::new(
+            AppState::new_with_id_token_provider(
+                make_test_config(&server.url()),
+                id_token_provider,
+            )
+            .unwrap(),
+        )
+    };
     let app = router(state);
 
     let resp = app

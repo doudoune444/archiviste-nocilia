@@ -254,6 +254,50 @@ gcloud iam service-accounts add-iam-policy-binding \
   --member=user:<dev-email>
 ```
 
+## Post-deploy smoke check — workers IAM ingress (SEC-006)
+
+After any `terraform apply` that touches `google_cloud_run_v2_service.workers`
+or its IAM bindings, run these two checks in order.
+
+### Pre-deploy gate (Terraform check block — AC-10)
+
+`terraform plan` enforces that `google_cloud_run_v2_service_iam_member.workers_runtime_invoker`
+is never `allUsers` nor `allAuthenticatedUsers`. A plan that violates this exits
+non-zero before `apply` runs. See `infra/terraform/checks.tf`.
+
+### Post-deploy gate — unauthenticated request MUST return 403
+
+```bash
+curl -sw '%{http_code}\n' -o /dev/null https://<workers-url>/health
+```
+
+Expected output: `403`
+
+Any other response code is an incident:
+
+- `200` — critical IAM regression: workers is publicly accessible without
+  authentication. Immediately inspect `terraform state` and re-verify the
+  `ingress` setting and the `workers_runtime_invoker` IAM binding.
+- `404` / `502` — workers is unreachable or misconfigured (not a security
+  breach, but still requires investigation before declaring the deploy healthy).
+
+### Post-deploy gate — authenticated gateway→workers path MUST return 200
+
+```bash
+curl -H "Authorization: Bearer <user-jwt>" \
+     -X POST https://<gateway-url>/v1/chat \
+     -d '{"query":"ping","conversation_id":"<uuid>"}'
+```
+
+Expected: `200`. A `503` here typically means the gateway ID-token fetch failed
+(check Cloud Run logs for `event=chat.id_token_failed`) or workers is still
+booting.
+
+### Cross-reference
+
+- Pre-deploy: `infra/terraform/checks.tf` `check "workers_iam_no_public_invoker"` (AC-10).
+- Post-deploy: curl `403` above (AC-11).
+
 ## Ingestion lore (ING-001)
 
 Pipeline CLI one-shot : parcourt `lore/`, parse frontmatter YAML, normalise

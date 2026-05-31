@@ -120,7 +120,12 @@ resource "google_cloud_run_v2_service" "gateway" {
 resource "google_cloud_run_v2_service" "workers" {
   name     = "archiviste-workers"
   location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  # SEC-006: IAM (roles/run.invoker) is the trust boundary — not network ingress.
+  # INGRESS_TRAFFIC_ALL lets Cloud Run route gateway→workers calls over the
+  # public endpoint (no VPC connector needed). The Terraform check block in
+  # checks.tf and the post-deploy curl-403 smoke (docs/runbook.md) guard
+  # against any accidental public-invoker binding.
+  ingress = "INGRESS_TRAFFIC_ALL"
 
   # MED-5: same image drift prevention as gateway.
   lifecycle {
@@ -149,6 +154,13 @@ resource "google_cloud_run_v2_service" "workers" {
       name  = "workers"
       image = "${local.ar_base}/workers:latest"
 
+      # Workers Dockerfile CMD listens on 8000 (uvicorn --port 8000). Cloud Run
+      # defaults container_port to 8080 — without this override the TCP startup
+      # probe targets 8080 while uvicorn binds 8000, causing boot failure.
+      ports {
+        container_port = 8000
+      }
+
       resources {
         limits = {
           memory = "512Mi"
@@ -158,6 +170,19 @@ resource "google_cloud_run_v2_service" "workers" {
       env {
         name  = "INSTANCE_CONNECTION_NAME"
         value = google_sql_database_instance.archiviste_db.connection_name
+      }
+
+      # LlmConfig.from_env (workers/src/archiviste_workers/services/llm.py:73)
+      # validates LLM_PROVIDER ∈ {mistral,anthropic,google,openai,deepseek} and
+      # non-empty LLM_MODEL at boot. Defaults mirror .env.example.
+      env {
+        name  = "LLM_PROVIDER"
+        value = "mistral"
+      }
+
+      env {
+        name  = "LLM_MODEL"
+        value = "mistral-small-latest"
       }
 
       env {

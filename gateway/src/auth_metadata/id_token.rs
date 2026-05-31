@@ -164,16 +164,13 @@ impl IdTokenProvider {
 
     /// Fetch a fresh ID-token from the metadata identity endpoint.
     async fn fetch_from_metadata(&self) -> Result<CachedIdToken, TokenError> {
-        let url = format!(
-            "{}{}?audience={}",
-            self.metadata_base_url,
-            METADATA_IDENTITY_PATH,
-            percent_encode_audience(&self.audience),
-        );
-
         let resp = self
             .client
-            .get(&url)
+            .get(format!(
+                "{}{}",
+                self.metadata_base_url, METADATA_IDENTITY_PATH
+            ))
+            .query(&[("audience", &self.audience)])
             .header("Metadata-Flavor", "Google")
             .send()
             .await
@@ -245,33 +242,6 @@ fn decode_exp_from_payload(payload_b64: &str) -> Result<i64, &'static str> {
 /// Conservative fallback expiry when JWT `exp` cannot be parsed (AC-3).
 fn fallback_expires_at() -> DateTime<Utc> {
     Utc::now() + Duration::minutes(FALLBACK_LIFETIME_MINUTES)
-}
-
-/// Percent-encode an audience URL for use as a query-string value.
-///
-/// Encodes all characters that are not unreserved per RFC 3986 §2.3.
-/// This covers the `/`, `:`, `.` characters that appear in HTTPS service URLs
-/// (e.g. `https://archiviste-workers-xxx.run.app`).
-fn percent_encode_audience(audience: &str) -> String {
-    let mut out = String::with_capacity(audience.len() * 3);
-    for b in audience.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(hex_nibble(b >> 4));
-                out.push(hex_nibble(b & 0xF));
-            }
-        }
-    }
-    out
-}
-
-/// Map a nibble value (0..=15) to its uppercase hex ASCII character.
-const fn hex_nibble(n: u8) -> char {
-    b"0123456789ABCDEF"[n as usize] as char
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +397,29 @@ mod tests {
 
         assert!(logs_contain("id_token.exp_parse_failed"));
         assert!(logs_contain("missing_exp"));
+    }
+
+    /// AC-3(f): `exp` present but is a string, not a number → fallback `now+55min`
+    /// + log `reason=exp_not_numeric`.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn exp_fallback_on_exp_not_numeric() {
+        let before = Utc::now();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"sub":"x","exp":"not-a-number"}"#);
+        let jwt = format!("header.{payload}.sig");
+        let result = parse_jwt_exp(&jwt);
+        let after = Utc::now();
+
+        let low = before + Duration::minutes(FALLBACK_LIFETIME_MINUTES);
+        let high = after + Duration::minutes(FALLBACK_LIFETIME_MINUTES);
+        assert!(
+            result >= low && result <= high,
+            "fallback outside expected window"
+        );
+
+        assert!(logs_contain("id_token.exp_parse_failed"));
+        assert!(logs_contain("exp_not_numeric"));
     }
 
     // -----------------------------------------------------------------------

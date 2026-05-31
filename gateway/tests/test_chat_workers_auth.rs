@@ -41,31 +41,6 @@ fn make_jwt_stub(seconds_from_now: i64) -> String {
     format!("{header}.{payload}.stub-sig")
 }
 
-/// Path for the metadata identity endpoint with the test audience.
-fn identity_path(workers_url: &str) -> String {
-    let encoded = percent_encode(workers_url);
-    format!("/computeMetadata/v1/instance/service-accounts/default/identity?audience={encoded}")
-}
-
-/// Percent-encode a URL for use as a query-string value (same logic as production code).
-fn percent_encode(s: &str) -> String {
-    const HEX: [u8; 16] = *b"0123456789ABCDEF";
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(HEX[usize::from(b >> 4)] as char);
-                out.push(HEX[usize::from(b & 0xF)] as char);
-            }
-        }
-    }
-    out
-}
-
 /// Send `POST /v1/chat` to the app and return the response.
 async fn post_chat(app: axum::Router, body: &str) -> axum::response::Response {
     app.oneshot(
@@ -97,13 +72,22 @@ async fn chat_attaches_bearer_id_token() {
     let jwt = make_jwt_stub(3600);
 
     let mut meta_server = mockito::Server::new_async().await;
-    let workers_url_for_audience = meta_server.url(); // used as audience
-
     let mut workers_server = mockito::Server::new_async().await;
 
+    // Production invariant: audience = workers URL.
+    let workers_url_for_audience = workers_server.url();
+
     // Metadata identity mock — returns the JWT stub.
+    // Match on the path only; audience verified via match_query.
     let meta_mock = meta_server
-        .mock("GET", identity_path(&workers_url_for_audience).as_str())
+        .mock(
+            "GET",
+            "/computeMetadata/v1/instance/service-accounts/default/identity",
+        )
+        .match_query(Matcher::UrlEncoded(
+            "audience".into(),
+            workers_url_for_audience.clone(),
+        ))
         .match_header("Metadata-Flavor", "Google")
         .with_status(200)
         .with_header("content-type", "text/plain")
@@ -158,10 +142,19 @@ async fn chat_attaches_bearer_id_token() {
 #[tracing_test::traced_test]
 async fn chat_503_when_metadata_500() {
     let mut meta_server = mockito::Server::new_async().await;
-    let workers_url_for_audience = meta_server.url();
+
+    // Production invariant: audience = workers URL (distinct from metadata URL).
+    let workers_url_for_audience = "http://test-workers-b.invalid".to_string();
 
     let _meta_mock = meta_server
-        .mock("GET", identity_path(&workers_url_for_audience).as_str())
+        .mock(
+            "GET",
+            "/computeMetadata/v1/instance/service-accounts/default/identity",
+        )
+        .match_query(Matcher::UrlEncoded(
+            "audience".into(),
+            workers_url_for_audience.clone(),
+        ))
         .with_status(500)
         .with_body("internal error")
         .create_async()
@@ -260,13 +253,21 @@ async fn chat_cache_hit_single_metadata_fetch() {
     let jwt = make_jwt_stub(3600);
 
     let mut meta_server = mockito::Server::new_async().await;
-    let workers_url_for_audience = meta_server.url();
-
     let mut workers_server = mockito::Server::new_async().await;
+
+    // Production invariant: audience = workers URL.
+    let workers_url_for_audience = workers_server.url();
 
     // Metadata identity: called exactly ONCE (cache-hit on second chat).
     let meta_mock = meta_server
-        .mock("GET", identity_path(&workers_url_for_audience).as_str())
+        .mock(
+            "GET",
+            "/computeMetadata/v1/instance/service-accounts/default/identity",
+        )
+        .match_query(Matcher::UrlEncoded(
+            "audience".into(),
+            workers_url_for_audience.clone(),
+        ))
         .with_status(200)
         .with_body(jwt.clone())
         .expect(1)

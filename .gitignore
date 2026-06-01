@@ -81,6 +81,12 @@ desktop.ini
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+tfplan
+*.tfplan
+
+# Local scratch
+.tmp/
+/body.json
 
 # Logs
 *.log

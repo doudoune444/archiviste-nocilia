@@ -146,12 +146,14 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "query": OFF_TOPIC_QUERY,
         "conversation_id": None,
-        "user_id": USER_ID,
-        "user_tier": "anonymous",
         "request_id": REQUEST_ID,
     }
     base.update(overrides)
     return base
+
+
+def _headers(user_tier: str = "anonymous") -> dict[str, str]:
+    return {"X-User-Id": USER_ID, "X-User-Tier": user_tier}
 
 
 @pytest.mark.asyncio
@@ -161,7 +163,9 @@ async def test_off_topic_response_shape() -> None:
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload(conversation_id=CONVERSATION_ID))
+        r = await client.post(
+            "/v1/generate", json=_payload(conversation_id=CONVERSATION_ID), headers=_headers()
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["mode"] == "off_topic"
@@ -183,7 +187,7 @@ async def test_off_topic_no_retrieve_called() -> None:
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert r.json()["mode"] == "off_topic"
     for http in http_clients:
@@ -197,7 +201,7 @@ async def test_off_topic_retrieve_ms_zero_and_citations_empty() -> None:
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     body = r.json()
     assert body["retrieve_ms"] == 0
     assert body["citations"] == []
@@ -213,7 +217,7 @@ async def test_off_topic_refusal_prompt_contains_off_topic_system_prompt() -> No
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.post("/v1/generate", json=_payload())
+        await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert len(llm.refusal_messages) == 2
     assert str(llm.refusal_messages[0].content) == OFF_TOPIC_SYSTEM_PROMPT
     user_content = str(llm.refusal_messages[1].content)
@@ -233,7 +237,7 @@ async def test_off_topic_usage_aggregated() -> None:
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     usage = r.json()["usage"]
     assert usage["prompt_tokens"] == 400
     assert usage["completion_tokens"] == 82
@@ -252,7 +256,7 @@ async def test_off_topic_conversation_two_messages_posted() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert len(calls) == 2
     assert calls[0]["json"]["role"] == "user"
@@ -271,7 +275,7 @@ async def test_off_topic_conversation_failure_does_not_break_response() -> None:
     transport = ASGITransport(app=app)
     with capture_logs() as logs:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert any(lg.get("event") == "conversation_log_failed" for lg in logs)
     for http in http_clients:
@@ -306,6 +310,7 @@ async def test_off_topic_query_log_row(db_pool: asyncpg.Pool) -> None:
         r = await client.post(
             "/v1/generate",
             json=_payload(request_id=request_id, conversation_id=conversation_id),
+            headers=_headers(),
         )
     assert r.status_code == 200
     async with db_pool.acquire() as conn:
@@ -339,7 +344,9 @@ async def test_off_topic_refusal_timeout_504() -> None:
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload(request_id=request_id))
+        r = await client.post(
+            "/v1/generate", json=_payload(request_id=request_id), headers=_headers()
+        )
     assert r.status_code == 504
     assert r.json() == {"error": "llm_timeout"}
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
@@ -362,7 +369,7 @@ async def test_off_topic_refusal_upstream_502() -> None:
     app, http_clients = _build_app(llm_client=llm, convo_handler=_convo_handler_factory())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 502
     assert r.json() == {"error": "llm_upstream"}
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
@@ -383,7 +390,9 @@ async def test_off_topic_injection_prefix_propagated() -> None:
     transport = ASGITransport(app=app)
     with capture_logs() as logs:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload(query=injection_query))
+            r = await client.post(
+                "/v1/generate", json=_payload(query=injection_query), headers=_headers()
+            )
     assert r.status_code == 200
     assert str(llm.classifier_messages[1].content).startswith("[user query, suspected injection]: ")
     assert str(llm.refusal_messages[1].content).startswith("[user query, suspected injection]: ")
@@ -401,7 +410,7 @@ async def test_off_topic_log_info_contains_intent_and_zero_chunks() -> None:
     transport = ASGITransport(app=app)
     with capture_logs() as logs:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post("/v1/generate", json=_payload())
+            await client.post("/v1/generate", json=_payload(), headers=_headers())
     generate_logs = [lg for lg in logs if lg.get("event") == "generate"]
     assert len(generate_logs) == 1
     lg = generate_logs[0]
@@ -438,6 +447,7 @@ async def test_off_topic_ac2_query_log_intent_field(db_pool: asyncpg.Pool) -> No
         r = await client.post(
             "/v1/generate",
             json=_payload(request_id=request_id, conversation_id=conversation_id),
+            headers=_headers(),
         )
     assert r.status_code == 200
     async with db_pool.acquire() as conn:

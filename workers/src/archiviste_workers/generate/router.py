@@ -63,13 +63,21 @@ def _error_response(status: int, code: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code})
 
 
-def _parse_request(payload: dict[str, Any]) -> GenerateRequest:
-    if (
-        "user_id" in payload
-        and isinstance(payload["user_id"], str)
-        and not is_valid_uuid(payload["user_id"])
-    ):
+_VALID_TIERS = {"anonymous", "members", "author_only"}
+
+
+def _parse_request(payload: dict[str, Any], headers: Any) -> GenerateRequest:
+    raw_user_id = headers.get("x-user-id")
+    if not raw_user_id or not is_valid_uuid(raw_user_id):
         raise _GenerateError(400, "invalid_user_id")
+
+    raw_user_tier = headers.get("x-user-tier")
+    if not raw_user_tier or raw_user_tier not in _VALID_TIERS:
+        raise _GenerateError(422, "invalid_user_tier")
+
+    payload["user_id"] = raw_user_id
+    payload["user_tier"] = raw_user_tier
+
     if "request_id" not in payload or not isinstance(payload.get("request_id"), str):
         raise _GenerateError(400, "invalid_request_id")
     if not is_valid_uuid(payload["request_id"]):
@@ -85,10 +93,6 @@ def _parse_request(payload: dict[str, Any]) -> GenerateRequest:
     except ValidationError as exc:
         for err in exc.errors():
             loc = err.get("loc", ())
-            if loc and loc[0] == "user_tier":
-                raise _GenerateError(422, "invalid_user_tier") from exc
-            if loc and loc[0] == "user_id":
-                raise _GenerateError(400, "invalid_user_id") from exc
             if loc and loc[0] == "request_id":
                 raise _GenerateError(400, "invalid_request_id") from exc
             if loc and loc[0] == "query":
@@ -121,7 +125,7 @@ async def post_generate(
 
 
 async def _handle_generate(request: Request, payload: dict[str, Any]) -> GenerateResponse:
-    parsed = _parse_request(payload)
+    parsed = _parse_request(payload, request.headers)
     conversation_id = parsed.conversation_id or str(uuid.uuid4())
     suspected = detect_injection(parsed.query)
     if suspected:

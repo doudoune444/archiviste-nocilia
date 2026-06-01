@@ -125,12 +125,14 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "query": "Qui est l'Archiviste de Nocilia?",
         "conversation_id": None,
-        "user_id": USER_ID,
-        "user_tier": "anonymous",
         "request_id": REQUEST_ID,
     }
     base.update(overrides)
     return base
+
+
+def _headers(user_tier: str = "anonymous") -> dict[str, str]:
+    return {"X-User-Id": USER_ID, "X-User-Tier": user_tier}
 
 
 @pytest.mark.asyncio
@@ -147,7 +149,9 @@ async def test_nominal_response_shape() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload(conversation_id=CONVERSATION_ID))
+        r = await client.post(
+            "/v1/generate", json=_payload(conversation_id=CONVERSATION_ID), headers=_headers()
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["mode"] == "canon"
@@ -189,6 +193,7 @@ async def test_timings_consistent_with_query_log_latency(db_pool: asyncpg.Pool) 
         r = await client.post(
             "/v1/generate",
             json=_payload(request_id=request_id, conversation_id=conversation_id),
+            headers=_headers(),
         )
     assert r.status_code == 200
     body = r.json()
@@ -216,7 +221,7 @@ async def test_zero_chunks_triggers_lore_gap() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert r.json()["mode"] == "lore_gap"
     assert r.json()["citations"] == []
@@ -242,7 +247,7 @@ async def test_high_score_chunks_canon_with_marker() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert r.json()["mode"] == "canon"
     for http in http_clients:
@@ -260,7 +265,9 @@ async def test_conversation_id_generated_when_null() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload(conversation_id=None))
+        r = await client.post(
+            "/v1/generate", json=_payload(conversation_id=None), headers=_headers()
+        )
     body = r.json()
     assert body["conversation_id"]
     assert len(body["conversation_id"]) == 36
@@ -279,7 +286,7 @@ async def test_retrieve_failure_502_no_query_log_no_llm() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 502
     assert r.json() == {"error": "retrieve_failed"}
     # AC-23: classifier runs (1 call), but no generation LLM call — only 1 total invoke.
@@ -302,7 +309,7 @@ async def test_llm_upstream_4xx_502() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 502
     assert r.json() == {"error": "llm_upstream"}
     app.state.query_log_repo.insert.assert_called_once()
@@ -325,7 +332,7 @@ async def test_llm_upstream_5xx_502() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 502
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
     assert inserted_row.status_code == 502
@@ -346,7 +353,7 @@ async def test_llm_timeout_504() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 504
     assert r.json() == {"error": "llm_timeout"}
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
@@ -375,7 +382,7 @@ async def test_no_citation_log_warn() -> None:
     transport = ASGITransport(app=app)
     with capture_logs() as captured:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert r.json()["citations"] == []
     assert any(log.get("event") == "llm_no_citation" for log in captured)
@@ -395,7 +402,7 @@ async def test_conversation_log_failure_does_not_break_response() -> None:
     transport = ASGITransport(app=app)
     with capture_logs() as captured:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert any(log.get("event") == "conversation_log_failed" for log in captured)
     for http in http_clients:
@@ -429,6 +436,7 @@ async def test_query_log_inserted_on_success(db_pool: asyncpg.Pool) -> None:
         r = await client.post(
             "/v1/generate",
             json=_payload(request_id=request_id, conversation_id=conversation_id),
+            headers=_headers(),
         )
     assert r.status_code == 200
     async with db_pool.acquire() as conn:
@@ -479,6 +487,7 @@ async def test_query_log_intent_in_domain_canon(db_pool: asyncpg.Pool) -> None:
             r = await client.post(
                 "/v1/generate",
                 json=_payload(request_id=request_id, conversation_id=conversation_id),
+                headers=_headers(),
             )
     assert r.status_code == 200
     assert r.json()["mode"] == "canon"

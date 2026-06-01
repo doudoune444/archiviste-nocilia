@@ -30,12 +30,19 @@ async def client() -> Any:
 
 
 def _payload(**overrides: Any) -> dict[str, Any]:
-    base = {
+    base: dict[str, Any] = {
         "query": "Qui est l'Archiviste?",
         "conversation_id": None,
-        "user_id": USER_ID,
-        "user_tier": "anonymous",
         "request_id": REQUEST_ID,
+    }
+    base.update(overrides)
+    return base
+
+
+def _headers(**overrides: Any) -> dict[str, str]:
+    base = {
+        "X-User-Id": USER_ID,
+        "X-User-Tier": "anonymous",
     }
     base.update(overrides)
     return base
@@ -44,7 +51,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_empty_query_400(client: AsyncClient) -> None:
     # AC-17.
-    r = await client.post("/v1/generate", json=_payload(query=""))
+    r = await client.post("/v1/generate", json=_payload(query=""), headers=_headers())
     assert r.status_code == 400
     assert r.json() == {"error": "invalid_query"}
 
@@ -53,17 +60,51 @@ async def test_empty_query_400(client: AsyncClient) -> None:
 async def test_oversize_query_400(client: AsyncClient) -> None:
     # AC-17: > 4 KiB UTF-8.
     big = "a" * (4 * 1024 + 1)
-    r = await client.post("/v1/generate", json=_payload(query=big))
+    r = await client.post("/v1/generate", json=_payload(query=big), headers=_headers())
     assert r.status_code == 400
     assert r.json() == {"error": "invalid_query"}
 
 
 @pytest.mark.asyncio
-async def test_invalid_user_id_400(client: AsyncClient) -> None:
-    # AC-18.
-    r = await client.post("/v1/generate", json=_payload(user_id="not-a-uuid"))
+async def test_missing_x_user_id_400(client: AsyncClient) -> None:
+    # AC-14 / SEC-001: X-User-Id header absent → 400 invalid_user_id.
+    hdrs = _headers()
+    del hdrs["X-User-Id"]
+    r = await client.post("/v1/generate", json=_payload(), headers=hdrs)
     assert r.status_code == 400
     assert r.json() == {"error": "invalid_user_id"}
+
+
+@pytest.mark.asyncio
+async def test_malformed_x_user_id_400(client: AsyncClient) -> None:
+    # AC-14 / SEC-001: non-UUID value in X-User-Id → 400 invalid_user_id.
+    r = await client.post(
+        "/v1/generate", json=_payload(), headers=_headers(**{"X-User-Id": "not-a-uuid"})
+    )
+    assert r.status_code == 400
+    assert r.json() == {"error": "invalid_user_id"}
+
+
+@pytest.mark.asyncio
+async def test_missing_x_user_tier_422(client: AsyncClient) -> None:
+    # AC-14 / SEC-001: X-User-Tier header absent → 422 invalid_user_tier.
+    hdrs = _headers()
+    del hdrs["X-User-Tier"]
+    r = await client.post("/v1/generate", json=_payload(), headers=hdrs)
+    assert r.status_code == 422
+    assert r.json() == {"error": "invalid_user_tier"}
+
+
+@pytest.mark.asyncio
+async def test_invalid_x_user_tier_422(client: AsyncClient) -> None:
+    # AC-14 / SEC-001: unknown tier value in X-User-Tier → 422 invalid_user_tier.
+    r = await client.post(
+        "/v1/generate",
+        json=_payload(),
+        headers=_headers(**{"X-User-Tier": "admin"}),
+    )
+    assert r.status_code == 422
+    assert r.json() == {"error": "invalid_user_tier"}
 
 
 @pytest.mark.asyncio
@@ -71,14 +112,20 @@ async def test_missing_request_id_400(client: AsyncClient) -> None:
     # AC-18, OQ-7.
     payload = _payload()
     del payload["request_id"]
-    r = await client.post("/v1/generate", json=payload)
+    r = await client.post("/v1/generate", json=payload, headers=_headers())
     assert r.status_code == 400
     assert r.json() == {"error": "invalid_request_id"}
 
 
 @pytest.mark.asyncio
-async def test_invalid_user_tier_422(client: AsyncClient) -> None:
-    # AC-19.
-    r = await client.post("/v1/generate", json=_payload(user_tier="admin"))
-    assert r.status_code == 422
-    assert r.json() == {"error": "invalid_user_tier"}
+async def test_header_wins_over_body_identity(client: AsyncClient) -> None:
+    # AC-14: when legacy caller sends user_id/user_tier in body, headers take precedence.
+    # Body carries an invalid user_id; headers carry a valid one — must not 400.
+    body = _payload()
+    body["user_id"] = "not-a-uuid"
+    body["user_tier"] = "bad-tier"
+    r = await client.post("/v1/generate", json=body, headers=_headers())
+    assert r.status_code != 400 or r.json().get("error") not in {
+        "invalid_user_id",
+        "invalid_user_tier",
+    }

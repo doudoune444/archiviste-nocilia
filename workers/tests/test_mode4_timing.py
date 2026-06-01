@@ -101,14 +101,16 @@ def _build_app(chunks: list[dict[str, Any]]) -> tuple[FastAPI, list[httpx.AsyncC
     return app, [retrieve_http, convo_http]
 
 
-def _payload(user_tier: str, request_id: str) -> dict[str, Any]:
+def _payload(request_id: str) -> dict[str, Any]:
     return {
         "query": "Qui garde les archives?",
         "conversation_id": None,
-        "user_id": USER_ID,
-        "user_tier": user_tier,
         "request_id": request_id,
     }
+
+
+def _headers(user_tier: str = "anonymous") -> dict[str, str]:
+    return {"X-User-Id": USER_ID, "X-User-Tier": user_tier}
 
 
 def _p95(samples: list[float]) -> float:
@@ -132,7 +134,7 @@ async def test_mystery_timing_constant() -> None:
         for _ in range(_SAMPLE_COUNT):
             req_id = str(uuid.uuid4())
             t0 = time.perf_counter()
-            r = await cc.post("/v1/generate", json=_payload("anonymous", req_id))
+            r = await cc.post("/v1/generate", json=_payload(req_id), headers=_headers())
             elapsed_ms = (time.perf_counter() - t0) * 1000
             assert r.status_code == 200
             assert r.json()["mode"] == "canon"
@@ -142,7 +144,7 @@ async def test_mystery_timing_constant() -> None:
         for _ in range(_SAMPLE_COUNT):
             req_id = str(uuid.uuid4())
             t0 = time.perf_counter()
-            r = await mc.post("/v1/generate", json=_payload("anonymous", req_id))
+            r = await mc.post("/v1/generate", json=_payload(req_id), headers=_headers())
             elapsed_ms = (time.perf_counter() - t0) * 1000
             assert r.status_code == 200
             assert r.json()["mode"] == "mystery"

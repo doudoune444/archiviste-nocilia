@@ -153,12 +153,14 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "query": LORE_GAP_QUERY,
         "conversation_id": None,
-        "user_id": USER_ID,
-        "user_tier": "anonymous",
         "request_id": str(uuid.uuid4()),
     }
     base.update(overrides)
     return base
+
+
+def _headers(user_tier: str = "anonymous") -> dict[str, str]:
+    return {"X-User-Id": USER_ID, "X-User-Tier": user_tier}
 
 
 @pytest.mark.asyncio
@@ -181,7 +183,9 @@ async def test_lore_gap_response_shape() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload(request_id=request_id))
+        r = await client.post(
+            "/v1/generate", json=_payload(request_id=request_id), headers=_headers()
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["mode"] == "lore_gap"
@@ -207,7 +211,7 @@ async def test_lore_gap_threshold_boundary() -> None:
         )
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
         assert r.status_code == 200
         assert r.json()["mode"] == expected_mode, f"score={max_score} expected {expected_mode}"
         for http in http_clients:
@@ -244,7 +248,7 @@ async def test_lore_gap_no_canon_llm_called() -> None:
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
 
     assert r.status_code == 200
     assert r.json()["mode"] == "lore_gap"
@@ -272,7 +276,7 @@ async def test_lore_gap_usage_aggregated() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     usage = r.json()["usage"]
     assert usage["prompt_tokens"] == 300
@@ -293,7 +297,7 @@ async def test_lore_gap_two_conversation_posts() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert len(captured_calls) == 2
     assert captured_calls[0]["json"]["role"] == "user"
@@ -327,7 +331,7 @@ async def test_lore_gap_conversation_fail_skips_ticket() -> None:
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
 
     assert r.status_code == 200
     assert any(lg.get("event") == "conversation_log_failed" for lg in logs)
@@ -366,6 +370,7 @@ async def test_lore_gap_query_log_inserted(db_pool: asyncpg.Pool) -> None:
         r = await client.post(
             "/v1/generate",
             json=_payload(request_id=request_id, conversation_id=conversation_id),
+            headers=_headers(),
         )
     assert r.status_code == 200
     async with db_pool.acquire() as conn:
@@ -400,7 +405,9 @@ async def test_lore_gap_injection_prefix_propagated_question_raw() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload(query=injection_query))
+        r = await client.post(
+            "/v1/generate", json=_payload(query=injection_query), headers=_headers()
+        )
     assert r.status_code == 200
     assert r.json()["mode"] == "lore_gap"
     # The lore_gap LLM should have received the injection-prefixed query.
@@ -423,7 +430,7 @@ async def test_lore_gap_llm_timeout_504() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 504
     assert r.json() == {"error": "llm_timeout"}
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
@@ -448,7 +455,7 @@ async def test_lore_gap_llm_upstream_502() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 502
     assert r.json() == {"error": "llm_upstream"}
     inserted_row = app.state.query_log_repo.insert.call_args.args[0]
@@ -482,7 +489,7 @@ async def test_lore_gap_embedder_fail_still_200() -> None:
     with capture_logs() as logs:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
 
     assert r.status_code == 200
     assert r.json()["mode"] == "lore_gap"
@@ -515,7 +522,7 @@ async def test_lore_gap_db_fail_still_200() -> None:
     with capture_logs() as logs:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
 
     assert r.status_code == 200
     assert r.json()["mode"] == "lore_gap"
@@ -540,7 +547,7 @@ async def test_lore_gap_log_info_fields() -> None:
     with capture_logs() as logs:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
 
     assert r.status_code == 200
     generate_logs = [lg for lg in logs if lg.get("event") == "generate"]
@@ -601,7 +608,7 @@ async def test_lore_gap_high_score_stays_canon() -> None:
     with patch.object(prompt_module, "build_lore_gap_messages", side_effect=_spy_lore_gap):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post("/v1/generate", json=_payload())
+            r = await client.post("/v1/generate", json=_payload(), headers=_headers())
 
     assert r.status_code == 200
     body = r.json()
@@ -622,7 +629,7 @@ async def test_lore_gap_zero_chunks_triggers_lore_gap() -> None:
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/generate", json=_payload())
+        r = await client.post("/v1/generate", json=_payload(), headers=_headers())
     assert r.status_code == 200
     assert r.json()["mode"] == "lore_gap"
     for http in http_clients:

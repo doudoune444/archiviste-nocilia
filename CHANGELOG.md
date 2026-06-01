@@ -9,6 +9,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **FIX-SEC-001**: workers `POST /v1/generate` now reads identity from `X-User-Id` + `X-User-Tier` headers (gateway-side contract per SEC-001 AC-14); drops body-side extraction that caused 400 `invalid_user_id` on every request post-SEC-006. Headers win over any legacy body fields; both UUID validation and tier enum check enforced with the same error codes. Closes prod 502 on `POST /v1/chat`.
+
 - **INFRA-002 PR-f**: split `DATABASE_URL` per service in `infra/terraform/cloud_run.tf`. Gateway (Rust/sqlx) now receives `postgres://<sa>@localhost/archiviste?host=/cloudsql/<INSTANCE>` (plain `postgres://` scheme + `localhost` placeholder host); the `?host=` query param overrides to the Cloud SQL Auth Proxy Unix socket. Workers (Python/asyncpg) keep `postgresql+asyncpg://...@/archiviste?host=...` unchanged. Root cause: the pre-PR-f shared URL was Python/SQLAlchemy-only — sqlx rejected the empty host with `error with configuration: empty host` (revealed by PR-e finally unblocking gateway boot past the JWT env stage). Unblocks AC-14.
 
 - **INFRA-002 PR-e**: provision JWT Ed25519 keypair (both keys via Secret Manager) + GCS signing placeholder env vars on archiviste-gateway Cloud Run (unblocks gateway boot, AC-14).

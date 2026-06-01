@@ -59,6 +59,21 @@ paths:
   /v1/generate:
     post:
       summary: Generate an answer from a query and retrieved contexts
+      parameters:
+        - name: X-User-Id
+          in: header
+          required: true
+          description: Caller user_id (anonymous UUIDv5 or member/author UUID). Gateway-set per SEC-001 AC-14.
+          schema:
+            type: string
+            format: uuid
+        - name: X-User-Tier
+          in: header
+          required: true
+          description: Caller tier. Gateway-set per SEC-001 AC-14.
+          schema:
+            type: string
+            enum: [anonymous, members, author_only]
       requestBody:
         required: true
         content:

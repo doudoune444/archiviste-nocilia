@@ -106,7 +106,7 @@ jobs:
             ${{ secrets.GCP_PROJECT_ID }}:${{ env.REGION }}:archiviste-db &
           PROXY_PID=$!
           # wait until the proxy accepts connections (timeout ~30s)
-          for i in $(seq 1 30); do pg_isready -h 127.0.0.1 -p 5432 && break; sleep 1; done
+          for _ in $(seq 1 30); do pg_isready -h 127.0.0.1 -p 5432 && break; sleep 1; done
           export DATABASE_URL="postgresql://archiviste-runtime%40${{ secrets.GCP_PROJECT_ID }}.iam@127.0.0.1:5432/archiviste?sslmode=disable"
           MIGRATIONS_DIR=./migrations bash migrations/run.sh
           STATUS=$?

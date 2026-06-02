@@ -20,6 +20,21 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-06-02 — OPS-003 — Prod 502: migrations never applied + CLOUD_SQL_IAM_AUTH env drift
+
+- File : `.github/workflows/deploy.yml` (no migrate step) + `infra/terraform/cloud_run.tf:180` (`CLOUD_SQL_IAM_AUTH=true`)
+- Symptom : Production `POST /v1/chat` returns 502 after SEC-006 went live. Two concurrent root causes:
+  1. `workers` canary booted with `CLOUD_SQL_IAM_AUTH` missing from live env (Cloud Run env drift vs Terraform declaration at `cloud_run.tf:180`) — asyncpg `password=None` boot crash; crashed revision had `--no-traffic` so it was never smoke-probed; gateway smoke tested the live workers (not the canary), passed, promote completed with a broken workers revision.
+  2. Prod Cloud SQL had zero applied migrations (`schema_version` table absent, no `chunks`/`documents` tables) — `deploy.yml` had no migration step; `migrations/run.sh` only ran in local CI against the docker-compose postgres.
+- Why blocked : The combination of canary deploy with `--no-traffic` (Cloud Run startup probe runs but smoke goes to live traffic path) and missing DB probe (`/readyz`) meant a DB-failing canary could be promoted silently. `deploy.yml` lacked a migration step entirely — no ticket had ever wired `run.sh` against prod Cloud SQL.
+- Manual hotfix applied 2026-06-02 :
+  1. `gcloud run services update archiviste-workers --update-env-vars CLOUD_SQL_IAM_AUTH=true` to fix the env drift on the live revision.
+  2. `gcloud run services update-traffic archiviste-workers --to-revisions=LATEST=100` to restore traffic to a working revision.
+  3. Ran cloud-sql-proxy + `migrations/run.sh` manually against prod Cloud SQL as `archiviste-runtime` SA to apply all pending migrations.
+  4. Connected as `postgres` (cloudsqlsuperuser), ran `GRANT USAGE, CREATE ON SCHEMA public TO "archiviste-runtime@flamme-496014.iam"` and `CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS vector;`.
+- Suggested resolution : OPS-003 — (a) add `/readyz` DB probe to workers + Cloud Run `startup_probe`; (b) add migrate step in `deploy.yml` after canary deploy, before promote; (c) extend rollback `if:` to cover migrate/canary_ready failures; (d) grant `gha-deploy` `tokenCreator` on runtime SA so CI can impersonate it for migrations.
+- Status : resolved by OPS-003 (this branch)
+
 ## 2026-05-29 — SEC-004 — `sec004_network_error_logs_network` asserts `network` but Windows returns `timeout`
 
 - File : `gateway/tests/test_signed_url.rs:676`

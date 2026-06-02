@@ -7,7 +7,13 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OPS-003**: workers `/readyz` DB-aware readiness probe — `GET /readyz` acquires a pool connection and runs `SELECT 1` under a 2 s timeout; returns `{"status":"ok"}` 200 on success, `{"status":"degraded"}` 503 on any DB error or timeout. `/healthz` stays shallow (liveness only). Cloud Run `startup_probe` on `/readyz:8000` added to workers Terraform (`failure_threshold=20`, `period_seconds=10` — 200 s budget for cold transformers import). `terraform/iam.tf` grants `gha-deploy` `roles/iam.serviceAccountTokenCreator` on `archiviste_runtime` SA so CI migrate step can impersonate it.
+
 ### Fixed
+
+- **OPS-003**: `deploy.yml` now runs `migrations/run.sh` against prod Cloud SQL after both canary deploys and before promote. Cloud SQL Auth Proxy v2 with `--impersonate-service-account --auto-iam-authn` authenticates as `archiviste-runtime` SA. Migrate failure → rollback, never promote broken schema. Added `canary_ready` step asserting both canary revisions reach `Ready=True` (via `gcloud run revisions describe --format=json | jq`) before smoke + promote. Rollback `if:` conditions extended to also fire on `migrate` or `canary_ready` failure. Closes the 2026-06-02 prod 502 incident (root causes: migrations never applied + CLOUD_SQL_IAM_AUTH env drift).
 
 - **FIX-SEC-001**: workers `POST /v1/generate` now reads identity from `X-User-Id` + `X-User-Tier` headers (gateway-side contract per SEC-001 AC-14); drops body-side extraction that caused 400 `invalid_user_id` on every request post-SEC-006. Headers win over any legacy body fields; both UUID validation and tier enum check enforced with the same error codes. Closes prod 502 on `POST /v1/chat`.
 

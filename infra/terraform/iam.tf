@@ -67,3 +67,12 @@ resource "google_service_account_iam_member" "runtime_token_creator_self" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.archiviste_runtime.email}"
 }
+
+# OPS-003: CI migrate step impersonates runtime SA which owns the schema.
+# gha-deploy needs serviceAccountTokenCreator on runtime SA to obtain short-lived
+# credentials for cloud-sql-proxy --impersonate-service-account --auto-iam-authn.
+resource "google_service_account_iam_member" "gha_deploy_token_creator_on_runtime" {
+  service_account_id = google_service_account.archiviste_runtime.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.gha_deploy.email}"
+}

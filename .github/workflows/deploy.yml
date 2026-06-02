@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   deploy:
-    name: build → push → canary → smoke → promote
+    name: build → push → canary → migrate → smoke → promote
     runs-on: ubuntu-latest
     env:
       REGION: europe-west9
@@ -87,6 +87,47 @@ jobs:
             --region=${{ env.REGION }} \
             --format='value(status.latestCreatedRevisionName)')" >> "$GITHUB_OUTPUT"
 
+      # OPS-003: apply pending migrations to Cloud SQL via cloud-sql-proxy v2.
+      # Runs after both canary revisions are deployed (schema ready before traffic),
+      # before promote (migration failure → rollback, never promote broken schema).
+      # gha-deploy impersonates runtime SA (tokenCreator grant in iam.tf) so the proxy
+      # authenticates as archiviste-runtime which owns the schema (roles/cloudsql.instanceUser).
+      # DB username = SA email with ".gserviceaccount.com" stripped, "@" → "%40" (RFC 3986).
+      - name: apply migrations to Cloud SQL (impersonate runtime SA)
+        id: migrate
+        run: |
+          # install cloud-sql-proxy v2
+          curl -fsSL -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.0/cloud-sql-proxy.linux.amd64
+          chmod +x cloud-sql-proxy
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          ./cloud-sql-proxy --auto-iam-authn \
+            --impersonate-service-account=archiviste-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --port 5432 \
+            ${{ secrets.GCP_PROJECT_ID }}:${{ env.REGION }}:archiviste-db &
+          PROXY_PID=$!
+          # wait until the proxy accepts connections (timeout ~30s)
+          for _ in $(seq 1 30); do pg_isready -h 127.0.0.1 -p 5432 && break; sleep 1; done
+          export DATABASE_URL="postgresql://archiviste-runtime%40${{ secrets.GCP_PROJECT_ID }}.iam@127.0.0.1:5432/archiviste?sslmode=disable"
+          MIGRATIONS_DIR=./migrations bash migrations/run.sh
+          STATUS=$?
+          kill $PROXY_PID || true
+          exit $STATUS
+
+      # OPS-003: assert both canary revisions reached Ready=True before promote.
+      # Uses gcloud JSON output + jq for robust condition parsing (avoids fragile
+      # --format filter expression). Fail here → rollback, never promote broken revision.
+      - name: assert canary revisions are Ready
+        id: canary_ready
+        run: |
+          for pair in "${{ env.GATEWAY_SERVICE }}=${{ steps.deploy_gateway.outputs.revision }}" "${{ env.WORKERS_SERVICE }}=${{ steps.deploy_workers.outputs.revision }}"; do
+            svc="${pair%%=*}"; rev="${pair##*=}"
+            ready=$(gcloud run revisions describe "$rev" --region="${{ env.REGION }}" \
+              --format=json \
+              | jq -r '.status.conditions[]? | select(.type=="Ready") | .status')
+            echo "$svc revision $rev Ready=$ready"
+            [ "$ready" = "True" ] || { echo "::error::$svc canary $rev not Ready (status=$ready)"; exit 1; }
+          done
+
       # AC-12 step 4: smoke test via canary revision URL (bypasses Cloudflare DNS race).
       # MUST parse JSON .status — gateway /healthz returns HTTP 200 even when workers is
       # degraded (cf gateway/src/handlers/health.rs); HTTP 2xx alone is not sufficient.
@@ -118,11 +159,11 @@ jobs:
             --region ${{ env.REGION }} \
             --quiet
 
-      # AC-12 step 6: rollback on smoke failure.
+      # AC-12 step 6: rollback on smoke failure OR migrate/canary_ready failure.
       # Resolves the N-1 revision dynamically — gcloud has no "PREVIOUS" sentinel.
       # Spec line 38/71: dynamic resolution via revisions list + exit 1 mandatory.
       - name: rollback gateway on smoke failure
-        if: failure() && steps.smoke.conclusion == 'failure'
+        if: failure() && (steps.smoke.conclusion == 'failure' || steps.migrate.conclusion == 'failure' || steps.canary_ready.conclusion == 'failure')
         run: |
           PREVIOUS=$(gcloud run revisions list \
             --service=${{ env.GATEWAY_SERVICE }} \
@@ -138,7 +179,7 @@ jobs:
           exit 1
 
       - name: rollback workers on smoke failure
-        if: failure() && steps.smoke.conclusion == 'failure'
+        if: failure() && (steps.smoke.conclusion == 'failure' || steps.migrate.conclusion == 'failure' || steps.canary_ready.conclusion == 'failure')
         run: |
           PREVIOUS=$(gcloud run revisions list \
             --service=${{ env.WORKERS_SERVICE }} \

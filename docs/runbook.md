@@ -167,6 +167,64 @@ cat boot-metrics.json
 Note Windows : `make`, `bash` et les scripts POSIX supposent Git Bash, WSL,
 ou un shell équivalent.
 
+## Cloud SQL schema bootstrap & migrations (OPS-003)
+
+### One-time superuser bootstrap (manual, run once per DB instance)
+
+This step is **not** in any migration file — it requires `cloudsqlsuperuser`
+privileges. Run once after `terraform apply` creates the Cloud SQL instance,
+before the first `deploy.yml` run.
+
+```bash
+# 1. Reset the postgres user password so you can connect interactively.
+gcloud sql users set-password postgres \
+  --instance=archiviste-db \
+  --password=<strong-random-password>
+
+# 2. Open a psql session via cloud-sql-proxy.
+./cloud-sql-proxy --port 5432 <PROJECT_ID>:europe-west9:archiviste-db &
+psql "postgresql://postgres:<password>@127.0.0.1:5432/archiviste"
+
+# 3. Grant the runtime SA schema usage + create, and install extensions.
+GRANT USAGE, CREATE ON SCHEMA public TO "archiviste-runtime@<project>.iam";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
+\q
+```
+
+These grants let the runtime SA (which owns all migration SQL) create tables
+and types. Extensions require superuser and are intentionally one-shot.
+
+### Ongoing migrations — automated in deploy.yml
+
+After both canary revisions deploy, `deploy.yml` step `migrate` runs
+`migrations/run.sh` via `cloud-sql-proxy v2 --auto-iam-authn
+--impersonate-service-account=archiviste-runtime@<project>.iam.gserviceaccount.com`.
+The runner is idempotent: rows already in `schema_version` are skipped.
+Migration failure exits non-zero → rollback step fires, promote never runs.
+
+### Running migrations manually via cloud-sql-proxy
+
+```bash
+# Download cloud-sql-proxy v2 (Linux).
+curl -fsSL -o cloud-sql-proxy \
+  https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.0/cloud-sql-proxy.linux.amd64
+chmod +x cloud-sql-proxy
+
+# Start proxy — impersonate runtime SA (requires tokenCreator grant, iam.tf).
+./cloud-sql-proxy --auto-iam-authn \
+  --impersonate-service-account=archiviste-runtime@<project>.iam.gserviceaccount.com \
+  --port 5432 \
+  <project>:europe-west9:archiviste-db &
+
+# Wait for proxy to be ready.
+for i in $(seq 1 30); do pg_isready -h 127.0.0.1 -p 5432 && break; sleep 1; done
+
+# Run migrations (username = SA email with .gserviceaccount.com stripped, @ → %40).
+export DATABASE_URL="postgresql://archiviste-runtime%40<project>.iam@127.0.0.1:5432/archiviste?sslmode=disable"
+MIGRATIONS_DIR=./migrations bash migrations/run.sh
+```
+
 ## §8 — Cloud SQL IAM authentication (SEC-005)
 
 SEC-005 remplace l'hypothèse INFRA-002 PR-f « le proxy Cloud Run v2 injecte le

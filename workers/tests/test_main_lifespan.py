@@ -136,6 +136,61 @@ async def test_lifespan_fake_provider_sets_fake_embedder(
         pytest.skip(f"postgres unavailable: {exc}")
 
 
+def _set_boot_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    if "DATABASE_URL" not in os.environ:
+        monkeypatch.setenv(
+            "DATABASE_URL",
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste",
+        )
+    monkeypatch.setenv(
+        "GCS_EMULATOR_HOST", os.environ.get("GCS_EMULATOR_HOST", "http://127.0.0.1:1")
+    )
+    monkeypatch.setenv("LLM_PROVIDER", os.environ.get("LLM_PROVIDER", "mistral"))
+    monkeypatch.setenv("LLM_MODEL", os.environ.get("LLM_MODEL", "mistral-small-latest"))
+    monkeypatch.setenv("LLM_API_KEY", os.environ.get("LLM_API_KEY", "test-key-not-used"))
+
+
+@pytest.mark.asyncio
+async def test_lifespan_skips_token_provider_when_iam_auth_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SEC-005 boot regression: with CLOUD_SQL_IAM_AUTH unset (default false), lifespan
+    must NOT build a SqlTokenProvider. Off-GCP that provider would query the unreachable
+    metadata server at first connection and crash boot (Boot SLA exit 3). Password auth
+    from DATABASE_URL is used instead, so app.state.sql_token_provider is None.
+    """
+    monkeypatch.delenv("CLOUD_SQL_IAM_AUTH", raising=False)
+    _set_boot_env(monkeypatch)
+
+    app = FastAPI()
+    try:
+        async with lifespan(app):
+            assert app.state.sql_token_provider is None
+    except (OSError, ConnectionError) as exc:
+        pytest.skip(f"postgres unavailable: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_lifespan_uses_token_provider_when_iam_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SEC-005: CLOUD_SQL_IAM_AUTH=true (Cloud Run) re-enables the IAM token provider.
+
+    The autouse `_mock_sql_token_provider_in_main` fixture patches SqlTokenProvider +
+    create_pool so docker Postgres (password auth) still connects, so we only assert
+    the provider was wired (not None).
+    """
+    monkeypatch.setenv("CLOUD_SQL_IAM_AUTH", "true")
+    _set_boot_env(monkeypatch)
+
+    app = FastAPI()
+    try:
+        async with lifespan(app):
+            assert app.state.sql_token_provider is not None
+    except (OSError, ConnectionError) as exc:
+        pytest.skip(f"postgres unavailable: {exc}")
+
+
 @pytest.mark.asyncio
 async def test_lifespan_invalid_provider_raises_value_error(
     monkeypatch: pytest.MonkeyPatch,

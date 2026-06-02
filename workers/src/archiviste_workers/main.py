@@ -52,10 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     app.state.settings = settings
 
-    # SEC-005: fetch IAM token at boot (fail-fast); pass provider so each new
-    # physical connection receives a fresh token (asyncpg password= callable, OQ-2).
+    # SEC-005: on Cloud Run, fetch IAM token at boot (fail-fast); pass provider so
+    # each new physical connection receives a fresh token (asyncpg password= callable,
+    # OQ-2). Off-GCP (local/docker-compose/CI) the metadata server is unreachable, so
+    # cloud_sql_iam_auth defaults false → password auth from DATABASE_URL, no provider.
     # RET-001: create_pool registers pgvector codec on every connection.
-    sql_token_provider = SqlTokenProvider()
+    sql_token_provider = SqlTokenProvider() if settings.cloud_sql_iam_auth else None
     try:
         pool = await create_pool(settings.database_url, token_provider=sql_token_provider)
     except (TokenFetchError, asyncpg.PostgresError, OSError, TimeoutError) as exc:
@@ -98,7 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await http_client.aclose()
         await pool.close()
-        await sql_token_provider.aclose()
+        if sql_token_provider is not None:
+            await sql_token_provider.aclose()
         logger.info("workers.shutdown")
 
 

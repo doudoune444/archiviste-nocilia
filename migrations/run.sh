@@ -2,7 +2,11 @@
 # Migration runner -- applies versioned SQL files in /migrations missing from schema_version.
 #
 # Contract (FOUND-002):
-#   - File names match ^[0-9]{4}_[a-z0-9_]+\.sql$, version = first 4 digits.
+#   - File names match ^[0-9]{4}_[a-z0-9_]+(\.up)?\.sql$, version = first 4 digits.
+#     sqlx-style reversible migrations (`<v>_<slug>.up.sql` / `.down.sql`) are
+#     supported: the `.up.sql` half is applied forward; the `.down.sql` rollback
+#     half is ignored by this forward-only runner (matches `#[sqlx::test]`, which
+#     reads the same dir). A plain `<v>_<slug>.sql` is equivalent to an up-only file.
 #   - Each file applied in its own transaction (BEGIN ... COMMIT) followed by
 #     INSERT INTO schema_version(version, description) inside the same tx.
 #   - Already-applied versions are skipped with a structured log line.
@@ -13,7 +17,8 @@
 set -euo pipefail
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/migrations}"
-NAME_RE='^[0-9]{4}_[a-z0-9_]+\.sql$'
+NAME_RE='^[0-9]{4}_[a-z0-9_]+(\.up)?\.sql$'
+DOWN_RE='^[0-9]{4}_[a-z0-9_]+\.down\.sql$'
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL required" >&2
@@ -36,6 +41,9 @@ declare -a files=()
 shopt -s nullglob
 for path in "$MIGRATIONS_DIR"/*.sql; do
   name=$(basename "$path")
+  if [[ "$name" =~ $DOWN_RE ]]; then
+    continue
+  fi
   if [[ ! "$name" =~ $NAME_RE ]]; then
     echo "invalid migration filename: $name" >&2
     exit 3
@@ -78,6 +86,7 @@ for path in "${files[@]}"; do
     description="${BASH_REMATCH[1]}"
   else
     description="${name%.sql}"
+    description="${description%.up}"
     description="${description#????_}"
     description="${description//_/ }"
   fi

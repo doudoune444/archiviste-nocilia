@@ -172,6 +172,15 @@ resource "google_cloud_run_v2_service" "workers" {
         value = google_sql_database_instance.archiviste_db.connection_name
       }
 
+      # SEC-005: DATABASE_URL below carries an empty password and relies on a
+      # Cloud SQL IAM access token fetched from the metadata server. The workers
+      # pool only enables that token provider when CLOUD_SQL_IAM_AUTH=true; off-GCP
+      # (local/docker-compose/CI) it defaults false to use password auth instead.
+      env {
+        name  = "CLOUD_SQL_IAM_AUTH"
+        value = "true"
+      }
+
       # LlmConfig.from_env (workers/src/archiviste_workers/services/llm.py:73)
       # validates LLM_PROVIDER ∈ {mistral,anthropic,google,openai,deepseek} and
       # non-empty LLM_MODEL at boot. Defaults mirror .env.example.

@@ -224,6 +224,23 @@ resource "google_cloud_run_v2_service" "workers" {
         name       = "cloudsql"
         mount_path = "/cloudsql"
       }
+
+      # OPS-003: startup_probe on /readyz gives transformers import + asyncpg pool init
+      # enough time to complete before Cloud Run marks the revision unready.
+      # 512Mi + transformers cold import can take >30s on first boot.
+      # failure_threshold * period_seconds = 20 * 10 = 200s budget (generous for cold boot).
+      # liveness_probe is intentionally absent: /healthz is shallow; a DB blip must not
+      # restart-loop the revision (DB loss = degraded, not crash).
+      startup_probe {
+        http_get {
+          path = "/readyz"
+          port = 8000
+        }
+        initial_delay_seconds = 10
+        timeout_seconds       = 5
+        period_seconds        = 10
+        failure_threshold     = 20
+      }
     }
   }
 }

@@ -31,6 +31,11 @@ jobs:
       - name: configure docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
+      # buildx with docker-container driver — required for cache-to type=gha
+      # (default docker driver rejects "Cache export is not supported").
+      - name: set up buildx
+        uses: docker/setup-buildx-action@v3
+
       # AC-12 step 1-2: build and push images tagged with git SHA.
       - name: build and push gateway
         uses: docker/build-push-action@v6

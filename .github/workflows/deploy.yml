@@ -145,7 +145,24 @@ jobs:
             | jq -r '.status.traffic[]? | select(.tag=="canary") | .url')
           echo "Smoke URL: ${CANARY_URL}"
           [ -n "${CANARY_URL}" ] || { echo "::error::canary tag URL not found on ${{ env.GATEWAY_SERVICE }}"; exit 1; }
-          curl -sf --max-time 30 "${CANARY_URL}/healthz" | jq -e '.status == "ok"'
+
+          # Retry with backoff: the freshly-minted canary tag URL needs a few seconds to
+          # route, and the no-traffic revision cold-starts on first hit (gateway boot +
+          # internal workers call). Capture HTTP code + body explicitly — no `-f`, so a
+          # non-2xx surfaces its status instead of collapsing to an opaque empty-body exit.
+          for attempt in $(seq 1 6); do
+            HTTP_CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' \
+              --max-time 30 "${CANARY_URL}/healthz" || echo "000")
+            echo "Attempt ${attempt}/6: HTTP ${HTTP_CODE}"
+            if [ "${HTTP_CODE}" = "200" ] && jq -e '.status == "ok"' /tmp/healthz.json; then
+              echo "Smoke passed."
+              exit 0
+            fi
+            echo "Body: $(cat /tmp/healthz.json 2>/dev/null)"
+            sleep 10
+          done
+          echo "::error::canary smoke failed after 6 attempts (last HTTP=${HTTP_CODE})"
+          exit 1
 
       # AC-12 step 5: promote 100% on smoke success.
       - name: promote gateway to 100%

@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     env: str = "local"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste"
 
+    # SEC-005: when true, the asyncpg pool authenticates with a Cloud SQL IAM
+    # access token fetched from the GCP metadata server (Cloud Run). Default false
+    # so local/docker-compose/CI boot with password auth never hits the metadata
+    # server (unreachable off-GCP → boot crash). Cloud Run sets this true via Terraform.
+    cloud_sql_iam_auth: bool = False
+
     # GCS_BUCKET is required (fail-fast at boot per AC-12, no default).
     gcs_bucket: str = Field(...)
     # When set, GCS client targets the emulator (fake-gcs-server). Unset in prod -> ADC.

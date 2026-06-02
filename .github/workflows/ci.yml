@@ -111,8 +111,60 @@ jobs:
       - name: mypy
         run: uv run mypy src/
 
-      - name: pytest
-        run: uv run pytest --cov --cov-report=xml
+      - name: pytest (unit)
+        # `-m "not integration"` keeps this job DB-free. Tests using the db_pool
+        # fixture self-skip when Postgres is unreachable; integration-marked tests
+        # (Postgres / GCS emulator / live embedder) run in workers-integration and
+        # the eval/contract jobs. Coverage is gated by codecov, not threshold here.
+        run: uv run pytest -m "not integration" --cov --cov-report=xml
+
+  workers-integration:
+    name: workers integration (sql pool + lifespan)
+    runs-on: ubuntu-latest
+    # SEC-005 AC-12: the test_sql_pool.py cases (a)-(d) MUST run against the
+    # docker-compose Postgres service in CI — no conditional skip. test_main_lifespan
+    # exercises the boot pool (pgvector codec + IAM-token gating) on the same service.
+    # Both need only the `vector` extension (no seed corpus / live API), so this job
+    # stays deterministic and offline. Same image/creds as the gateway + contract jobs.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: archiviste
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: workers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install uv
+        run: pip install uv
+
+      - name: sync deps
+        run: uv sync --all-extras
+
+      - name: provision pgvector extension
+        # create_pool registers the pgvector codec on every connection (RET-001),
+        # which introspects `public.vector` — the extension must exist first.
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d archiviste -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: pytest (Postgres integration)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/archiviste
+        run: uv run pytest tests/test_sql_pool.py tests/test_main_lifespan.py
 
   contract:
     name: contract (schemathesis)

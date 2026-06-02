@@ -95,6 +95,37 @@ fn member_token() -> String {
     sign_test_token(Uuid::new_v4(), UserTier::Member, Uuid::new_v4())
 }
 
+/// Author JWT backed by real `users` + `sessions` rows.
+///
+/// DB-backed tests build state with a live pool, which activates the AC-13
+/// server-side session check in `RequireAuthor` (the extractor skips it when
+/// `db_pool` is `None`). That check rejects a JWT whose `sid` has no `sessions`
+/// row (401 `session_revoked`), so the token must be paired with a seeded
+/// session. Returns a token whose `sub`/`sid` match the inserted rows.
+async fn author_token_with_session(pool: &sqlx::PgPool) -> String {
+    let user_id = Uuid::new_v4();
+    let sid = Uuid::new_v4();
+    // users_auth_consistency CHECK: a non-anonymous tier requires email + password_hash.
+    sqlx::query(
+        "INSERT INTO users (id, tier, email, password_hash) VALUES ($1, 'author', $2, 'x')",
+    )
+    .bind(user_id)
+    .bind(format!("{user_id}@test.local"))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sessions (id, user_id, token_hash, expires_at) \
+         VALUES ($1, $2, 'x', NOW() + interval '1 hour')",
+    )
+    .bind(sid)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sign_test_token(user_id, UserTier::Author, sid)
+}
+
 async fn get_with_token(
     app: axum::Router,
     uri: &str,
@@ -406,8 +437,8 @@ async fn ac5_tickets_list_order_and_total(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
+    let token = author_token_with_session(&pool).await;
     let app = router(make_state_with_pool(pool));
-    let token = author_token();
     let resp = get_with_token(app, "/v1/tickets", Some(&token)).await;
 
     assert_eq!(resp.status(), StatusCode::OK);
@@ -446,8 +477,8 @@ async fn ac5_tickets_list_order_and_total(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "../migrations")]
 async fn ac5_empty_db_returns_empty_list(pool: sqlx::PgPool) {
     // AC-5 / AC-17: DB has no open tickets → items=[], total=0
+    let token = author_token_with_session(&pool).await;
     let app = router(make_state_with_pool(pool));
-    let token = author_token();
     let resp = get_with_token(app, "/v1/tickets", Some(&token)).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
@@ -555,8 +586,8 @@ async fn ac8_ac9_signed_url_200_shape_and_ttl(pool: sqlx::PgPool) {
     // This test therefore validates: auth check + DB lookup + 503 from signBlob
     // (unreachable in unit test env). Shape test deferred to test_signed_url.rs.
     // The AC-9(a) nominal shape is covered by sec004_nominal_returns_v4_url there.
+    let token = author_token_with_session(&pool).await;
     let app = router(make_state_with_pool_and_iam(pool, token_provider));
-    let token = author_token();
     let before = chrono::Utc::now();
     let resp = get_with_token(
         app,
@@ -605,8 +636,8 @@ async fn ac8_ac9_signed_url_200_shape_and_ttl(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "../migrations")]
 async fn ac10_nonexistent_conversation_returns_404(pool: sqlx::PgPool) {
     // AC-10 (a): UUID valid but not in DB → 404 conversation_not_found
+    let token = author_token_with_session(&pool).await;
     let app = router(make_state_with_pool(pool));
-    let token = author_token();
     let nonexistent_id = Uuid::new_v4();
     let resp = get_with_token(
         app,

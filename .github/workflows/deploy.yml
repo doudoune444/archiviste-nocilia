@@ -136,10 +136,15 @@ jobs:
       - name: smoke test canary gateway
         id: smoke
         run: |
-          CANARY_URL=$(gcloud run revisions describe ${{ steps.deploy_gateway.outputs.revision }} \
+          # Canary URL is the tag-routed URL on the service (status.traffic[].url where
+          # tag==canary). Revisions expose no status.url — querying it returns empty,
+          # which silently breaks the smoke curl. Resolve via service JSON + jq.
+          CANARY_URL=$(gcloud run services describe ${{ env.GATEWAY_SERVICE }} \
             --region=${{ env.REGION }} \
-            --format='value(status.url)')
+            --format=json \
+            | jq -r '.status.traffic[]? | select(.tag=="canary") | .url')
           echo "Smoke URL: ${CANARY_URL}"
+          [ -n "${CANARY_URL}" ] || { echo "::error::canary tag URL not found on ${{ env.GATEWAY_SERVICE }}"; exit 1; }
           curl -sf --max-time 30 "${CANARY_URL}/healthz" | jq -e '.status == "ok"'
 
       # AC-12 step 5: promote 100% on smoke success.

@@ -68,6 +68,11 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: test
+        # #[sqlx::test] in test_dashboard_backend.rs reads DATABASE_URL at runtime to
+        # create per-test ephemeral databases. Postgres service creds = postgres/postgres,
+        # db archiviste (same as the contract job).
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/archiviste
         run: cargo test --all
 
       - name: build release

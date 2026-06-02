@@ -9,11 +9,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import asyncpg
+import structlog
 
 from archiviste_workers.retrieve.schemas import (
     SQL_TIMEOUT_SECONDS,
     RetrievedChunk,
 )
+
+_logger = structlog.get_logger()
 
 _SEARCH_SQL = """
 SELECT c.id::text         AS chunk_id,
@@ -56,6 +59,11 @@ async def search(
         OSError,
         TimeoutError,
     ) as exc:
+        _logger.error(
+            "search.db_unavailable",
+            exc_type=type(exc).__name__,
+            exc_repr=repr(exc),
+        )
         raise DatabaseUnavailableError from exc
     return [
         RetrievedChunk(

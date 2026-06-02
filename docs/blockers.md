@@ -146,3 +146,11 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
   - (b) Migrate region to europe-west1 — supports mappings, but requires destroying Cloud SQL (data loss risk in future even if V1 empty) and full state churn.
   - (c) Global LB + Serverless NEG — +€18/mo, more Terraform surface area.
 - Status : resolved by PR (fix/INFRA-002-drop-domain-mapping)
+
+## 2026-06-01 — SEC-001 / SEC-006 post-deploy — workers reject all `/v1/generate` calls with 400 `invalid_user_id`
+
+- File : `workers/src/archiviste_workers/generate/models.py:28-29` (Pydantic `GenerateRequest` requires `user_id` + `user_tier` in body) vs `gateway/src/handlers/chat.rs:184-188` (body omits both — comment cites SEC-001 "headers are canonical transport").
+- Symptom : Production `POST /v1/chat` returns `502 upstream_error` after ~27s. Cloud Run httpRequest log shows workers responded `400` on `/v1/generate`. Gateway logs show no `chat.id_token_failed` (ID-token signing works). Authentication via SEC-006 IAM + Bearer works end-to-end. Workers reach `_parse_request`, Pydantic `model_validate` raises `ValidationError` on missing `user_id`, mapped to `_GenerateError(400, "invalid_user_id")`.
+- Why blocked : SEC-001 AC-14 shipped gateway-side identity propagation via `X-User-Tier` + `X-User-Id` headers and removed identity from the JSON body, but no complementary workers-side change ever consumed those headers. `grep -r x-user-id workers/` returns 0 hits. The bug was dormant while workers ingress was `INGRESS_TRAFFIC_INTERNAL_ONLY` (no real traffic could reach workers from gateway end-to-end pre-SEC-006). SEC-006 flipped ingress to ALL + added ID-token signing, exposing the broken contract on first live call.
+- Resolution : PR #93 (`fix(workers): FIX-SEC-001 consume X-User-Id/X-User-Tier headers in generate route`) — workers `/v1/generate` reads identity from headers, server-side validation added.
+- Status : resolved by PR #93.

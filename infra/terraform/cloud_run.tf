@@ -232,6 +232,21 @@ resource "google_cloud_run_v2_service" "workers" {
         }
       }
 
+      # The embedder (main.py build_embedder → Embedder()) builds langchain_mistralai
+      # without an explicit key, so the client reads the MISTRAL_API_KEY env var by name.
+      # LLM_API_KEY (above) only feeds the generation LLM; without this, query embedding
+      # in /v1/retrieve fails with `Illegal header value b'Bearer '` (empty token) → 502.
+      # Same secret, two env names, by design (cf settings.py: shared Mistral key).
+      env {
+        name = "MISTRAL_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.mistral_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
       volume_mounts {
         name       = "cloudsql"
         mount_path = "/cloudsql"

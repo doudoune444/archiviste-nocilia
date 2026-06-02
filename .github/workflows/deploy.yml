@@ -38,7 +38,7 @@ jobs:
 
       # AC-12 step 1-2: build and push images tagged with git SHA.
       - name: build and push gateway
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: gateway
           file: infra/docker/gateway.Dockerfile
@@ -48,7 +48,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: build and push workers
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: workers
           file: infra/docker/workers.Dockerfile

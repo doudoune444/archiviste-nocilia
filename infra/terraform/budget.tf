@@ -1,3 +1,8 @@
+# Resolves the numeric project number (billing API canonical form) from var.project_id.
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
 # MED-1 / AC-9: email notification channel wired to var.budget_email.
 # Without this resource the budget alert only reaches billing account admins (not the operator).
 resource "google_monitoring_notification_channel" "budget_owner_email" {
@@ -16,7 +21,10 @@ resource "google_billing_budget" "archiviste_beta_monthly" {
   display_name    = "archiviste-beta-monthly"
 
   budget_filter {
-    projects = ["projects/${var.project_id}"]
+    # The billing API canonicalises projects to the numeric project NUMBER. Sending
+    # the project ID string causes perpetual plan drift (id → number); resolve the
+    # number so config matches what the API returns.
+    projects = ["projects/${data.google_project.current.number}"]
   }
 
   amount {

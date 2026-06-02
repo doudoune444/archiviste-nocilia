@@ -21,6 +21,9 @@ resource "google_cloud_run_v2_service" "gateway" {
 
     scaling {
       min_instance_count = 0
+      # Cost guard for the €50/mo beta budget: cap fan-out at 20 (Cloud Run default
+      # is 100). Matches live config; without it apply would lift the cap to 100.
+      max_instance_count = 20
     }
 
     annotations = {
@@ -40,8 +43,11 @@ resource "google_cloud_run_v2_service" "gateway" {
 
       resources {
         # Cloud Run v2 with cloud_sql_instance volume forces CPU always-allocated,
-        # which requires memory ≥ 512Mi (Cloud Run hard constraint, not a policy choice).
+        # which requires memory ≥ 512Mi AND an integer CPU ≥ 1 (Cloud Run hard
+        # constraint, not a policy choice). Pin cpu explicitly so apply does not drop
+        # it from limits and fight the always-allocated requirement.
         limits = {
+          cpu    = "1000m"
           memory = "512Mi"
         }
       }
@@ -137,6 +143,9 @@ resource "google_cloud_run_v2_service" "workers" {
 
     scaling {
       min_instance_count = 0
+      # Cost guard for the €50/mo beta budget: cap fan-out at 20 (Cloud Run default
+      # is 100). Matches live config; without it apply would lift the cap to 100.
+      max_instance_count = 20
     }
 
     annotations = {
@@ -162,7 +171,10 @@ resource "google_cloud_run_v2_service" "workers" {
       }
 
       resources {
+        # Same always-allocated CPU constraint as gateway (cloud_sql volume): pin cpu
+        # so apply does not drop it from limits. See gateway resources block above.
         limits = {
+          cpu    = "1000m"
           memory = "512Mi"
         }
       }

@@ -447,6 +447,14 @@ GitHub Actions tourne rouge si l'exécution du Job n'atteint pas l'état
 fatal). Consulter `ingest.summary` dans Cloud Logging (filtrer par execution
 ID du Job) pour le détail.
 
+Le Job ne contient pas le corpus : l'image workers n'embarque que le paquet
+(`src/`). Au démarrage, le Job fait un `git clone --depth 1` du repo public sur
+`main` dans `/srv/repo`, puis lance l'ingesteur depuis ce checkout (le CLI exige
+un `.git/` pour résoudre la racine repo et calculer `source_path`, cf
+`cli.py:find_repo_root`). Le Job ingère donc l'état `main` au moment de son
+exécution — en cas de pushes `lore/**` rapprochés, `concurrency: ingest-lore`
+sérialise et le dernier clone reflète le `main` le plus récent.
+
 **Comportement de l'ingesteur (ING-001)** :
 - `inserted` : nouveau `source_path`, INSERT documents + chunks.
 - `skipped` (`reason: unchanged`) : `content_hash` identique → aucune écriture.

@@ -6,8 +6,10 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
   name     = "archiviste-ingest"
   location = var.region
 
-  # MED-5: GHA deploy.yml overrides image with :<git_sha> on each release — ignore drift so
-  # terraform plan stays clean after every ingest-lore run that does not change the image.
+  # Image pinned to workers:latest, which deploy.yml retags to current main on every push
+  # (deploy.yml "build and push workers"). The Job pulls the moved tag on its next execution;
+  # the terraform string never changes. ignore_changes guards against any out-of-band digest
+  # pin so plan stays clean.
   lifecycle {
     ignore_changes = [template[0].template[0].containers[0].image]
   }
@@ -38,10 +40,20 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
         name  = "ingest"
         image = "${local.ar_base}/workers:latest"
 
-        # AC-2: ingest entrypoint — full scan of lore/ directory.
-        # Exit 0 → all files ingested (Succeeded). Exit 1 → ≥1 file error (Failed).
-        # Exit 2 → init fatal (Failed). Maps to AC-7 via Cloud Run execution state.
-        command = ["python", "-m", "archiviste_workers.ingest", "--path", "lore/"]
+        # AC-2 + ING-001 contract: the ingest CLI requires a git checkout — find_repo_root walks
+        # up for `.git/` and source_path is stored relative to that root (cli.py:58-73). The
+        # workers image ships only the installed package (src/), NOT the lore/ corpus, so the Job
+        # shallow-clones the public repo at runtime and runs the image's venv interpreter from
+        # inside the checkout (cwd=/srv/repo) so find_repo_root resolves and --path lore/ exists.
+        # Bare `python` would miss the uv venv (ModuleNotFoundError); /app/.venv/bin/python is the
+        # interpreter `uv sync` provisions (same env the workers service runs via `uv run`).
+        # SECURITY A03/A10: fixed trusted URL (repo's own public main), no user input in the shell;
+        # anonymous HTTPS clone, no credentials. `set -e` + `exec` preserve the ING-001 exit code
+        # (0 Succeeded / 1 file errors or clone failure / 2 init fatal → AC-7 execution-state map).
+        command = ["sh", "-c"]
+        args = [
+          "set -e; git clone --depth 1 https://github.com/${var.github_repo}.git /srv/repo && cd /srv/repo && exec /app/.venv/bin/python -m archiviste_workers.ingest --path lore/",
+        ]
 
         resources {
           # Cloud SQL volume forces CPU always-allocated — pin cpu so apply does not drop it

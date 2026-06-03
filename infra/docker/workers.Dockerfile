@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# git: the ingest Cloud Run Job (OPS-005) shallow-clones the repo at runtime to obtain the
+# lore/ corpus + .git root the ingest CLI requires (not baked into the image). curl: healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app

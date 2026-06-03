@@ -13,6 +13,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **INFRA-004**: `archiviste.nocilia.fr` now reaches the gateway. The proxied CNAME forwarded the original `Host: archiviste.nocilia.fr` to Cloud Run, whose GFE routes by Host header and only recognizes the `*.run.app` hostname → generic Google 404 on every path before traffic reached the container (`INGRESS_TRAFFIC_ALL` is irrelevant to this routing layer). Fix: added `cloudflare_ruleset.archiviste_fr_host_override` (`http_request_origin` phase, `route` action) rewriting the origin-request Host to the run.app hostname. Corrected the misleading comment in `cloudflare.tf` that claimed Cloud Run accepts the forwarded Host.
+
 - **OPS-003**: `deploy.yml` now runs `migrations/run.sh` against prod Cloud SQL after both canary deploys and before promote. Cloud SQL Auth Proxy v2 with `--impersonate-service-account --auto-iam-authn` authenticates as `archiviste-runtime` SA. Migrate failure → rollback, never promote broken schema. Added `canary_ready` step asserting both canary revisions reach `Ready=True` (via `gcloud run revisions describe --format=json | jq`) before smoke + promote. Rollback `if:` conditions extended to also fire on `migrate` or `canary_ready` failure. Closes the 2026-06-02 prod 502 incident (root causes: migrations never applied + CLOUD_SQL_IAM_AUTH env drift).
 
 - **FIX-SEC-001**: workers `POST /v1/generate` now reads identity from `X-User-Id` + `X-User-Tier` headers (gateway-side contract per SEC-001 AC-14); drops body-side extraction that caused 400 `invalid_user_id` on every request post-SEC-006. Headers win over any legacy body fields; both UUID validation and tier enum check enforced with the same error codes. Closes prod 502 on `POST /v1/chat`.

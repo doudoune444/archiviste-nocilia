@@ -34,8 +34,11 @@ data "cloudflare_zone" "nocilia_net" {
 #  - CNAME archiviste.nocilia.fr → <gateway>.run.app (the actual Cloud Run hostname)
 #  - Cloudflare proxied (orange cloud) terminates TLS at edge with its own cert
 #  - Origin connection: CF → Cloud Run over HTTPS, SNI = *.run.app (Google cert)
-#  - Cloud Run service uses INGRESS_TRAFFIC_ALL, accepts client Host header forwarded
-#    by CF (gateway app does not strictly validate Host).
+#  - Cloud Run's frontend (GFE) routes by Host header. It only recognizes the
+#    *.run.app hostname; an unknown Host (e.g. archiviste.nocilia.fr) returns a
+#    generic Google 404 BEFORE traffic reaches the container — INGRESS_TRAFFIC_ALL
+#    does not change this. CF must therefore rewrite the Host header to the run.app
+#    hostname on the origin request (cloudflare_ruleset http_request_origin below).
 # This is the documented Cloud Run + Cloudflare integration pattern when domain
 # mappings are unavailable. No GLB / Serverless NEG cost overhead.
 resource "cloudflare_record" "archiviste_fr" {
@@ -45,6 +48,28 @@ resource "cloudflare_record" "archiviste_fr" {
   # Strip "https://" scheme from gateway.uri to get bare hostname for CNAME content.
   content = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
   proxied = true
+}
+
+# Host header override: rewrite the origin-request Host to the *.run.app hostname
+# so Cloud Run's GFE routes the request to the gateway service instead of 404-ing
+# on the unknown archiviste.nocilia.fr Host. Without this the proxied CNAME above
+# reaches Cloud Run but every path returns the generic Google 404.
+resource "cloudflare_ruleset" "archiviste_fr_host_override" {
+  zone_id     = data.cloudflare_zone.nocilia_fr.id
+  name        = "Override Host to Cloud Run gateway origin"
+  description = "Rewrite Host to *.run.app so Cloud Run GFE routes to the gateway"
+  kind        = "zone"
+  phase       = "http_request_origin"
+
+  rules {
+    action = "route"
+    action_parameters {
+      host_header = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
+    }
+    expression  = "(http.host eq \"archiviste.nocilia.fr\")"
+    description = "Host override for archiviste.nocilia.fr → Cloud Run gateway"
+    enabled     = true
+  }
 }
 
 # AC-8: TLS Full Strict + Security Level medium + Challenge TTL + Brotli + HTTPS upgrade.

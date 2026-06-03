@@ -13,6 +13,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **OPS-004**: gateway `/health` + `/healthz` aggregate now authenticates its workers probe with a Google-signed ID token (audience=WORKERS_URL) via `workers_id_token_provider.fetch_id_token()` + `Authorization: Bearer`, exactly like the chat path. The probe previously called workers unauthenticated → workers (internal ingress + `run.invoker`) returned 401/403 → aggregate stuck on `{"status":"degraded"}`, failing the Deploy canary smoke gate (`.status == "ok"`) and triggering rollback. Token-fetch failure degrades (HTTP 200 + `"degraded"`, never 500). Closes the canary-smoke rollback loop.
+
 - **OPS-003**: `deploy.yml` now runs `migrations/run.sh` against prod Cloud SQL after both canary deploys and before promote. Cloud SQL Auth Proxy v2 with `--impersonate-service-account --auto-iam-authn` authenticates as `archiviste-runtime` SA. Migrate failure → rollback, never promote broken schema. Added `canary_ready` step asserting both canary revisions reach `Ready=True` (via `gcloud run revisions describe --format=json | jq`) before smoke + promote. Rollback `if:` conditions extended to also fire on `migrate` or `canary_ready` failure. Closes the 2026-06-02 prod 502 incident (root causes: migrations never applied + CLOUD_SQL_IAM_AUTH env drift).
 
 - **FIX-SEC-001**: workers `POST /v1/generate` now reads identity from `X-User-Id` + `X-User-Tier` headers (gateway-side contract per SEC-001 AC-14); drops body-side extraction that caused 400 `invalid_user_id` on every request post-SEC-006. Headers win over any legacy body fields; both UUID validation and tier enum check enforced with the same error codes. Closes prod 502 on `POST /v1/chat`.

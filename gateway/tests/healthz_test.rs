@@ -39,3 +39,31 @@ async fn healthz_returns_degraded_when_workers_unreachable() {
     assert_eq!(body["status"], "degraded");
     assert_eq!(body["version"], "0.1.0");
 }
+
+/// `/health` aliases `/healthz` (same handler). The alias exists because Cloud Run's
+/// public frontend reserves the literal `/healthz` path and 404s it before the
+/// container sees it; the Deploy smoke test probes `/health`.
+#[tokio::test]
+async fn health_alias_matches_healthz() {
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.request_timeout_ms = 1_000;
+    let state = Arc::new(AppState::new(config).unwrap());
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["status"], "degraded");
+    assert_eq!(body["version"], "0.1.0");
+}

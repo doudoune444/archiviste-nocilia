@@ -129,10 +129,12 @@ jobs:
           done
 
       # AC-12 step 4: smoke test via canary revision URL (bypasses Cloudflare DNS race).
-      # MUST parse JSON .status — gateway /healthz returns HTTP 200 even when workers is
+      # MUST parse JSON .status — gateway /health returns HTTP 200 even when workers is
       # degraded (cf gateway/src/handlers/health.rs); HTTP 2xx alone is not sufficient.
-      # Workers ingress=internal: not directly curl-able from GHA runner — gateway /healthz
+      # Workers ingress=internal: not directly curl-able from GHA runner — gateway /health
       # exercises workers reachability via internal service call, covering both services.
+      # Probe /health, not /healthz: Cloud Run's public frontend reserves the literal
+      # /healthz path and 404s it before it reaches the container. /health is an alias.
       - name: smoke test canary gateway
         id: smoke
         run: |
@@ -151,14 +153,14 @@ jobs:
           # internal workers call). Capture HTTP code + body explicitly — no `-f`, so a
           # non-2xx surfaces its status instead of collapsing to an opaque empty-body exit.
           for attempt in $(seq 1 6); do
-            HTTP_CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' \
-              --max-time 30 "${CANARY_URL}/healthz" || echo "000")
+            HTTP_CODE=$(curl -s -o /tmp/health.json -w '%{http_code}' \
+              --max-time 30 "${CANARY_URL}/health" || echo "000")
             echo "Attempt ${attempt}/6: HTTP ${HTTP_CODE}"
-            if [ "${HTTP_CODE}" = "200" ] && jq -e '.status == "ok"' /tmp/healthz.json; then
+            if [ "${HTTP_CODE}" = "200" ] && jq -e '.status == "ok"' /tmp/health.json; then
               echo "Smoke passed."
               exit 0
             fi
-            echo "Body: $(cat /tmp/healthz.json 2>/dev/null)"
+            echo "Body: $(cat /tmp/health.json 2>/dev/null)"
             sleep 10
           done
           echo "::error::canary smoke failed after 6 attempts (last HTTP=${HTTP_CODE})"

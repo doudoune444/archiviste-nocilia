@@ -547,6 +547,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Root router: merge API + static, then apply global security headers (AC-6).
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
+        // `/health` aliases `/healthz`: Cloud Run's public frontend reserves the
+        // literal `/healthz` path and 404s it before it reaches the container, so
+        // the Deploy smoke test probes `/health`. Same handler for both.
+        .route("/health", get(handlers::health::healthz))
         .merge(chat_router)
         .merge(auth_router)
         .merge(public_api)

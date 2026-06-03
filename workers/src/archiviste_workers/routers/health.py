@@ -24,7 +24,11 @@ class Health(BaseModel):
     version: str
 
 
+# `/health` aliases `/healthz`: Cloud Run's public frontend reserves the literal
+# `/healthz` path and 404s it before it reaches the container, so the gateway's
+# internal liveness probe targets `/health` instead. Both paths share one handler.
 @router.get("/healthz", response_model=Health)
+@router.get("/health", response_model=Health)
 async def healthz() -> Health:
     """Liveness probe — always returns ok. No DB dependency."""
     return Health(status="ok", version=__version__)

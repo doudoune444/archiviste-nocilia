@@ -40,20 +40,17 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
         name  = "ingest"
         image = "${local.ar_base}/workers:latest"
 
-        # AC-2 + ING-001 contract: the ingest CLI requires a git checkout — find_repo_root walks
-        # up for `.git/` and source_path is stored relative to that root (cli.py:58-73). The
-        # workers image ships only the installed package (src/), NOT the lore/ corpus, so the Job
-        # shallow-clones the public repo at runtime and runs the image's venv interpreter from
-        # inside the checkout (cwd=/srv/repo) so find_repo_root resolves and --path lore/ exists.
-        # Bare `python` would miss the uv venv (ModuleNotFoundError); /app/.venv/bin/python is the
-        # interpreter `uv sync` provisions (same env the workers service runs via `uv run`).
-        # SECURITY A03/A10: fixed trusted URL (repo's own public main), no user input in the shell;
-        # anonymous HTTPS clone, no credentials. `set -e` + `exec` preserve the ING-001 exit code
-        # (0 Succeeded / 1 file errors or clone failure / 2 init fatal → AC-7 execution-state map).
-        command = ["sh", "-c"]
-        args = [
-          "set -e; git clone --depth 1 https://github.com/${var.github_repo}.git /srv/repo && cd /srv/repo && exec /app/.venv/bin/python -m archiviste_workers.ingest --path lore/",
-        ]
+        # Defect A fix: run the uv venv interpreter, not the system `python`. The package is
+        # installed in /app/.venv (the workers service activates it via `uv run`); bare `python`
+        # raises ModuleNotFoundError: No module named 'archiviste_workers'.
+        #
+        # NOT YET FUNCTIONAL — corpus channel deferred to OPS-006. The ingest CLI requires a
+        # `.git/` root (find_repo_root, cli.py:58-73) AND the lore/ corpus physically present
+        # under that root; the workers image ships only src/, never the corpus (kept out of the
+        # public repo by .gitignore `/lore/*`). OPS-006 wires the private channel: a `git init`
+        # ephemeral root + `gcloud storage rsync gs://archiviste-lore-corpus lore/` before this
+        # command. Until then this Job exits 2 (find_repo_root: no .git/ above /app) — expected.
+        command = ["/app/.venv/bin/python", "-m", "archiviste_workers.ingest", "--path", "lore/"]
 
         resources {
           # Cloud SQL volume forces CPU always-allocated — pin cpu so apply does not drop it

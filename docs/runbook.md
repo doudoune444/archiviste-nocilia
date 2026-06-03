@@ -448,12 +448,13 @@ fatal). Consulter `ingest.summary` dans Cloud Logging (filtrer par execution
 ID du Job) pour le détail.
 
 Le Job ne contient pas le corpus : l'image workers n'embarque que le paquet
-(`src/`). Au démarrage, le Job fait un `git clone --depth 1` du repo public sur
-`main` dans `/srv/repo`, puis lance l'ingesteur depuis ce checkout (le CLI exige
-un `.git/` pour résoudre la racine repo et calculer `source_path`, cf
-`cli.py:find_repo_root`). Le Job ingère donc l'état `main` au moment de son
-exécution — en cas de pushes `lore/**` rapprochés, `concurrency: ingest-lore`
-sérialise et le dernier clone reflète le `main` le plus récent.
+(`src/`), et le corpus `lore/` est volontairement hors du repo public
+(`.gitignore` `/lore/*` — spoilers narratifs). Le CLI d'ingestion exige par
+ailleurs un `.git/` pour résoudre la racine repo et calculer `source_path` (cf
+`cli.py:find_repo_root`). **Le canal corpus privé est livré par OPS-006** : `git
+init` éphémère + `gcloud storage rsync gs://archiviste-lore-corpus lore/` avant
+l'ingesteur. Tant qu'OPS-006 n'est pas mergé, le Job sort en code 2
+(`find_repo_root`: pas de `.git/` au-dessus de `/app`) — attendu.
 
 **Comportement de l'ingesteur (ING-001)** :
 - `inserted` : nouveau `source_path`, INSERT documents + chunks.

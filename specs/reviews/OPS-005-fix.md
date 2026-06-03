@@ -1,7 +1,16 @@
 # Review — OPS-005-fix (branch `fix/OPS-005-job-clone-repo`, commit `98abe8e`)
 
+> **Scope trimmed after this review (2026-06-03).** Defect B's resolution (Job
+> `git clone` of the public repo) was rejected: the public clone contains only
+> `lore/sample/*.md`, never the real corpus (`.gitignore` `/lore/*`). The clone
+> command, the `git` Dockerfile line, and the clone runbook paragraph were
+> reverted; B is split into **OPS-006** (private GCS bucket + `git init` + rsync,
+> `workflow_run` trigger). This PR now ships only A (venv), C (`:latest`), D (IAM
+> token). The APPROVE below covered A/B/C/D incl. the clone — **the trimmed diff
+> needs a fresh `/review` before ship.**
+
 ## Verdict
-APPROVE
+APPROVE (stale — see scope note above; re-review required)
 
 Re-review of commit `98abe8e` (defect D). The prior HIGH — ingest CLI never wired
 Cloud SQL IAM token auth, so the Job would fail DB auth (exit 2) even after A/B/C —

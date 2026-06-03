@@ -31,19 +31,37 @@ pub struct HealthResponse {
 pub async fn healthz(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<HealthResponse>, StatusCode> {
+    Ok(Json(HealthResponse {
+        status: probe_workers(&state).await,
+        version: state.config.version.clone(),
+    }))
+}
+
+/// Probe the workers `/health` endpoint and return the aggregate status string.
+///
+/// The workers Cloud Run service requires an IAM-signed ID token (internal
+/// ingress + `run.invoker`), so the probe must authenticate exactly like the
+/// chat path (`forward_to_workers`): fetch a Google-signed ID token and attach
+/// it as `Authorization: Bearer`. An unauthenticated probe gets 401/403 and
+/// always degrades.
+///
+/// Stays infallible: any failure — token fetch or workers call — maps to
+/// `"degraded"`, never an error. The caller always returns HTTP 200.
+async fn probe_workers(state: &AppState) -> &'static str {
+    let Ok(id_token) = state.workers_id_token_provider.fetch_id_token().await else {
+        tracing::warn!(event = "health.id_token_failed");
+        return "degraded";
+    };
+
     let workers_health = state
         .http
         .get(format!("{}/health", state.config.workers_url))
+        .bearer_auth(secrecy::ExposeSecret::expose_secret(&id_token))
         .send()
         .await;
 
-    let status = match workers_health {
+    match workers_health {
         Ok(r) if r.status().is_success() => "ok",
         _ => "degraded",
-    };
-
-    Ok(Json(HealthResponse {
-        status,
-        version: state.config.version.clone(),
-    }))
+    }
 }

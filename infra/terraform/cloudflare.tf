@@ -34,8 +34,12 @@ data "cloudflare_zone" "nocilia_net" {
 #  - CNAME archiviste.nocilia.fr → <gateway>.run.app (the actual Cloud Run hostname)
 #  - Cloudflare proxied (orange cloud) terminates TLS at edge with its own cert
 #  - Origin connection: CF → Cloud Run over HTTPS, SNI = *.run.app (Google cert)
-#  - Cloud Run service uses INGRESS_TRAFFIC_ALL, accepts client Host header forwarded
-#    by CF (gateway app does not strictly validate Host).
+#  - Cloud Run service uses INGRESS_TRAFFIC_ALL. Its public frontend routes by Host
+#    header and has NO domain mapping for archiviste.nocilia.fr (mappings unavailable
+#    in europe-west9), so a forwarded visitor Host of archiviste.nocilia.fr 404s at
+#    the frontend before reaching the gateway. The Origin Rule below rewrites the
+#    Host sent to origin to the <gateway>.run.app hostname so the frontend routes
+#    the request to the gateway service.
 # This is the documented Cloud Run + Cloudflare integration pattern when domain
 # mappings are unavailable. No GLB / Serverless NEG cost overhead.
 resource "cloudflare_record" "archiviste_fr" {
@@ -45,6 +49,29 @@ resource "cloudflare_record" "archiviste_fr" {
   # Strip "https://" scheme from gateway.uri to get bare hostname for CNAME content.
   content = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
   proxied = true
+}
+
+# Origin Rule: override the Host header sent to the Cloud Run origin.
+# Cloudflare proxied mode forwards the visitor Host (archiviste.nocilia.fr) by default;
+# Cloud Run's frontend has no domain mapping for it and 404s. Rewriting Host to the
+# <gateway>.run.app hostname (same value as the CNAME content) makes the frontend
+# route to the gateway service. http_request_origin phase = Origin Rules (Free plan).
+resource "cloudflare_ruleset" "archiviste_fr_origin_host" {
+  zone_id     = data.cloudflare_zone.nocilia_fr.id
+  name        = "Override origin Host for archiviste.nocilia.fr"
+  description = "Rewrite Host to <gateway>.run.app so Cloud Run frontend routes to the gateway"
+  kind        = "zone"
+  phase       = "http_request_origin"
+
+  rules {
+    action = "route"
+    action_parameters {
+      host_header = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
+    }
+    expression  = "(http.host eq \"archiviste.nocilia.fr\")"
+    description = "Set origin Host to the Cloud Run gateway hostname"
+    enabled     = true
+  }
 }
 
 # AC-8: TLS Full Strict + Security Level medium + Challenge TTL + Brotli + HTTPS upgrade.

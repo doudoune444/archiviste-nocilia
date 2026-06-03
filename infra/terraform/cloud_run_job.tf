@@ -13,13 +13,13 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
   }
 
   template {
-    # max_retries = 0: ING-001 exit 1 signals ≥1 file error (AC-7). A retry would re-run the
-    # full scan and potentially mask the failure signal; the GHA step must see the exit-1 →
-    # Failed mapping immediately. Exit 2 (init fatal) should also not be retried.
-    max_retries = 0
-
     template {
       service_account = google_service_account.archiviste_runtime.email
+
+      # max_retries = 0: ING-001 exit 1 signals ≥1 file error (AC-7). A retry would re-run the
+      # full scan and potentially mask the failure signal; the GHA step must see the exit-1 →
+      # Failed mapping immediately. Exit 2 (init fatal) should also not be retried.
+      max_retries = 0
 
       # Cloud SQL managed volume: same pattern as the workers service (cloud_run.tf:155-159).
       # The integrated Cloud SQL Auth Proxy is injected by Cloud Run when this annotation +

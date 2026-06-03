@@ -1,0 +1,56 @@
+name: ingest-lore
+
+# AC-3: trigger only on push to main touching lore/ files.
+# workflow_dispatch added for manual one-shot fallback (non-goal for AC, convenience only).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lore/**"
+  workflow_dispatch:
+
+# AC-4: WIF requires id-token:write. contents:read for checkout (not strictly needed here
+# since we do not checkout, but kept for consistency with deploy.yml:7-9).
+permissions:
+  id-token: write
+  contents: read
+
+# AC-8: serialise concurrent lore/ pushes — the second run queues behind the first.
+# cancel-in-progress: false ensures no ingest run is silently dropped when two pushes
+# land close together (e.g. a bulk lore/ commit followed by a fixup).
+concurrency:
+  group: ingest-lore
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    name: run archiviste-ingest Cloud Run Job
+    runs-on: ubuntu-latest
+    # Pattern from deploy.yml:15-18: env block at job level for reusable region reference.
+    env:
+      REGION: europe-west9
+
+    steps:
+      # AC-4: WIF auth — zero JSON key secrets, OIDC only (pattern: deploy.yml:22-29).
+      - name: authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      # AC-5: execute the Job synchronously and wait for completion.
+      # --wait blocks until the execution reaches a terminal state (Succeeded or Failed).
+      # gcloud exits non-zero when the execution is not Succeeded, propagating the failure
+      # to the GHA step and turning the run red (AC-7).
+      #
+      # Edge case — push mixing code changes (workers/) + lore/*.md in the same commit:
+      # the Job runs on the current :latest workers image (pre-deploy.yml promotion).
+      # The lore .md files do not depend on the chunking code version; if chunking logic
+      # changed in the same push, re-run ingest manually after deploy.yml promotes the new
+      # image (see docs/runbook.md §Ingestion DB après sync — procédure manuelle de secours).
+      - name: execute archiviste-ingest Job and wait
+        run: |
+          gcloud run jobs execute archiviste-ingest \
+            --wait \
+            --region "${{ env.REGION }}" \
+            --quiet

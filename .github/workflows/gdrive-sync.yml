@@ -138,7 +138,7 @@ jobs:
             printf '```\n\n'
             cat <<'CHECKLIST'
           - [ ] Reviewer skim diff
-          - [ ] Trigger ingestion `python -m archiviste_workers.ingest --path lore/` after merge
+          - [ ] Ingestion lore/ runs automatically via `.github/workflows/ingest-lore.yml` on push main (OPS-005)
           CHECKLIST
             printf 'EOF_BODY\n'
           } >> "$GITHUB_OUTPUT"

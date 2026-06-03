@@ -438,40 +438,41 @@ Le backup `.bak` (écriture atomique) est ignoré par `.gitignore`.
 
 ### Ingestion DB après sync
 
-Après un sync Drive, déclencher l'ingesteur ING-001 pour indexer les nouveaux
-`.md` dans pgvector :
+**Déclenchement automatique (OPS-005)** : tout push sur `main` touchant des
+fichiers sous `lore/` déclenche automatiquement le workflow
+`.github/workflows/ingest-lore.yml`, qui exécute le Cloud Run Job
+`archiviste-ingest` (`europe-west9`) de façon synchrone et bloquante. Le run
+GitHub Actions tourne rouge si l'exécution du Job n'atteint pas l'état
+`Succeeded` (exit 1 ING-001 = au moins un `.md` en erreur ; exit 2 = init
+fatal). Consulter `ingest.summary` dans Cloud Logging (filtrer par execution
+ID du Job) pour le détail.
 
-```bash
-cd workers
-uv run python -m archiviste_workers.ingest --path ../lore/
-```
-
-Pré-requis :
-- FOUND-002 : `make migrate` appliqué (extensions + `schema_version`).
-- FOUND-003 : `documents` + `chunks` créés.
-- Premier run : réseau sortant pour télécharger `BAAI/bge-m3` (~2.3 GiB) dans
-  `~/.cache/huggingface/`. Runs suivants : cache hit, aucune requête sortante.
-
-Variables d'environnement :
-- `DATABASE_URL` (cf `.env.example`).
-- `EMBED_BATCH_SIZE` (optionnel, défaut `32`).
-
-Commande :
-
-```bash
-cd workers
-uv run python -m archiviste_workers.ingest --path lore/
-```
-
-Comportement :
+**Comportement de l'ingesteur (ING-001)** :
 - `inserted` : nouveau `source_path`, INSERT documents + chunks.
 - `skipped` (`reason: unchanged`) : `content_hash` identique → aucune écriture.
 - `updated` : hash différent → `DELETE chunks` + `UPDATE documents` + nouvelle
   séquence chunks dans une transaction unique.
 - `error` : frontmatter invalide, fichier > 1 MiB, ou erreur DB.
 
-Logs JSON sur stdout : `ingest.start`, un `ingest.document` par fichier,
-`ingest.summary` final. Exit code 0 si zéro erreur, 1 sinon (2 = init fatal).
+Logs JSON : `ingest.start`, un `ingest.document` par fichier, `ingest.summary`
+final. Exit code 0 si zéro erreur, 1 sinon (2 = init fatal).
+
+L'embedder utilise `mistral-embed` via API (aucun modèle local à télécharger ;
+seul le tokenizer ~100 Mo est chargé).
+
+**Procédure manuelle de secours** (si le Job Cloud Run est indisponible, ou
+après un push mêlant code workers + `lore/` nécessitant une ré-ingestion sur
+l'image promue) :
+
+Pré-requis :
+- FOUND-002 : `make migrate` appliqué (extensions + `schema_version`).
+- FOUND-003 : tables `documents` + `chunks` créées.
+- `DATABASE_URL` et `MISTRAL_API_KEY` définis (cf `.env.example`).
+
+```bash
+cd workers
+uv run python -m archiviste_workers.ingest --path ../lore/
+```
 
 ## Onboarding gdrive-sync
 

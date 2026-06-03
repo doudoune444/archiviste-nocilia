@@ -9,6 +9,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **OPS-005**: `lore/` ingestion automated on push `main` via Cloud Run Job. New `infra/terraform/cloud_run_job.tf` provisions `google_cloud_run_v2_job` `archiviste-ingest` (`europe-west9`, workers image, Cloud SQL IAM authn volume, `MISTRAL_API_KEY` via Secret Manager, `max_retries=0`). New `.github/workflows/ingest-lore.yml` triggers on `paths:['lore/**']`, authenticates via WIF, runs `gcloud run jobs execute archiviste-ingest --wait` with `concurrency: {group: ingest-lore, cancel-in-progress: false}`. Runbook `§Ingestion DB après sync` rewritten (auto trigger + manual fallback; embedder is `mistral-embed` API, ~100 MB tokenizer, not 2.3 GiB). `gdrive-sync.yml` checklist updated: ingestion is now automatic post-merge.
+
 - **OPS-003**: workers `/readyz` DB-aware readiness probe — `GET /readyz` acquires a pool connection and runs `SELECT 1` under a 2 s timeout; returns `{"status":"ok"}` 200 on success, `{"status":"degraded"}` 503 on any DB error or timeout. `/healthz` stays shallow (liveness only). Cloud Run `startup_probe` on `/readyz:8000` added to workers Terraform (`failure_threshold=20`, `period_seconds=10` — 200 s budget for cold transformers import). `terraform/iam.tf` grants `gha-deploy` `roles/iam.serviceAccountTokenCreator` on `archiviste_runtime` SA so CI migrate step can impersonate it.
 
 ### Fixed

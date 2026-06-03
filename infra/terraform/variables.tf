@@ -37,7 +37,7 @@ variable "cloudflare_account_id" {
 }
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token. Scopes: Zone:Edit, DNS:Edit, Page Rules:Edit, Bot Management:Edit."
+  description = "Cloudflare API token. Permissions: Account > Workers Scripts:Edit; Zone > Workers Routes:Edit, Zone:Edit, DNS:Edit, Zone Settings:Edit, Page Rules:Edit, Single Redirect:Edit."
   type        = string
   sensitive   = true
 }

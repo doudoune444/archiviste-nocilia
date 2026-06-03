@@ -31,17 +31,15 @@ data "cloudflare_zone" "nocilia_net" {
 # Supported regions are limited (us-central1, us-east1/4, us-west1, europe-west1,
 # asia-east1, asia-northeast1). Rather than relocate the whole stack to europe-west1,
 # we drop the domain mapping entirely and rely on Cloudflare as the reverse proxy:
-#  - CNAME archiviste.nocilia.fr → <gateway>.run.app (the actual Cloud Run hostname)
-#  - Cloudflare proxied (orange cloud) terminates TLS at edge with its own cert
-#  - Origin connection: CF → Cloud Run over HTTPS, SNI = *.run.app (Google cert)
-#  - Cloud Run service uses INGRESS_TRAFFIC_ALL. Its public frontend routes by Host
-#    header and has NO domain mapping for archiviste.nocilia.fr (mappings unavailable
-#    in europe-west9), so a forwarded visitor Host of archiviste.nocilia.fr 404s at
-#    the frontend before reaching the gateway. The Origin Rule below rewrites the
-#    Host sent to origin to the <gateway>.run.app hostname so the frontend routes
-#    the request to the gateway service.
-# This is the documented Cloud Run + Cloudflare integration pattern when domain
-# mappings are unavailable. No GLB / Serverless NEG cost overhead.
+#  - CNAME archiviste.nocilia.fr → <gateway>.run.app, Cloudflare proxied (orange cloud)
+#  - Cloudflare terminates TLS at edge with its own cert
+#  - A Worker route on archiviste.nocilia.fr/* rewrites the request to the
+#    <gateway>.run.app origin (see cloudflare_workers_script below).
+# Why a Worker and not an Origin Rule "Host Header Override": Cloud Run's frontend
+# routes by Host header and 404s on the unknown archiviste.nocilia.fr Host. The
+# Origin Rule that fixes this requires a PAID Cloudflare plan (Free returns
+# "not entitled to use the HostHeader override" — see docs/blockers.md 2026-06-03).
+# The Worker does the same Host rewrite on the Free plan. No GLB / NEG cost overhead.
 resource "cloudflare_record" "archiviste_fr" {
   zone_id = data.cloudflare_zone.nocilia_fr.id
   name    = "archiviste"
@@ -51,27 +49,28 @@ resource "cloudflare_record" "archiviste_fr" {
   proxied = true
 }
 
-# Origin Rule: override the Host header sent to the Cloud Run origin.
-# Cloudflare proxied mode forwards the visitor Host (archiviste.nocilia.fr) by default;
-# Cloud Run's frontend has no domain mapping for it and 404s. Rewriting Host to the
-# <gateway>.run.app hostname (same value as the CNAME content) makes the frontend
-# route to the gateway service. http_request_origin phase = Origin Rules (Free plan).
-resource "cloudflare_ruleset" "archiviste_fr_origin_host" {
-  zone_id     = data.cloudflare_zone.nocilia_fr.id
-  name        = "Override origin Host for archiviste.nocilia.fr"
-  description = "Rewrite Host to <gateway>.run.app so Cloud Run frontend routes to the gateway"
-  kind        = "zone"
-  phase       = "http_request_origin"
+# Worker reverse-proxy: rewrites archiviste.nocilia.fr requests to the
+# <gateway>.run.app origin so Cloud Run's Host-based frontend routes to the gateway.
+# Replaces the paid-plan-only Origin Rule (see comment above). ORIGIN_HOST is the
+# single source of truth for the run.app hostname, shared with the CNAME content.
+resource "cloudflare_workers_script" "host_proxy" {
+  account_id = var.cloudflare_account_id
+  name       = "archiviste-host-proxy"
+  content    = file("${path.module}/workers/host-proxy.js")
+  module     = true
 
-  rules {
-    action = "route"
-    action_parameters {
-      host_header = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
-    }
-    expression  = "(http.host eq \"archiviste.nocilia.fr\")"
-    description = "Set origin Host to the Cloud Run gateway hostname"
-    enabled     = true
+  plain_text_binding {
+    name = "ORIGIN_HOST"
+    text = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
   }
+}
+
+# Bind the Worker to every path on the apex host. The proxied CNAME above puts
+# archiviste.nocilia.fr behind Cloudflare so this route can intercept.
+resource "cloudflare_workers_route" "archiviste_fr" {
+  zone_id     = data.cloudflare_zone.nocilia_fr.id
+  pattern     = "archiviste.nocilia.fr/*"
+  script_name = cloudflare_workers_script.host_proxy.name
 }
 
 # AC-8: TLS Full Strict + Security Level medium + Challenge TTL + Brotli + HTTPS upgrade.

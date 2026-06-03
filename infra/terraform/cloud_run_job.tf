@@ -6,8 +6,10 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
   name     = "archiviste-ingest"
   location = var.region
 
-  # MED-5: GHA deploy.yml overrides image with :<git_sha> on each release — ignore drift so
-  # terraform plan stays clean after every ingest-lore run that does not change the image.
+  # Image pinned to workers:latest, which deploy.yml retags to current main on every push
+  # (deploy.yml "build and push workers"). The Job pulls the moved tag on its next execution;
+  # the terraform string never changes. ignore_changes guards against any out-of-band digest
+  # pin so plan stays clean.
   lifecycle {
     ignore_changes = [template[0].template[0].containers[0].image]
   }
@@ -38,10 +40,17 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
         name  = "ingest"
         image = "${local.ar_base}/workers:latest"
 
-        # AC-2: ingest entrypoint — full scan of lore/ directory.
-        # Exit 0 → all files ingested (Succeeded). Exit 1 → ≥1 file error (Failed).
-        # Exit 2 → init fatal (Failed). Maps to AC-7 via Cloud Run execution state.
-        command = ["python", "-m", "archiviste_workers.ingest", "--path", "lore/"]
+        # Defect A fix: run the uv venv interpreter, not the system `python`. The package is
+        # installed in /app/.venv (the workers service activates it via `uv run`); bare `python`
+        # raises ModuleNotFoundError: No module named 'archiviste_workers'.
+        #
+        # NOT YET FUNCTIONAL — corpus channel deferred to OPS-006. The ingest CLI requires a
+        # `.git/` root (find_repo_root, cli.py:58-73) AND the lore/ corpus physically present
+        # under that root; the workers image ships only src/, never the corpus (kept out of the
+        # public repo by .gitignore `/lore/*`). OPS-006 wires the private channel: a `git init`
+        # ephemeral root + `gcloud storage rsync gs://archiviste-lore-corpus lore/` before this
+        # command. Until then this Job exits 2 (find_repo_root: no .git/ above /app) — expected.
+        command = ["/app/.venv/bin/python", "-m", "archiviste_workers.ingest", "--path", "lore/"]
 
         resources {
           # Cloud SQL volume forces CPU always-allocated — pin cpu so apply does not drop it

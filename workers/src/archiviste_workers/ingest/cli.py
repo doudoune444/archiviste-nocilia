@@ -12,6 +12,7 @@ from pathlib import Path
 
 import structlog
 
+from archiviste_workers.auth_metadata.token import SqlTokenProvider, TokenFetchError
 from archiviste_workers.db import create_pool
 from archiviste_workers.embedder import Embedder, default_batch_size
 from archiviste_workers.ingest.chunker import build_chunker
@@ -109,11 +110,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 async def _run_async(target: Path, repo_root: Path, batch_size: int) -> int:
     settings = Settings()
     started_at = time.monotonic()
+    # OPS-005 AC-2/AC-7: mirror main.py lifespan — build IAM token provider when
+    # CLOUD_SQL_IAM_AUTH=true (Cloud Run Job), skip off-GCP (local/CI password auth).
+    token_provider = SqlTokenProvider() if settings.cloud_sql_iam_auth else None
     try:
         embedder = Embedder()
         splitter = build_chunker()
-        pool = await create_pool(settings.database_url)
-    except (OSError, RuntimeError, ValueError) as exc:
+        pool = await create_pool(settings.database_url, token_provider=token_provider)
+    except (TokenFetchError, OSError, RuntimeError, ValueError) as exc:
         _LOGGER.error("ingest.fatal", reason=f"init failed: {exc}")
         return EXIT_INIT_FAILURE
     counters = RunCounters()
@@ -125,6 +129,8 @@ async def _run_async(target: Path, repo_root: Path, batch_size: int) -> int:
             counters.record(result)
     finally:
         await pool.close()
+        if token_provider is not None:
+            await token_provider.aclose()
     duration_ms = int((time.monotonic() - started_at) * 1000)
     _LOGGER.info(
         "ingest.summary",

@@ -128,6 +128,24 @@ jobs:
             [ "$ready" = "True" ] || { echo "::error::$svc canary $rev not Ready (status=$ready)"; exit 1; }
           done
 
+      # Promote workers to 100% BEFORE the gateway smoke. The gateway liveness
+      # aggregate probes WORKERS_URL/health (cloud_run.tf), and WORKERS_URL routes
+      # to the *serving* workers revision — not the no-traffic canary. Smoking the
+      # gateway while the previous workers revision still serves means any deploy that
+      # adds a workers route (e.g. the /health alias) probes a revision that lacks it,
+      # so the aggregate degrades and smoke fails — an unbreakable bootstrap deadlock.
+      # Workers readiness is already gated by `assert canary revisions are Ready` + the
+      # /readyz startup probe, and a workers regression is rolled back below on smoke
+      # failure, so promoting it ahead of the gateway smoke is safe.
+      - name: promote workers to 100%
+        id: promote_workers
+        if: success()
+        run: |
+          gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
+            --to-revisions=${{ steps.deploy_workers.outputs.revision }}=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
       # AC-12 step 4: smoke test via canary revision URL (bypasses Cloudflare DNS race).
       # MUST parse JSON .status — gateway /health returns HTTP 200 even when workers is
       # degraded (cf gateway/src/handlers/health.rs); HTTP 2xx alone is not sufficient.
@@ -166,20 +184,13 @@ jobs:
           echo "::error::canary smoke failed after 6 attempts (last HTTP=${HTTP_CODE})"
           exit 1
 
-      # AC-12 step 5: promote 100% on smoke success.
+      # AC-12 step 5: promote gateway 100% on smoke success. Workers was already
+      # promoted before the smoke (see above); only the gateway remains.
       - name: promote gateway to 100%
         if: success()
         run: |
           gcloud run services update-traffic ${{ env.GATEWAY_SERVICE }} \
             --to-revisions=${{ steps.deploy_gateway.outputs.revision }}=100 \
-            --region ${{ env.REGION }} \
-            --quiet
-
-      - name: promote workers to 100%
-        if: success()
-        run: |
-          gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
-            --to-revisions=${{ steps.deploy_workers.outputs.revision }}=100 \
             --region ${{ env.REGION }} \
             --quiet
 

@@ -169,3 +169,13 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 - Why blocked : SEC-001 AC-14 shipped gateway-side identity propagation via `X-User-Tier` + `X-User-Id` headers and removed identity from the JSON body, but no complementary workers-side change ever consumed those headers. `grep -r x-user-id workers/` returns 0 hits. The bug was dormant while workers ingress was `INGRESS_TRAFFIC_INTERNAL_ONLY` (no real traffic could reach workers from gateway end-to-end pre-SEC-006). SEC-006 flipped ingress to ALL + added ID-token signing, exposing the broken contract on first live call.
 - Resolution : PR #93 (`fix(workers): FIX-SEC-001 consume X-User-Id/X-User-Tier headers in generate route`) — workers `/v1/generate` reads identity from headers, server-side validation added.
 - Status : resolved by PR #93.
+
+## 2026-06-03 — INFRA (CF Host override) — Cloudflare Free plan blocks Origin Rule Host Header Override
+
+- File : `infra/terraform/cloudflare.tf` (resource `cloudflare_ruleset.archiviste_fr_origin_host`, phase `http_request_origin`, added by PR #107).
+- Symptom : `archiviste.nocilia.fr` returns a Google 404 (`*.run.app` works). PR #107 added an Origin Rule to rewrite the origin Host, but `terraform apply` failed in two stages:
+  1. `request is not authorized` — CF API token lacked the Origin Rules permission.
+  2. After adding **Zone → Origin → Edit**: `not entitled to use the HostHeader override`.
+- Why blocked : Cloud Run's frontend routes by Host header and only recognizes the `*.run.app` hostname; a forwarded visitor Host of `archiviste.nocilia.fr` 404s before reaching the gateway (`INGRESS_TRAFFIC_ALL` is irrelevant to this routing layer). The Origin Rule "Host Header Override" that fixes this is a **paid-plan Cloudflare feature** — the zone is on Free, so it cannot be enabled via token or Terraform. The original INFRA-002 assumption ("Cloud Run accepts client Host header forwarded by CF", this file 2026-05-27) was wrong, and the Origin Rule remedy is paywalled.
+- Resolution : replaced the Origin Rule with a **Cloudflare Worker reverse-proxy** (Free-plan capable). `cloudflare_workers_script.host_proxy` (`infra/terraform/workers/host-proxy.js`) + `cloudflare_workers_route` on `archiviste.nocilia.fr/*` rebuild each request URL with the `<gateway>.run.app` hostname, so the outbound `fetch` derives the correct Host/SNI and Cloud Run routes to the gateway. Token gained **Account > Workers Scripts:Edit** + **Zone > Workers Routes:Edit** (see `variables.tf`).
+- Status : resolved by PR (fix/cf-worker-host-proxy).

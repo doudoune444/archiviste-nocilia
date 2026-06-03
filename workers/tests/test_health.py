@@ -112,3 +112,14 @@ def test_healthz_returns_ok() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert isinstance(payload["version"], str)
+
+
+def test_health_alias_returns_ok() -> None:
+    """/health aliases /healthz: the gateway's internal liveness probe targets
+    /health because Cloud Run's public frontend reserves the literal /healthz path."""
+    client = TestClient(app)
+    response = client.get("/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert isinstance(payload["version"], str)

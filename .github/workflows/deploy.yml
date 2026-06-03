@@ -129,10 +129,12 @@ jobs:
           done
 
       # AC-12 step 4: smoke test via canary revision URL (bypasses Cloudflare DNS race).
-      # MUST parse JSON .status — gateway /healthz returns HTTP 200 even when workers is
+      # MUST parse JSON .status — gateway /health returns HTTP 200 even when workers is
       # degraded (cf gateway/src/handlers/health.rs); HTTP 2xx alone is not sufficient.
-      # Workers ingress=internal: not directly curl-able from GHA runner — gateway /healthz
+      # Workers ingress=internal: not directly curl-able from GHA runner — gateway /health
       # exercises workers reachability via internal service call, covering both services.
+      # Probe /health, not /healthz: Cloud Run's public frontend reserves the literal
+      # /healthz path and 404s it before it reaches the container. /health is an alias.
       - name: smoke test canary gateway
         id: smoke
         run: |
@@ -140,7 +142,7 @@ jobs:
             --region=${{ env.REGION }} \
             --format='value(status.url)')
           echo "Smoke URL: ${CANARY_URL}"
-          curl -sf --max-time 30 "${CANARY_URL}/healthz" | jq -e '.status == "ok"'
+          curl -sf --max-time 30 "${CANARY_URL}/health" | jq -e '.status == "ok"'
 
       # AC-12 step 5: promote 100% on smoke success.
       - name: promote gateway to 100%

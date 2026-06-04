@@ -1,7 +1,8 @@
-"""CLI-level tests: argument validation and exit codes (AC-14, AC-17)."""
+"""CLI-level tests: argument validation and exit codes (AC-6, AC-14, AC-17)."""
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,28 +13,64 @@ from archiviste_workers.ingest import cli
 from archiviste_workers.ingest.pipeline import ProcessResult, ProcessStatus
 
 
-def test_path_outside_repo_root_rejected(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """AC-14: absolute path outside the resolved repo root → non-zero exit + clear message."""
+# AC-6: --path outside --root → non-zero exit + exact error message preserved
+def test_path_outside_root_rejected(tmp_path: Path) -> None:
+    """AC-6: --path outside --root → non-zero exit, message 'path must be relative to repo root'."""
+    root = tmp_path / "root"
+    root.mkdir()
     outside = tmp_path / "outside.md"
     outside.write_text("---\ntitle: T\n---\nbody")
-    exit_code = cli.main(["--path", str(outside)])
+
+    exit_code = cli.main(["--root", str(root), "--path", str(outside)])
     assert exit_code != 0
-    out = capsys.readouterr().out
-    assert "path must be relative to repo root" in out
 
 
-def test_resolve_target_accepts_path_inside_repo(tmp_path: Path) -> None:
-    fake_repo = tmp_path / "repo"
-    fake_repo.mkdir()
-    (fake_repo / ".git").write_text("gitdir: ../bare")
-    inner = fake_repo / "lore" / "doc.md"
+# AC-6: resolve_target accepts path inside --root
+def test_resolve_target_accepts_path_inside_root(tmp_path: Path) -> None:
+    """AC-6: path inside root → resolved without error."""
+    root = tmp_path / "root"
+    root.mkdir()
+    inner = root / "lore" / "doc.md"
     inner.parent.mkdir()
     inner.write_text("ok")
-    repo_root = cli.find_repo_root(fake_repo)
-    resolved = cli.resolve_target(str(inner), repo_root)
+
+    resolved = cli.resolve_target(str(inner), root.resolve())
     assert resolved == inner.resolve()
+
+
+# AC-6: resolve_target rejects path outside root with exact message
+def test_resolve_target_rejects_outside_root(tmp_path: Path) -> None:
+    """AC-6: path outside root → ValueError, message 'path must be relative to repo root'."""
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "other.md"
+    outside.write_text("ok")
+
+    with pytest.raises(ValueError, match="path must be relative to repo root"):
+        cli.resolve_target(str(outside), root.resolve())
+
+
+# AC-6: source_path computed relative to --root (not .git/)
+def test_source_path_relative_to_root(tmp_path: Path) -> None:
+    """AC-6: --root /x --path /x/lore/foo.md → source_path == lore/foo.md."""
+    root = tmp_path / "root"
+    root.mkdir()
+    lore = root / "lore"
+    lore.mkdir()
+    doc = lore / "foo.md"
+    doc.write_text("ok")
+
+    resolved = cli.resolve_target(str(doc), root.resolve())
+    source_path = resolved.relative_to(root.resolve())
+    assert str(source_path) == "lore/foo.md" or source_path.as_posix() == "lore/foo.md"
+
+
+# AC-6: --root missing dir → non-zero exit
+def test_missing_root_dir_exits_nonzero(tmp_path: Path) -> None:
+    """AC-6: --root pointing to nonexistent dir → non-zero exit."""
+    missing = tmp_path / "does_not_exist"
+    exit_code = cli.main(["--root", str(missing), "--path", str(missing / "lore.md")])
+    assert exit_code != 0
 
 
 def test_iter_markdown_files_lists_only_md(tmp_path: Path) -> None:
@@ -44,11 +81,6 @@ def test_iter_markdown_files_lists_only_md(tmp_path: Path) -> None:
     files = list(cli.iter_markdown_files(tmp_path))
     names = sorted(file.name for file in files)
     assert names == ["a.md", "c.md"]
-
-
-def test_find_repo_root_raises_when_no_git(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="repo root"):
-        cli.find_repo_root(tmp_path)
 
 
 def test_run_counters_aggregates_results() -> None:
@@ -64,21 +96,28 @@ def test_run_counters_aggregates_results() -> None:
     assert counters.errors == 1
 
 
+# AC-6: no .git/ or find_repo_root reference in cli.py
+def test_no_find_repo_root_in_cli_source() -> None:
+    """AC-6: find_repo_root must not exist in cli.py."""
+    source = inspect.getsource(_cli_module)
+    assert "find_repo_root" not in source
+    assert ".git" not in source
+
+
 # OPS-005 AC-2 / AC-7: ingest CLI must wire the IAM token provider exactly like
 # main.py lifespan (SEC-005) so the Cloud Run Job can authenticate to Cloud SQL.
 # cloud_sql_iam_auth=True  → SqlTokenProvider constructed, non-None token_provider to create_pool.
 # cloud_sql_iam_auth=False → no SqlTokenProvider, token_provider=None to create_pool.
 
 
-def _make_fake_repo(tmp_path: Path) -> Path:
-    """Create a minimal fake git repo with one lore markdown file."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").write_text("gitdir: ../bare")
-    lore = repo / "lore"
+def _make_fake_root(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a minimal fake root dir with one lore markdown file."""
+    root = tmp_path / "root"
+    root.mkdir()
+    lore = root / "lore"
     lore.mkdir()
     (lore / "doc.md").write_text("---\ntitle: T\n---\nbody")
-    return repo
+    return root, lore
 
 
 @pytest.mark.asyncio
@@ -86,8 +125,7 @@ async def test_run_async_passes_token_provider_when_iam_auth_enabled(
     tmp_path: Path,
 ) -> None:
     """OPS-005 AC-2/AC-7: cloud_sql_iam_auth=True → SqlTokenProvider built and passed."""
-    repo = _make_fake_repo(tmp_path)
-    target = repo / "lore"
+    root, target = _make_fake_root(tmp_path)
 
     mock_pool = AsyncMock()
     mock_pool.close = AsyncMock()
@@ -121,7 +159,7 @@ async def test_run_async_passes_token_provider_when_iam_auth_enabled(
         mock_settings.database_url = "postgresql+asyncpg://sa@localhost/archiviste"
         mock_settings_cls.return_value = mock_settings
 
-        exit_code = await _cli_module._run_async(target, repo, 32)
+        exit_code = await _cli_module._run_async(target, root, 32)
 
     assert exit_code == cli.EXIT_OK
     assert captured["token_provider"] is mock_provider, (
@@ -135,8 +173,7 @@ async def test_run_async_passes_none_token_provider_when_iam_auth_disabled(
     tmp_path: Path,
 ) -> None:
     """OPS-005 AC-2/AC-7: cloud_sql_iam_auth=False → no SqlTokenProvider, None passed."""
-    repo = _make_fake_repo(tmp_path)
-    target = repo / "lore"
+    root, target = _make_fake_root(tmp_path)
 
     mock_pool = AsyncMock()
     mock_pool.close = AsyncMock()
@@ -168,7 +205,7 @@ async def test_run_async_passes_none_token_provider_when_iam_auth_disabled(
         mock_settings.database_url = "postgresql+asyncpg://postgres:postgres@localhost/archiviste"
         mock_settings_cls.return_value = mock_settings
 
-        exit_code = await _cli_module._run_async(target, repo, 32)
+        exit_code = await _cli_module._run_async(target, root, 32)
 
     assert exit_code == cli.EXIT_OK
     assert captured["token_provider"] is None, (

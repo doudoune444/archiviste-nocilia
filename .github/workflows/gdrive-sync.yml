@@ -11,11 +11,12 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-# AC-2: minimal explicit permissions; all others default to none.
+# OPS-006 AC-4: id-token:write required for WIF auth (rsync to GCS bucket).
+# contents:write kept for state file commit; pull-requests removed (PR step dropped).
 permissions:
   contents: write
-  pull-requests: write
   actions: read
+  id-token: write
 
 jobs:
   sync:
@@ -106,58 +107,24 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: compute date
-        id: date
+      # OPS-006 AC-4: authenticate to GCP via WIF so gcloud storage rsync can write to the bucket.
+      # Same provider/SA as ingest-lore.yml and deploy.yml.
+      - name: authenticate to GCP via WIF
         if: steps.diff.outputs.has_changes == 'true'
-        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
-      # AC-7: build PR body with human summary line + fenced JSON + checklist.
-      - name: build PR body
-        id: pr_body
-        if: steps.diff.outputs.has_changes == 'true'
-        env:
-          ERRORS: ${{ steps.summary.outputs.errors }}
-          TOTAL: ${{ steps.summary.outputs.total }}
-          CREATED: ${{ steps.summary.outputs.created }}
-          UPDATED: ${{ steps.summary.outputs.updated }}
-          RENAMED: ${{ steps.summary.outputs.renamed }}
-          ARCHIVED: ${{ steps.summary.outputs.archived }}
-          UNCHANGED: ${{ steps.summary.outputs.unchanged }}
-          IMAGES_FAILED: ${{ steps.summary.outputs.images_failed }}
-          IMAGES_WRITTEN: ${{ steps.summary.outputs.images_written }}
-          ORPHANS_REMOVED: ${{ steps.summary.outputs.orphans_removed }}
-        run: |
-          SUMMARY_JSON=$(cat /tmp/summary.json)
-          {
-            printf 'body<<EOF_BODY\n'
-            printf 'Summary: %s total, %s created, %s updated, %s renamed, %s archived, %s unchanged, %s errors, %s images_written, %s images_failed, %s orphans_removed\n' \
-              "${TOTAL}" "${CREATED}" "${UPDATED}" "${RENAMED}" "${ARCHIVED}" "${UNCHANGED}" "${ERRORS}" \
-              "${IMAGES_WRITTEN}" "${IMAGES_FAILED}" "${ORPHANS_REMOVED}"
-            printf '\n```json\n'
-            printf '%s\n' "${SUMMARY_JSON}"
-            printf '```\n\n'
-            cat <<'CHECKLIST'
-          - [ ] Reviewer skim diff
-          - [ ] Ingestion lore/ runs automatically via `.github/workflows/ingest-lore.yml` on push main (OPS-005)
-          CHECKLIST
-            printf 'EOF_BODY\n'
-          } >> "$GITHUB_OUTPUT"
-
-      # AC-7 / AC-8: open PR (draft if errors >= 1, ready otherwise).
-      # AC-10: no git push origin main, no --force, no gh pr merge.
-      - name: create PR
-        if: steps.diff.outputs.has_changes == 'true'
-        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6.1.0
+        uses: google-github-actions/auth@v2
         with:
-          branch: chore/gdrive-sync-${{ github.run_id }}
-          base: main
-          title: "chore(lore): gdrive sync ${{ steps.date.outputs.today }}"
-          commit-message: "chore(lore): gdrive sync run ${{ github.run_id }}"
-          labels: gdrive-sync,automation
-          draft: ${{ steps.summary.outputs.errors != '0' || steps.summary.outputs.images_failed != '0' }}
-          body: ${{ steps.pr_body.outputs.body }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
 
-      # AC-9: upload summary artifact (always, even on sync error).
+      # OPS-006 AC-4: rsync .md from lore/ → gs://archiviste-lore-corpus.
+      # Additive only — no --delete-unmatched-destination-objects (orphan deletion is a Non-goal).
+      # Replaces the former PR-opening steps: corpus no longer transits through git.
+      - name: rsync lore to GCS corpus bucket
+        if: steps.diff.outputs.has_changes == 'true'
+        run: |
+          gcloud storage rsync lore/ gs://archiviste-lore-corpus --recursive
+
+      # OPS-006 AC-9: upload summary artifact (always, even on sync error).
       - name: upload artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

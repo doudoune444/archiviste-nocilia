@@ -40,17 +40,17 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
         name  = "ingest"
         image = "${local.ar_base}/workers:latest"
 
-        # Defect A fix: run the uv venv interpreter, not the system `python`. The package is
-        # installed in /app/.venv (the workers service activates it via `uv run`); bare `python`
-        # raises ModuleNotFoundError: No module named 'archiviste_workers'.
-        #
-        # NOT YET FUNCTIONAL — corpus channel deferred to OPS-006. The ingest CLI requires a
-        # `.git/` root (find_repo_root, cli.py:58-73) AND the lore/ corpus physically present
-        # under that root; the workers image ships only src/, never the corpus (kept out of the
-        # public repo by .gitignore `/lore/*`). OPS-006 wires the private channel: a `git init`
-        # ephemeral root + `gcloud storage rsync gs://archiviste-lore-corpus lore/` before this
-        # command. Until then this Job exits 2 (find_repo_root: no .git/ above /app) — expected.
-        command = ["/app/.venv/bin/python", "-m", "archiviste_workers.ingest", "--path", "lore/"]
+        # OPS-006 corpus channel: download bucket → /tmp/lore/lore/, then ingest via --root.
+        # Two-step bash sequence (no gcloud in the workers image; download uses google-cloud-storage
+        # lib already present in the venv):
+        #   1. download_corpus: lists + downloads all objects from LORE_CORPUS_BUCKET to
+        #      <INGEST_ROOT>/lore/ (empty bucket = no-op, exit 0 — AC-9).
+        #   2. ingest CLI: --root anchors source_path computation; --path points at lore/ subdir.
+        # No .git/ required; no gcloud binary needed.
+        command = [
+          "/bin/bash", "-c",
+          "/app/.venv/bin/python -m archiviste_workers.ingest.download_corpus && /app/.venv/bin/python -m archiviste_workers.ingest --root \"$INGEST_ROOT\" --path \"$INGEST_ROOT/lore/\"",
+        ]
 
         resources {
           # Cloud SQL volume forces CPU always-allocated — pin cpu so apply does not drop it
@@ -91,6 +91,18 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
               version = "latest"
             }
           }
+        }
+
+        # OPS-006 AC-5: ephemeral local root for corpus download (writable tmpfs in Job container).
+        env {
+          name  = "INGEST_ROOT"
+          value = "/tmp/lore"
+        }
+
+        # OPS-006 AC-5: private GCS bucket holding the lore corpus (.md objects).
+        env {
+          name  = "LORE_CORPUS_BUCKET"
+          value = "archiviste-lore-corpus"
         }
 
         volume_mounts {

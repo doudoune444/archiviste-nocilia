@@ -56,15 +56,6 @@ class RunCounters:
             self.errors += 1
 
 
-def find_repo_root(start: Path) -> Path:
-    """Walk up from `start` until a directory containing `.git/` is found."""
-    for candidate in (start, *start.parents):
-        if (candidate / ".git").exists():
-            return candidate.resolve()
-    msg = f"could not locate repo root (no .git/ above {start})"
-    raise RuntimeError(msg)
-
-
 def resolve_target(raw_path: str, repo_root: Path) -> Path:
     """Resolve `raw_path` and ensure it stays inside `repo_root`."""
     target = Path(raw_path).resolve(strict=True)
@@ -86,12 +77,15 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     configure_structlog()
     try:
-        repo_root = find_repo_root(Path.cwd())
+        repo_root = Path(args.root).resolve()
+        if not repo_root.is_dir():
+            msg = f"--root does not exist: {repo_root}"
+            raise FileNotFoundError(msg)
         target = resolve_target(args.path, repo_root)
         batch_size = default_batch_size()
-    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+    except (ValueError, FileNotFoundError) as exc:
         _LOGGER.error("ingest.fatal", reason=str(exc))
-        return EXIT_INIT_FAILURE if isinstance(exc, RuntimeError) else EXIT_FILE_ERRORS
+        return EXIT_FILE_ERRORS
     _LOGGER.info(
         "ingest.start",
         embed_batch_size=batch_size,
@@ -103,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="archiviste_workers.ingest")
-    parser.add_argument("--path", required=True, help="file or directory under repo root")
+    parser.add_argument("--root", required=True, help="existing directory used as the ingest root")
+    parser.add_argument("--path", required=True, help="file or directory under --root")
     return parser.parse_args(argv)
 
 

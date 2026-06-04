@@ -438,23 +438,25 @@ Le backup `.bak` (écriture atomique) est ignoré par `.gitignore`.
 
 ### Ingestion DB après sync
 
-**Déclenchement automatique (OPS-005)** : tout push sur `main` touchant des
-fichiers sous `lore/` déclenche automatiquement le workflow
-`.github/workflows/ingest-lore.yml`, qui exécute le Cloud Run Job
-`archiviste-ingest` (`europe-west9`) de façon synchrone et bloquante. Le run
+**Déclenchement automatique (OPS-006)** : chaque run `gdrive-sync` réussi
+déclenche automatiquement le workflow `.github/workflows/ingest-lore.yml` via
+`on: workflow_run` (trigger `completed` + garde `conclusion == 'success'`). Le
+workflow exécute le Cloud Run Job `archiviste-ingest` (`europe-west9`) de façon
+synchrone et bloquante. `workflow_dispatch` manuel reste disponible. Le run
 GitHub Actions tourne rouge si l'exécution du Job n'atteint pas l'état
 `Succeeded` (exit 1 ING-001 = au moins un `.md` en erreur ; exit 2 = init
 fatal). Consulter `ingest.summary` dans Cloud Logging (filtrer par execution
 ID du Job) pour le détail.
 
-Le Job ne contient pas le corpus : l'image workers n'embarque que le paquet
-(`src/`), et le corpus `lore/` est volontairement hors du repo public
-(`.gitignore` `/lore/*` — spoilers narratifs). Le CLI d'ingestion exige par
-ailleurs un `.git/` pour résoudre la racine repo et calculer `source_path` (cf
-`cli.py:find_repo_root`). **Le canal corpus privé est livré par OPS-006** : `git
-init` éphémère + `gcloud storage rsync gs://archiviste-lore-corpus lore/` avant
-l'ingesteur. Tant qu'OPS-006 n'est pas mergé, le Job sort en code 2
-(`find_repo_root`: pas de `.git/` au-dessus de `/app`) — attendu.
+**Canal corpus privé (OPS-006)** : le Job télécharge le corpus depuis le bucket
+privé `gs://archiviste-lore-corpus` via `google-cloud-storage` (lib déjà
+présente dans l'image workers — aucun `gcloud` requis dans le conteneur). Le
+download écrit les objets sous `/tmp/lore/lore/` (ephémère, détruit en fin
+d'exécution). Le CLI est ensuite invoqué avec `--root /tmp/lore --path
+/tmp/lore/lore/` ; aucune racine `.git/` n'est requise. Un bucket vide =
+`ingest.summary total: 0`, exit 0 (idempotent, AC-9). Le corpus `lore/` reste
+hors du repo public (`.gitignore` `/lore/*` — spoilers narratifs) et ne
+transite plus par git.
 
 **Comportement de l'ingesteur (ING-001)** :
 - `inserted` : nouveau `source_path`, INSERT documents + chunks.
@@ -477,10 +479,14 @@ Pré-requis :
 - FOUND-002 : `make migrate` appliqué (extensions + `schema_version`).
 - FOUND-003 : tables `documents` + `chunks` créées.
 - `DATABASE_URL` et `MISTRAL_API_KEY` définis (cf `.env.example`).
+- Accès lecture au bucket `gs://archiviste-lore-corpus` (ADC ou SA avec `objectViewer`).
 
 ```bash
+# Download corpus from bucket to /tmp/lore/lore/ then ingest
 cd workers
-uv run python -m archiviste_workers.ingest --path ../lore/
+INGEST_ROOT=/tmp/lore LORE_CORPUS_BUCKET=archiviste-lore-corpus \
+  uv run python -m archiviste_workers.ingest.download_corpus
+uv run python -m archiviste_workers.ingest --root /tmp/lore --path /tmp/lore/lore/
 ```
 
 ## Onboarding gdrive-sync

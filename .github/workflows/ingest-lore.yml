@@ -1,12 +1,13 @@
 name: ingest-lore
 
-# AC-3: trigger only on push to main touching lore/ files.
-# workflow_dispatch added for manual one-shot fallback (non-goal for AC, convenience only).
+# OPS-006 AC-8: trigger on successful gdrive-sync completion, not on push lore/**
+# (corpus no longer transits through git; lore/ push never happens on main).
+# workflow_dispatch kept for manual one-shot fallback.
 on:
-  push:
+  workflow_run:
+    workflows: [gdrive-sync]
+    types: [completed]
     branches: [main]
-    paths:
-      - "lore/**"
   workflow_dispatch:
 
 # AC-4: WIF requires id-token:write. contents:read for checkout (not strictly needed here
@@ -26,6 +27,9 @@ jobs:
   ingest:
     name: run archiviste-ingest Cloud Run Job
     runs-on: ubuntu-latest
+    # OPS-006 AC-8: guard — only run when gdrive-sync succeeded.
+    # workflow_dispatch has no workflow_run event, so the condition is skipped (always runs).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     # Pattern from deploy.yml:15-18: env block at job level for reusable region reference.
     env:
       REGION: europe-west9
@@ -33,7 +37,7 @@ jobs:
     steps:
       # AC-4: WIF auth — zero JSON key secrets, OIDC only (pattern: deploy.yml:22-29).
       - name: authenticate to GCP via WIF
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_SA_EMAIL }}

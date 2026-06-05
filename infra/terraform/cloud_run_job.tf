@@ -105,6 +105,15 @@ resource "google_cloud_run_v2_job" "archiviste_ingest" {
           value = "archiviste-lore-corpus"
         }
 
+        # OPS-007 AC-3: Settings() (ingest/cli.py:106) declares gcs_bucket: str = Field(...)
+        # (required, no default). The field is never read on the ingest path — its only real
+        # consumer is main.py:71 (conversation persistence). Injecting the canonical conversations
+        # bucket satisfies the pydantic required-field check so the Job boots without ValidationError.
+        env {
+          name  = "GCS_BUCKET"
+          value = "archiviste-conversations"
+        }
+
         volume_mounts {
           name       = "cloudsql"
           mount_path = "/cloudsql"

@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **OPS-007**: fix(ops) runtime regressions in the gdrive-sync → lore-corpus → ingest chain. (1) `infra/terraform/storage.tf`: add `google_storage_bucket_iam_member.lore_corpus_bucket_reader` — `roles/storage.legacyBucketReader` for `gha-deploy` scoped to `archiviste-lore-corpus`; grants `storage.buckets.get` required by `gcloud storage rsync` to stat the destination bucket (AC-1/AC-2). (2) `infra/terraform/cloud_run_job.tf`: inject `GCS_BUCKET=archiviste-conversations` into the Job env block; satisfies the pydantic required field `gcs_bucket` in `Settings()` (`settings.py:28`) so the Job boots without `ValidationError` (AC-3). `archiviste-runtime` binding unchanged at `roles/storage.objectViewer` (AC-4 non-regression).
+
 ### Added
 
 - **OPS-006**: Private corpus channel `gs://archiviste-lore-corpus` closes the OPS-005 exit-2 loop end-to-end. New Terraform `infra/terraform/storage.tf` provisions `google_storage_bucket.lore_corpus` (europe-west9, uniform bucket-level access, public access prevented) with `objectAdmin` binding for `gha-deploy` (AC-2) and `objectViewer` for `archiviste-runtime` (AC-3). New `workers/src/archiviste_workers/ingest/download_corpus.py` module downloads all bucket objects to `<INGEST_ROOT>/lore/` via `google-cloud-storage` (no gcloud binary needed, zero new deps). CLI `archiviste_workers.ingest` now requires `--root <dir>` (replaces `find_repo_root`/`.git/` walk — AC-6); `--path` outside `--root` still rejects with `path must be relative to repo root`. `gdrive-sync.yml` adds WIF auth + `gcloud storage rsync lore/ gs://archiviste-lore-corpus --recursive` (additive only, no `--delete-unmatched-destination-objects`) and drops the PR-opening steps (AC-4). `ingest-lore.yml` trigger replaced from `push: paths: lore/**` to `workflow_run: [gdrive-sync] completed + success guard` (AC-8). Cloud Run Job command updated to `download_corpus && ingest --root $INGEST_ROOT --path $INGEST_ROOT/lore/`.

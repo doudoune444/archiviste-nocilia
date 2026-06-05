@@ -19,6 +19,16 @@ resource "google_storage_bucket_iam_member" "lore_corpus_writer" {
   member = "serviceAccount:${google_service_account.gha_deploy.email}"
 }
 
+# OPS-007 AC-1: gha-deploy needs storage.buckets.get to stat the destination bucket
+# before rsync (gcloud storage rsync issues a GetBucket RPC before any object transfer).
+# legacyBucketReader is the predefined least-privilege role that carries storage.buckets.get
+# without granting write access. Scoped to this bucket only — no project-wide permission.
+resource "google_storage_bucket_iam_member" "lore_corpus_bucket_reader" {
+  bucket = google_storage_bucket.lore_corpus.name
+  role   = "roles/storage.legacyBucketReader"
+  member = "serviceAccount:${google_service_account.gha_deploy.email}"
+}
+
 # AC-3: archiviste-runtime (Cloud Run Job SA) needs read-only access to download
 # the corpus at execution time. objectViewer = list + get, scoped to this bucket only.
 resource "google_storage_bucket_iam_member" "lore_corpus_reader" {

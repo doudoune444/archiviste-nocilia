@@ -106,7 +106,7 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
   1. Keep `transformers>=4.45` in `[project.dependencies]` for V1 (ingest still needs it for the chunker tokenizer). Drop only `sentence-transformers>=3.3` which is purely the BGE-M3 embedder wrapper. Create a follow-up ticket (ING-016 or chunker-swap) to replace `AutoTokenizer` with a `tiktoken`-based or pure-Python splitter once Mistral tokenizer support is confirmed.
   2. OR: amend PR-d scope to also touch `chunker.py` (replace `AutoTokenizer.from_pretrained` with `MistralTokenizer` or fall back to character-based splitting), and update "Files to touch" in the plan.
   3. Option 1 is the minimal-risk path: `sentence-transformers` is ~2 GiB (model weights download), while `transformers` alone without `torch` is ~100 MB (tokenizer only, no model load). Image size goal is achievable with partial drop.
-- Status : open — awaiting human decision before applying any resolution
+- Status : resolved by ING-016 — `chunker.py` rewritten to load vendored Mixtral-8x7B-v0.1 `tokenizer.json` via `tokenizers.Tokenizer.from_file`; `transformers` + `sentence-transformers` removed from all dep tables (AC-1/AC-5/AC-6).
 
 ## 2026-05-05 — FOUND-003 — agent permissions deny writes under `migrations/` and `tests/`
 

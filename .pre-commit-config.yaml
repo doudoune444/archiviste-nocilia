@@ -16,6 +16,7 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=1024]
+        exclude: ^workers/src/archiviste_workers/ingest/assets/.*\.json$
       - id: detect-private-key
       - id: mixed-line-ending
         args: [--fix=lf]

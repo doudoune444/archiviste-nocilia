@@ -9,6 +9,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **GEN-001**: rewrite Archiviste `SYSTEM_PROMPT` (mode 1 canon, AC-6) — drop role-play tone (in-world/érudit/character), require clear concise informative answers, explicitly forbid fabricating facts absent from the archives, and append exactly 2 relevant follow-up questions after each answer. Spec AC-6 amended (human-approved) + `EXPECTED_SYSTEM_PROMPT` test kept byte-for-byte. Anti-injection clause preserved.
 - **ING-016**: swap chunker tokenizer from BGE-M3 (`transformers.AutoTokenizer`) to vendored Mixtral-8x7B-v0.1 (`tokenizers.Tokenizer.from_file`). `transformers` and `sentence-transformers` removed from all dependency tables; `uv.lock` regenerated (-torch/-safetensors/-transformers/-sentence-transformers). Asset `workers/src/archiviste_workers/ingest/assets/mixtral_8x7b_v0_1_tokenizer.json` vendored (Apache-2.0, baked in wheel). Init is network-free. Closes `docs/blockers.md` 2026-05-18 INFRA-002 entry. AC-7 (image size ≥ -50 MB) to be verified at build time.
 
 ### Fixed

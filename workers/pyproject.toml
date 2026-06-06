@@ -23,9 +23,6 @@ dependencies = [
     "langchain-google-genai>=2.0",
     "langchain-deepseek>=0.1",
     "langchain-text-splitters>=0.3",
-    # transformers kept for ingest/chunker.py AutoTokenizer (bge-m3 tokenizer, no model weights).
-    # sentence-transformers (full model weights ~2 GiB) moved to optional embedder-fallback.
-    "transformers>=4.45",
     "pyyaml>=6.0",
     "google-cloud-storage>=2.18",
     "langfuse>=2.55",
@@ -52,11 +49,6 @@ dev = [
     "types-PyYAML>=6.0",
     "respx>=0.21",
 ]
-# Fallback local embedder for V2 self-hosted scenario (cf vision.md Q7).
-# transformers already in runtime (used by chunker tokenizer); sentence-transformers adds model weights.
-embedder-fallback = [
-    "sentence-transformers>=3.3",
-]
 
 [build-system]
 requires = ["hatchling"]
@@ -64,6 +56,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/archiviste_workers"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/archiviste_workers/ingest/assets/mixtral_8x7b_v0_1_tokenizer.json" = "archiviste_workers/ingest/assets/mixtral_8x7b_v0_1_tokenizer.json"
 
 [tool.ruff]
 line-length = 100
@@ -112,8 +107,6 @@ module = [
     "google.cloud",
     "google.cloud.*",
     "pgvector.*",
-    "transformers",
-    "transformers.*",
     "langchain_text_splitters",
     "langchain_text_splitters.*",
 ]

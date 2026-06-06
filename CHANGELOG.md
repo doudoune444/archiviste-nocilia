@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **ING-016**: swap chunker tokenizer from BGE-M3 (`transformers.AutoTokenizer`) to vendored Mixtral-8x7B-v0.1 (`tokenizers.Tokenizer.from_file`). `transformers` and `sentence-transformers` removed from all dependency tables; `uv.lock` regenerated (-torch/-safetensors/-transformers/-sentence-transformers). Asset `workers/src/archiviste_workers/ingest/assets/mixtral_8x7b_v0_1_tokenizer.json` vendored (Apache-2.0, baked in wheel). Init is network-free. Closes `docs/blockers.md` 2026-05-18 INFRA-002 entry. AC-7 (image size ≥ -50 MB) to be verified at build time.
+
 ### Fixed
 
 - **OPS-007**: fix(ops) runtime regressions in the gdrive-sync → lore-corpus → ingest chain. (1) `infra/terraform/storage.tf`: add `google_storage_bucket_iam_member.lore_corpus_bucket_reader` — `roles/storage.legacyBucketReader` for `gha-deploy` scoped to `archiviste-lore-corpus`; grants `storage.buckets.get` required by `gcloud storage rsync` to stat the destination bucket (AC-1/AC-2). (2) `infra/terraform/cloud_run_job.tf`: inject `GCS_BUCKET=archiviste-conversations` into the Job env block; satisfies the pydantic required field `gcs_bucket` in `Settings()` (`settings.py:28`) so the Job boots without `ValidationError` (AC-3). `archiviste-runtime` binding unchanged at `roles/storage.objectViewer` (AC-4 non-regression).

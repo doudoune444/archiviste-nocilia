@@ -76,13 +76,6 @@ def oversize_payload() -> bytes:
 
 
 @pytest.fixture(autouse=True)
-def _silence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Kept for backward compat with optional embedder-fallback extras.
-    monkeypatch.setenv("TRANSFORMERS_VERBOSITY", "error")
-    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "false")
-
-
-@pytest.fixture(autouse=True)
 def _mock_sql_token_provider_in_main(request: pytest.FixtureRequest) -> Iterator[None]:
     """Patch SqlTokenProvider and create_pool in main.py for tests using lifespan().
 

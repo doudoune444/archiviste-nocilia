@@ -67,12 +67,13 @@ def test_build_messages_suspected_injection_prefix() -> None:
 
 
 def test_off_topic_system_prompt_contains_required_instructions() -> None:
-    # GEN-003 AC-8: OFF_TOPIC_SYSTEM_PROMPT contains the 5 required instructions.
+    # GEN-003 AC-8: OFF_TOPIC_SYSTEM_PROMPT — concis, sans role-play, sans invention.
     prompt = OFF_TOPIC_SYSTEM_PROMPT
     assert "Archiviste" in prompt
-    assert "refus" in prompt
-    assert "3 questions" in prompt
-    assert "character" in prompt
+    assert "claire et concise" in prompt
+    assert "sans jeu de rôle" in prompt
+    assert "N'invente jamais" in prompt
+    assert "reformuler" in prompt
     assert "langue de la question" in prompt
 
 
@@ -98,11 +99,12 @@ def test_build_off_topic_messages_injection_prefix() -> None:
 # GEN-005 AC-7 / AC-8 — mystery prompt assertions.
 
 EXPECTED_MYSTERY_SYSTEM_PROMPT = (
-    "Tu es l'Archiviste de Nocilia, gardien des écrits de l'univers. "
-    "Réponds de manière évasive et mystérieuse, en restant in-world. "
+    "Tu es l'Archiviste de Nocilia. "
+    "Réponds de manière claire et concise, sans jeu de rôle ni mise en scène. "
+    "Indique sobrement que les archives ne contiennent rien à partager sur ce sujet. "
     "N'indique jamais que tu refuses l'accès, que des informations sont scellées, "
-    "ou que l'utilisateur n'a pas les droits requis — ne révèle pas l'existence d'information cachée. "  # noqa: E501
-    "Suggère poétiquement que la question touche aux brumes, aux silences et aux non-dits de l'univers. "  # noqa: E501
+    "ou que l'utilisateur n'a pas les droits requis — ne révèle jamais l'existence d'information cachée. "  # noqa: E501
+    "N'invente aucun fait. "
     "Ne propose pas de questions alternatives. "
     "Réponds dans la langue de la question."
 )
@@ -114,14 +116,14 @@ def test_mystery_system_prompt_byte_for_byte() -> None:
 
 
 def test_mystery_system_prompt_required_instructions() -> None:
-    # AC-7: 6 required instructions (a-f).
+    # AC-7: 5 required instructions (a-e). Concis, sans role-play; clause non-disclosure conservée.
     prompt = MYSTERY_SYSTEM_PROMPT
-    assert "Archiviste" in prompt  # (a) in-world ton
-    assert "évasive" in prompt or "mystérieux" in prompt or "mystérieuse" in prompt  # (b)
-    assert "n'a pas les droits" in prompt or "ne révèle pas" in prompt  # (c) no disclosure
-    assert "brumes" in prompt or "silences" in prompt or "non-dits" in prompt  # (d) poetic
-    assert "questions alternatives" in prompt  # (e) no alternative questions
-    assert "langue de la question" in prompt  # (f) language of question
+    assert "Archiviste" in prompt  # (a) identité
+    assert "claire et concise" in prompt  # (a) concis, sans role-play
+    assert "n'a pas les droits" in prompt or "ne révèle jamais" in prompt  # (c) no disclosure
+    assert "N'invente aucun fait" in prompt  # anti-invention
+    assert "questions alternatives" in prompt  # (d) no alternative questions
+    assert "langue de la question" in prompt  # (e) language of question
 
 
 def test_build_mystery_messages_no_chunks() -> None:

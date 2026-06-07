@@ -505,10 +505,15 @@ pub fn router(state: Arc<AppState>) -> Router {
             crate::middleware::overhead_header,
         ));
 
-    // Static file routes: index.html at /, assets under /assets/*.
+    // Static file routes: index.html at /, observability page, assets under /assets/*.
     // ServeDir handles path-traversal rejection natively (AC-5).
+    // OBS-001: /observability mounted here — public, no auth (AC-2).
     let static_router = Router::new()
         .route_service("/", ServeFile::new("static/index.html"))
+        .route_service(
+            "/observability",
+            ServeFile::new("static/observability.html"),
+        )
         .nest_service("/assets", ServeDir::new("static/assets"));
 
     // Auth sub-router: body limit 4 KiB + Content-Type: application/json enforcement (AC-17).
@@ -523,7 +528,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(axum::middleware::from_fn(require_json_content_type));
 
     // Public API routes (AC-11: marker #[public] — all handlers accept anonymous).
-    let public_api = Router::new().route("/v1/me", get(routes::me::me));
+    // OBS-001: /v1/stats mounted here — no auth gate (AC-6).
+    let public_api = Router::new()
+        .route("/v1/me", get(routes::me::me))
+        .route("/v1/stats", get(handlers::stats::stats));
 
     // Author-gated dashboard API routes (UI-002 PR1 — AC-5..AC-12, AC-19..AC-23).
     // `RequireAuthor` extractor gates each handler — no `#[public]` marker (AC-11).

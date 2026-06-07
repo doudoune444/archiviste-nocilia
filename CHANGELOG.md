@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OBS-001**: public `/observability` page with `Chat | Observabilité` nav and a usage widget fed by new public `GET /v1/stats` endpoint returning exact `count(*)` of conversations (`{"conversation_count": <int>}`). DB unavailable → 503 sanitized `{"error":"upstream_unavailable","request_id":"<uuid>"}`. Nav added to `index.html`. New static assets `observability.{html,js,css}`. All 5 security headers preserved router-wide. No auth gate, no migration, no OpenAPI change.
+
 ### Changed
 
 - **GEN-001**: rewrite Archiviste `SYSTEM_PROMPT` (mode 1 canon, AC-6) — drop role-play tone (in-world/érudit/character), require clear concise informative answers, explicitly forbid fabricating facts absent from the archives, and append exactly 2 relevant follow-up questions after each answer. Spec AC-6 amended (human-approved) + `EXPECTED_SYSTEM_PROMPT` test kept byte-for-byte. Anti-injection clause preserved.

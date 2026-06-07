@@ -436,38 +436,40 @@ fn ac6_contract_lib_mounts_stats_in_public_api() {
 // AC-8 (contract): nav links in index.html and observability.html
 // ---------------------------------------------------------------------------
 
-/// AC-8 (contract): index.html contains href="/" (Chat) and href="/observability" (Observabilité), in order.
+/// AC-8 (contract): index.html contains the exact Chat and Observabilité nav anchors, in order.
 #[test]
 fn ac8_index_html_nav_links() {
-    // AC-8: both nav links must be present in order.
+    // AC-8: both nav anchors must be present (exact anchor + label) in order.
+    // Match the full anchor (not just `href="/`) so the test fails if the Chat
+    // link is removed — `href="/` alone also matches `href="/assets/...`.
     let html = std::fs::read_to_string("static/index.html").expect("static/index.html not found");
 
     let pos_chat = html
-        .find(r#"href="/"#)
-        .expect(r#"index.html must contain href="/" (Chat link)"#);
+        .find(r#"<a href="/">Chat</a>"#)
+        .expect(r#"index.html must contain <a href="/">Chat</a>"#);
     let pos_obs = html
-        .find(r#"href="/observability""#)
-        .expect(r#"index.html must contain href="/observability" (Observabilité link)"#);
+        .find(r#"<a href="/observability">Observabilité</a>"#)
+        .expect(r#"index.html must contain <a href="/observability">Observabilité</a>"#);
 
     assert!(
         pos_chat < pos_obs,
-        "Chat link (href=\"/\") must appear before Observabilité link in index.html"
+        "Chat link must appear before Observabilité link in index.html"
     );
 }
 
-/// AC-8 (contract): observability.html contains href="/" and href="/observability", in order.
+/// AC-8 (contract): observability.html contains the exact Chat and Observabilité nav anchors, in order.
 #[test]
 fn ac8_observability_html_nav_links() {
-    // AC-8: same nav block required on /observability page.
+    // AC-8: same nav block required on /observability page (exact anchor + label).
     let html = std::fs::read_to_string("static/observability.html")
         .expect("static/observability.html not found");
 
     let pos_chat = html
-        .find(r#"href="/"#)
-        .expect(r#"observability.html must contain href="/" (Chat link)"#);
+        .find(r#"<a href="/">Chat</a>"#)
+        .expect(r#"observability.html must contain <a href="/">Chat</a>"#);
     let pos_obs = html
-        .find(r#"href="/observability""#)
-        .expect(r#"observability.html must contain href="/observability""#);
+        .find(r#"<a href="/observability">Observabilité</a>"#)
+        .expect(r#"observability.html must contain <a href="/observability">Observabilité</a>"#);
 
     assert!(
         pos_chat < pos_obs,

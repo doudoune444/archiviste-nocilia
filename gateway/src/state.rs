@@ -13,6 +13,7 @@ use crate::{
     },
     auth_metadata::{IdTokenProvider, TokenProvider},
     config::Config,
+    health_cache::HealthSnapshotCache,
 };
 
 /// Process-wide state shared across handlers via Axum extractors.
@@ -69,6 +70,11 @@ pub struct AppState {
     /// 60-second refresh-ahead semantics — independent cache from the OAuth
     /// access token providers above.
     pub workers_id_token_provider: Arc<IdTokenProvider>,
+    /// In-memory snapshot cache for `GET /v1/status` (OBS-002 AC-10 / D-3).
+    ///
+    /// Shared across all requests via `Arc`; TTL 10 s.  Per-replica cache —
+    /// multi-instance spread is acceptable phase 1 (D-3).
+    pub health_cache: Arc<HealthSnapshotCache>,
 }
 
 impl AppState {
@@ -103,6 +109,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
 
@@ -144,6 +151,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
 
@@ -240,6 +248,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
 
@@ -276,6 +285,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
 

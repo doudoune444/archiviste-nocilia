@@ -9,6 +9,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **OBS-002**: public `GET /v1/status` endpoint returning aggregate service health `{"status":"ok"|"degraded","dependencies":{"postgres":{..},"gcs":{..},"workers":{..}},"checked_at":"<rfc3339>"}`. 3 probes run in parallel (AC-9), 2 s timeout each (AC-8), result cached in-process 10 s TTL (AC-10). 200-always (AC-5/AC-6), no auth gate (AC-7), sanitised body — no host/message/SQL detail (AC-2/AC-11). `#health-widget` added to `/observability` (`observability.html/js/css`). No migration, no OpenAPI change (AC-16), 5 security headers preserved (AC-15).
 - **OBS-001**: public `/observability` page with `Chat | Observabilité` nav and a usage widget fed by new public `GET /v1/stats` endpoint returning exact `count(*)` of conversations (`{"conversation_count": <int>}`). DB unavailable → 503 sanitized `{"error":"upstream_unavailable","request_id":"<uuid>"}`. Nav added to `index.html`. New static assets `observability.{html,js,css}`. All 5 security headers preserved router-wide. No auth gate, no migration, no OpenAPI change.
 
 ### Changed

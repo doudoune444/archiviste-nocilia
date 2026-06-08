@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 import pytest_asyncio
@@ -128,3 +129,33 @@ async def test_concurrent_appends_resolve(app_client: httpx.AsyncClient) -> None
     statuses = sorted([a.status_code, b.status_code])
     assert statuses[0] == 201
     assert statuses[1] in (201, 409)
+
+
+@pytest.mark.asyncio
+async def test_anonymous_user_is_persisted_on_first_use(app_client: httpx.AsyncClient) -> None:
+    """Anonymous fingerprint user_id (no pre-seeded `users` row) is upserted, so the
+    conversation persists instead of failing the FK with 422 unknown_user.
+
+    Guards the fix for the GET /v1/stats counter staying at 0: anonymous chats must
+    produce a `conversations` row so count(*) reflects real usage.
+    """
+    anon_user_id = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+
+    response = await app_client.post(
+        f"/v1/conversations/{cid}/messages",
+        json=_payload(user_id=anon_user_id),
+    )
+    assert response.status_code == 201
+
+    conn = await asyncpg.connect(DSN.replace("+asyncpg", ""))
+    try:
+        user_tier = await conn.fetchval("SELECT tier FROM users WHERE id = $1::uuid", anon_user_id)
+        convo_owner = await conn.fetchval(
+            "SELECT user_id FROM conversations WHERE id = $1::uuid", cid
+        )
+    finally:
+        await conn.close()
+
+    assert user_tier == "anonymous"
+    assert str(convo_owner) == anon_user_id

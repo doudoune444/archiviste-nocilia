@@ -19,6 +19,9 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **fix(workers)**: anonymous conversations were never persisted — the gateway derives a fingerprint UUIDv5 `user_id` (SEC-001) that has no `users` row, so `conversations.user_id` FK rejected the insert with `unknown_user` (best-effort logger swallowed it), leaving `GET /v1/stats` `conversation_count` permanently 0. `ConversationRepository.create_if_absent` now upserts the anon user (`INSERT INTO users (id, tier) VALUES ($1, 'anonymous') ON CONFLICT DO NOTHING`) in the same transaction before the conversation insert; members/authors no-op on conflict. Anonymous chat histories now persist and the usage counter reflects real traffic. Integration test added. No schema/migration change.
+- **fix(gateway)**: main `/` page nav rendered unstyled — the shared `<nav>` CSS lived only in `observability.css`, which `index.html` does not load. Moved the base `nav` rules into the shared `styles.css`; `observability.css` keeps only the page-active highlight + `#usage-widget`.
+
 - **OPS-007**: fix(ops) runtime regressions in the gdrive-sync → lore-corpus → ingest chain. (1) `infra/terraform/storage.tf`: add `google_storage_bucket_iam_member.lore_corpus_bucket_reader` — `roles/storage.legacyBucketReader` for `gha-deploy` scoped to `archiviste-lore-corpus`; grants `storage.buckets.get` required by `gcloud storage rsync` to stat the destination bucket (AC-1/AC-2). (2) `infra/terraform/cloud_run_job.tf`: inject `GCS_BUCKET=archiviste-conversations` into the Job env block; satisfies the pydantic required field `gcs_bucket` in `Settings()` (`settings.py:28`) so the Job boots without `ValidationError` (AC-3). `archiviste-runtime` binding unchanged at `roles/storage.objectViewer` (AC-4 non-regression).
 
 ### Added

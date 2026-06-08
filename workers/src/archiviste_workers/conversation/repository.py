@@ -28,6 +28,14 @@ _INCREMENT_SQL = (
     "RETURNING message_count"
 )
 
+# Anonymous callers are identified by a fingerprint-derived UUIDv5 (gateway
+# SEC-001) that has no pre-existing `users` row. Persist it on first use so the
+# `conversations.user_id` FK is satisfiable and anonymous histories are kept.
+# Members/authors already have a row → ON CONFLICT no-ops, tier untouched.
+_UPSERT_ANON_USER_SQL = (
+    "INSERT INTO users (id, tier) VALUES ($1::uuid, 'anonymous') ON CONFLICT (id) DO NOTHING"
+)
+
 
 class ConversationRepository:
     """asyncpg-backed access to the `conversations` index table."""
@@ -39,7 +47,8 @@ class ConversationRepository:
         self, *, conversation_id: str, user_id: str, gcs_uri: str
     ) -> tuple[bool, datetime]:
         try:
-            async with self._pool.acquire() as conn:
+            async with self._pool.acquire() as conn, conn.transaction():
+                await conn.execute(_UPSERT_ANON_USER_SQL, user_id)
                 row = await conn.fetchrow(_INSERT_OR_GET_SQL, conversation_id, user_id, gcs_uri)
         except asyncpg.ForeignKeyViolationError as exc:
             raise UnknownUserError from exc

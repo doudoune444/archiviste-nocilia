@@ -5,6 +5,7 @@ Exit codes:
   1 — gate violation or error rate > 10%
   2 — schema/CLI error (bad golden set, missing --mode, invalid baseline)
   3 — workers unreachable at startup
+  4 — persist failure (DB unreachable, constraint, timeout)
 """
 
 from __future__ import annotations
@@ -16,7 +17,10 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from eval.persist import EvalRunRow
 
 import httpx
 import structlog
@@ -54,6 +58,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--baseline", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--workers-url", default="http://localhost:8000")
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist aggregated metrics to Postgres eval_runs (live mode only)",
+    )
     return parser.parse_args(argv)
 
 
@@ -333,6 +342,77 @@ def _emit_summary_and_exit(
     return 0
 
 
+def _build_eval_run_row(run: RunFile, golden_set_version: str) -> EvalRunRow | None:
+    """Build an EvalRunRow from a completed live RunFile; return None if any metric is absent."""
+    from eval.persist import EvalRunRow  # noqa: PLC0415
+
+    metrics = run.metrics
+    faithfulness = metrics.get("faithfulness")
+    answer_relevancy = metrics.get("answer_relevancy")
+    context_precision = metrics.get("context_precision")
+    context_recall = metrics.get("context_recall")
+    if (
+        faithfulness is None
+        or answer_relevancy is None
+        or context_precision is None
+        or context_recall is None
+    ):
+        return None
+    return EvalRunRow(
+        git_sha=run.git_sha,
+        runner_mode=run.runner_mode,
+        golden_set_version=golden_set_version,
+        faithfulness=faithfulness,
+        answer_relevancy=answer_relevancy,
+        context_precision=context_precision,
+        context_recall=context_recall,
+        entries_total=run.totals.entries,
+        entries_ok=run.totals.ok,
+        entries_errors=run.totals.errors,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
+
+
+def _maybe_persist(
+    args: argparse.Namespace,
+    run: RunFile,
+    runner_mode: Literal["live", "offline"],
+) -> int | None:
+    """Attempt to persist the run to Postgres; return 4 on failure, None on skip/success.
+
+    None means "fall through to the normal EVAL-001 verdict flow" (AC-3, AC-5).
+    """
+    if not args.persist:
+        return None
+
+    if runner_mode == "offline":
+        # Offline metrics are null/structural; NOT NULL columns forbid insertion (AC-5).
+        log.info("persist_skipped", reason="offline_mode")
+        return None
+
+    from eval.persist import (  # noqa: PLC0415
+        PersistError,
+        derive_golden_set_version,
+        persist_eval_run,
+    )
+
+    golden_set_version = derive_golden_set_version(args.golden_set)
+    row = _build_eval_run_row(run, golden_set_version)
+    if row is None:
+        # Abnormal live run: one or more metrics are None; must not insert NULL (AC-11).
+        log.warning("persist_failed")
+        return 4
+    try:
+        run_id = persist_eval_run(row)
+        log.info("persist_ok", id=run_id, golden_set_version=golden_set_version,
+                 finished_at=run.finished_at)
+    except PersistError:
+        log.warning("persist_failed")
+        return 4
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns exit code."""
     args = _parse_args(argv)
@@ -373,6 +453,10 @@ def main(argv: list[str] | None = None) -> int:
         runner_mode, started_at, git_sha, totals, breakdown, ragas_metrics, entry_results
     )
     write_run(output_path, run)
+
+    persist_exit = _maybe_persist(args, run, runner_mode)
+    if persist_exit is not None:
+        return persist_exit
 
     gate_a = apply_gate_a(ragas_metrics, runner_mode)
     if args.baseline is not None and baseline_run is None:

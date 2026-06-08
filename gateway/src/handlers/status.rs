@@ -83,9 +83,9 @@ async fn run_probes(state: Arc<AppState>) -> StatusResponse {
             gcs,
             workers,
         },
-        // checked_at is overwritten by HealthSnapshotCache::get_or_refresh
-        // to the pre-probe timestamp for cache consistency (AC-4).
-        checked_at: chrono::Utc::now().to_rfc3339(),
+        // Placeholder: HealthSnapshotCache::get_or_refresh always overwrites checked_at
+        // with the pre-probe timestamp before serving the snapshot (AC-4).
+        checked_at: String::new(),
     }
 }
 
@@ -160,29 +160,16 @@ async fn probe_gcs(state: Arc<AppState>) -> DepStatus {
         "https://storage.googleapis.com/storage/v1/b/{}/o?maxResults=1",
         state.config.gcs_bucket
     );
-    match state
-        .http
-        .get(url)
-        .bearer_auth(secrecy::ExposeSecret::expose_secret(&bearer))
-        .send()
-        .await
-    {
-        Ok(r) if r.status().is_success() => DepStatus {
-            status: "ok",
-            latency_ms: elapsed_ms(t0),
+    probe_http_endpoint(
+        HttpProbeArgs {
+            http: &state.http,
+            url,
+            bearer: &bearer,
+            dep: "gcs",
         },
-        _ => {
-            tracing::warn!(
-                event = "status.probe.down",
-                dep = "gcs",
-                reason = "request_failed"
-            );
-            DepStatus {
-                status: "down",
-                latency_ms: elapsed_ms(t0),
-            }
-        }
-    }
+        t0,
+    )
+    .await
 }
 
 /// Probe workers: GET `{workers_url}/health` with an ID token (AC-12 mirror of health.rs).
@@ -199,10 +186,37 @@ async fn probe_workers(state: Arc<AppState>) -> DepStatus {
             latency_ms: elapsed_ms(t0),
         };
     };
-    match state
+    let url = format!("{}/health", state.config.workers_url);
+    probe_http_endpoint(
+        HttpProbeArgs {
+            http: &state.http,
+            url,
+            bearer: &id_token,
+            dep: "workers",
+        },
+        t0,
+    )
+    .await
+}
+
+/// Arguments for `probe_http_endpoint` (keeps the call-site ≤4 params).
+struct HttpProbeArgs<'a> {
+    http: &'a reqwest::Client,
+    url: String,
+    bearer: &'a secrecy::SecretString,
+    dep: &'static str,
+}
+
+/// Shared HTTP GET helper used by both GCS and workers probes.
+///
+/// Sends an authenticated GET, returns `ok` on `2xx`, `down` on any error or
+/// non-`2xx` status.  Secrets are exposed only at the `.bearer_auth(…)` call
+/// site (secret-hygiene rule).
+async fn probe_http_endpoint(args: HttpProbeArgs<'_>, t0: Instant) -> DepStatus {
+    match args
         .http
-        .get(format!("{}/health", state.config.workers_url))
-        .bearer_auth(secrecy::ExposeSecret::expose_secret(&id_token))
+        .get(args.url)
+        .bearer_auth(secrecy::ExposeSecret::expose_secret(args.bearer))
         .send()
         .await
     {
@@ -213,7 +227,7 @@ async fn probe_workers(state: Arc<AppState>) -> DepStatus {
         _ => {
             tracing::warn!(
                 event = "status.probe.down",
-                dep = "workers",
+                dep = args.dep,
                 reason = "request_failed"
             );
             DepStatus {

@@ -1,26 +1,8 @@
-/* OBS-001 — styles for /observability page. Palette cohérente UI-001. */
+/* OBS-001 — page-specific styles for /observability. Shared nav lives in styles.css. */
 
-nav {
-  display: flex;
-  gap: 1.5rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--color-border, #e2e8f0);
-  background: var(--color-surface, #ffffff);
-}
-
-nav a {
-  color: var(--color-accent, #2563eb);
-  text-decoration: none;
-  font-weight: 500;
-}
-
-nav a:hover,
-nav a:focus {
-  text-decoration: underline;
-}
-
+/* Active-page highlight: only this page loads observability.css. */
 nav a[href="/observability"] {
-  color: var(--color-text, #1e293b);
+  color: var(--color-text);
   font-weight: 700;
 }
 

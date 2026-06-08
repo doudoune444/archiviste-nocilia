@@ -83,10 +83,11 @@ But : un header de navigation (`Chat | Observabilité`) + une page publique `/ob
 | Ticket | Scope | Dépend de | Difficulté |
 |---|---|---|---|
 | **OBS-001** | Nav header (`Chat \| Observabilité`) ajouté au chat + nouvelle page publique anonyme `/observability` + widget usage (compteur conversations, **agrégat sanitisé** via nouvel endpoint public `GET /v1/stats`). Vanilla HTML/JS. | — | facile |
-| **OBS-002** | Endpoint `GET /v1/status` : probes santé Mistral / GCS / Postgres / workers (timeouts, cache, pas de détail d'erreur interne exposé) + widget disponibilité sur la page. | OBS-001 (shell) | moyen |
+| **OBS-002** | Endpoint `GET /v1/status` : probes santé des 3 dépendances directes gateway (Postgres / GCS / workers-joignabilité), timeouts 2 s parallèles, cache 10 s, `200` always, pas de détail d'erreur interne exposé + widget disponibilité (`#health-widget`) sur la page. | OBS-001 | facile/moyen |
 | **OBS-003** | Persistence des résultats Ragas : table DB + write path depuis EVAL-001 (les évals ne sont aujourd'hui qu'un artefact CI non requêtable). **Bloqueur de OBS-004.** | — | difficile |
 | **OBS-004** | Panel qualité IA : faithfulness / answer_relevancy live consommés depuis OBS-003. | OBS-003 | difficile |
 | **OBS-005** | Observabilité infra (backend) : uptime checks GCP + log-based metrics + alert policies + OTel → Cloud Logging. (ex-« OBS-001 V2 », renommé pour éviter collision.) | — | moyen |
+| **OBS-006** | Route workers `GET /health/dependencies` (état Mistral + vue interne workers) + relais Mistral via les workers + maj contrat OpenAPI (`gateway-to-workers.yml`) + ajout **additif** de la clé `mistral` au body `GET /v1/status` (3 → 4 deps). | OBS-002 | moyen |
 
 **Décisions cadrées (conversation 2026-06-07)** :
 - Page + endpoints `/v1/stats` `/v1/status` = **publics anonymes**, mais données **sanitisées** : agrégats grossiers (compteurs arrondis/bucketisés, pas de per-user, pas de stack trace ni d'erreur interne brute).

@@ -1,4 +1,4 @@
-/* OBS-001 — page-specific styles for /observability. Shared nav lives in styles.css. */
+/* OBS-001 / OBS-002 — page-specific styles for /observability. Shared nav lives in styles.css. */
 
 /* Active-page highlight: only this page loads observability.css. */
 nav a[href="/observability"] {
@@ -15,4 +15,30 @@ nav a[href="/observability"] {
   font-size: 1.25rem;
   font-weight: 600;
   color: var(--color-text, #1e293b);
+}
+
+/* OBS-002: health widget */
+#health-widget {
+  margin: 2rem 0;
+  padding: 1.25rem 1.5rem;
+  background: var(--color-surface, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 0.5rem;
+  color: var(--color-text, #1e293b);
+}
+
+#health-widget p {
+  margin: 0.25rem 0;
+  font-size: 1rem;
+}
+
+/* Per-status colour classes (AC-13 / D-7: style via CSS, no inline style=). */
+.health-status--ok {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.health-status--degraded {
+  color: #b45309;
+  font-weight: 700;
 }

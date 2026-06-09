@@ -42,3 +42,18 @@ nav a[href="/observability"] {
   color: #b45309;
   font-weight: 700;
 }
+
+/* OBS-004: quality widget — mirrors #health-widget palette. */
+#quality-widget {
+  margin: 2rem 0;
+  padding: 1.25rem 1.5rem;
+  background: var(--color-surface, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 0.5rem;
+  color: var(--color-text, #1e293b);
+}
+
+#quality-widget p {
+  margin: 0.25rem 0;
+  font-size: 1rem;
+}

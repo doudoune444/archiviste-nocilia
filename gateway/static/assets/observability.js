@@ -125,6 +125,82 @@
     }
   }
 
+  // OBS-004 — quality widget for /observability.
+  // AC-8: fetch /v1/quality same-origin, render 4 metrics + freshness via textContent.
+  // AC-10: no_data → literal "Aucune évaluation disponible.".
+  // AC-11: any non-200 or error → literal "Données indisponibles." (distinct from no_data).
+  // AC-9: isolated try/catch — failure here must not affect #usage-widget / #health-widget.
+
+  const QUALITY_UNAVAILABLE_MSG = 'Données indisponibles.';
+  const QUALITY_NO_DATA_MSG = 'Aucune évaluation disponible.';
+
+  async function loadQuality() {
+    const widget = document.getElementById('quality-widget');
+    if (!widget) {
+      return;
+    }
+
+    let response;
+    try {
+      response = await fetch('/v1/quality', { credentials: 'same-origin' });
+    } catch (_networkError) {
+      // AC-11: network failure → unavailability message.
+      widget.textContent = QUALITY_UNAVAILABLE_MSG;
+      return;
+    }
+
+    if (!response.ok) {
+      // AC-11: any non-200 → unavailability message.
+      widget.textContent = QUALITY_UNAVAILABLE_MSG;
+      return;
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (_parseError) {
+      // AC-11: malformed JSON → unavailability message.
+      widget.textContent = QUALITY_UNAVAILABLE_MSG;
+      return;
+    }
+
+    // AC-10: no_data branch — literal message, no metrics.
+    if (data.status === 'no_data') {
+      widget.textContent = QUALITY_NO_DATA_MSG;
+      return;
+    }
+
+    // AC-8: 4 metrics must be numbers; guard against unexpected shape.
+    if (
+      typeof data.faithfulness !== 'number' ||
+      typeof data.answer_relevancy !== 'number' ||
+      typeof data.context_precision !== 'number' ||
+      typeof data.context_recall !== 'number'
+    ) {
+      widget.textContent = QUALITY_UNAVAILABLE_MSG;
+      return;
+    }
+
+    // AC-8: render 4 metrics + freshness line via textContent (never innerHTML).
+    const lines = [
+      'Fidélité : ' + data.faithfulness,
+      'Pertinence réponse : ' + data.answer_relevancy,
+      'Précision contexte : ' + data.context_precision,
+      'Rappel contexte : ' + data.context_recall,
+      'Version golden set : ' + data.golden_set_version,
+      'Dernière évaluation : ' + data.finished_at,
+    ];
+
+    widget.textContent = '';
+    for (const line of lines) {
+      const p = document.createElement('p');
+      // AC-8: textContent only — CSP-safe, no innerHTML.
+      p.textContent = line;
+      widget.appendChild(p);
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', loadStats);
   document.addEventListener('DOMContentLoaded', loadStatus);
+  document.addEventListener('DOMContentLoaded', loadQuality);
 }());

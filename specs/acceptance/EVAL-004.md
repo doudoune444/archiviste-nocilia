@@ -94,4 +94,4 @@ S — un run `workflow_dispatch` payant (geste humain, hors LOC), copie verbatim
 
 ## Status
 
-draft
+ready

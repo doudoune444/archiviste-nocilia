@@ -1,6 +1,6 @@
 # Vision — Archiviste Nocilia
 
-> Fichier = **ce qui reste à faire**. Le travail livré n'y figure pas. Mis à jour 2026-06-07.
+> Fichier = **ce qui reste à faire**. Le travail livré n'y figure pas. Mis à jour 2026-06-09.
 
 ## Pitch (1 phrase)
 
@@ -76,26 +76,36 @@ Infra en place : Cloud Run (gateway + workers, scale-to-zero, europe-west9) · C
 
 ## Ce qui reste à faire
 
-### EPIC OBS — Observabilité publique (priorité courante)
+### EPIC OBS — Observabilité publique
 
-But : un header de navigation (`Chat | Observabilité`) + une page publique `/observability` (anonyme) exposant la santé du système. Découpé en slices vertical ≤ 300 LOC, ship facile → difficile.
+But : page publique `/observability` (anonyme) exposant la santé du système. **OBS-001 → 004 livrés** (nav header, `GET /v1/stats`, `GET /v1/status` + `#health-widget`, `GET /v1/quality` + `#quality-widget`). Reste :
 
 | Ticket | Scope | Dépend de | Difficulté |
 |---|---|---|---|
-| **OBS-001** | Nav header (`Chat \| Observabilité`) ajouté au chat + nouvelle page publique anonyme `/observability` + widget usage (compteur conversations, **agrégat sanitisé** via nouvel endpoint public `GET /v1/stats`). Vanilla HTML/JS. | — | facile |
-| **OBS-002** | Endpoint `GET /v1/status` : probes santé des 3 dépendances directes gateway (Postgres / GCS / workers-joignabilité), timeouts 2 s parallèles, cache 10 s, `200` always, pas de détail d'erreur interne exposé + widget disponibilité (`#health-widget`) sur la page. | OBS-001 | facile/moyen |
-| **OBS-003** | Persistence des résultats Ragas : table DB + write path depuis EVAL-001 (les évals ne sont aujourd'hui qu'un artefact CI non requêtable). **Bloqueur de OBS-004.** | — | difficile |
-| **OBS-004** | Panel qualité IA : faithfulness / answer_relevancy live consommés depuis OBS-003. | OBS-003 | difficile |
-| **OBS-005** | Observabilité infra (backend) : uptime checks GCP + log-based metrics + alert policies + OTel → Cloud Logging. (ex-« OBS-001 V2 », renommé pour éviter collision.) | — | moyen |
-| **OBS-006** | Route workers `GET /health/dependencies` (état Mistral + vue interne workers) + relais Mistral via les workers + maj contrat OpenAPI (`gateway-to-workers.yml`) + ajout **additif** de la clé `mistral` au body `GET /v1/status` (3 → 4 deps). | OBS-002 | moyen |
+| **OBS-005** | Observabilité infra (backend) : uptime checks GCP + log-based metrics + alert policies + OTel → Cloud Logging. | — | moyen |
+| **OBS-006** | Route workers `GET /health/dependencies` (état Mistral + vue interne workers) + relais Mistral via les workers + maj contrat OpenAPI (`gateway-to-workers.yml`) + ajout **additif** de la clé `mistral` au body `GET /v1/status` (3 → 4 deps). Spec livrée, impl en cours (`feat/OBS-006-mistral-health`). | OBS-002 | moyen |
 
-**Décisions cadrées (conversation 2026-06-07)** :
-- Page + endpoints `/v1/stats` `/v1/status` = **publics anonymes**, mais données **sanitisées** : agrégats grossiers (compteurs arrondis/bucketisés, pas de per-user, pas de stack trace ni d'erreur interne brute).
-- Nav header partagé = **premier composant réutilisable** + 3ᵉ page → **flag ADR-0005 trigger** (vanilla vs framework). Recommandation : rester vanilla (JS < 500 LOC). À arbitrer au `/spec`.
-- **Usage « qualité réponse » live** : aucun score per-réponse n'existe (seulement Ragas offline). Hors OBS-001 ; un éventuel feedback thumbs-up = ticket futur dédié.
-- AI-quality (OBS-004) déféré : pas de source de données live tant que OBS-003 (persistence eval) n'est pas livré.
+Données publiques anonymes restent **sanitisées** : agrégats grossiers, pas de per-user, pas de stack trace ni d'erreur interne brute.
 
-Prochaine action : `/spec OBS-001`.
+### EPIC OBS-EVAL — Eval prod live (alimente `#quality-widget`)
+
+But : OBS-004 affiche `GET /v1/quality`, mais **rien n'écrit** de run `runner_mode='live'` en prod → le widget renvoie `{"status":"no_data"}`. Cette epic livre le **write path** : un Cloud Run Job exécute le runner Ragas contre les workers prod et persiste **UNE** ligne agrégée `eval_runs`. Spanne code + infra → 3 slices (chacune testable indépendamment).
+
+| Ticket | Scope | Dépend de | Difficulté |
+|---|---|---|---|
+| **OBS-007** | **Runner OIDC auth** : `eval/clients.py` + `ragas_runner.py` attachent un ID token Google (metadata server) aux appels workers IAM-gated, + dép `google-auth`. Sans ça, l'appel prod → **403** (workers exigent `run.invoker`, pas d'`allUsers`). Code pur, unit-testable (mock token). | — | moyen |
+| **OBS-008** | **Image eval-capable** : nouveau `infra/docker/eval.Dockerfile` (package `eval/` + extras `ragas`/`datasets`/`langchain-openai`) + build/push dans `deploy.yml` → Artifact Registry. `workers:latest` ne contient PAS le runner (son Dockerfile copie `workers/` seul + `uv sync --no-dev`). | — | facile |
+| **OBS-009** | **Cloud Run Job `archiviste-eval`** (miroir `archiviste-ingest`) : DSN **psycopg2** (PAS `+asyncpg`), `run.invoker` (déjà sur `archiviste_runtime`), secrets Secret Manager (`OPENAI_API_KEY`, `LLM_API_KEY`/Mistral, `RAGAS_JUDGE_PROVIDER=openai`), golden set tiré **au runtime depuis GCS privé**, persist inconditionnel, trigger manuel `gcloud run jobs execute` + runbook. | OBS-007, OBS-008 | difficile |
+
+**Décisions cadrées (conversation 2026-06-09)** :
+- Trigger = **manuel** `gcloud run jobs execute archiviste-eval` ; pas de GHA/scheduler (ticket OPS-* aval).
+- Golden set **complet** `specs/golden_qa.jsonl` (comparabilité `golden_set_version` avec les runs `eval.yml`) ; pas de cap coût codé (borné par taille set + timeout Job).
+- **Persist inconditionnel** (objectif = tuer `no_data`) ; pas de gate seuils, pas de `--baseline`.
+- Golden set **reste privé/local** (gitignore : spoilers narratifs, repo public à venir) → livré au Job via **GCS privé au runtime**, jamais via image ni GitHub.
+- DSN Job = **psycopg2** : `eval/persist.py` `psycopg2.connect()` rejette le scheme `+asyncpg` du template ingest.
+- **Split en 3** : l'epic spanne code (OBS-007) + infra build (OBS-008) + infra runtime (OBS-009) ; bundler casserait la revue et la testabilité indépendante.
+
+Prochaine action : `/spec OBS-007`.
 
 ### OPS-001b — Load tests live + rapport SLO
 

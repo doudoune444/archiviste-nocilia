@@ -211,6 +211,7 @@ def _build_run(
     breakdown: dict[str, object],
     ragas_metrics: dict[str, float | None],
     entry_results: list[EntryResult],
+    judge_identity: dict[str, str] | None = None,
 ) -> RunFile:
     finished_at = datetime.datetime.now(datetime.UTC).isoformat()
     return RunFile(
@@ -223,6 +224,7 @@ def _build_run(
         breakdown_by_mode=breakdown,
         metrics=ragas_metrics,
         entries=entry_results,
+        judge=judge_identity,
     )
 
 
@@ -265,17 +267,20 @@ def _run_all_entries(
 def _resolve_ragas_metrics(
     runner_mode: Literal["live", "offline"],
     entry_results: list[EntryResult],
-) -> dict[str, float | None]:
-    """Return Ragas metrics for live mode; null-filled dict for offline."""
+) -> tuple[dict[str, float | None], dict[str, str] | None]:
+    """Return (ragas_metrics, judge_identity) for live mode; null-filled/None for offline."""
     if runner_mode == "live":
         canon_ok = [e for e in entry_results if e.mode == "canon" and e.status == "ok"]
         return compute_ragas_metrics(canon_ok)
-    return {
-        "faithfulness": None,
-        "answer_relevancy": None,
-        "context_precision": None,
-        "context_recall": None,
-    }
+    return (
+        {
+            "faithfulness": None,
+            "answer_relevancy": None,
+            "context_precision": None,
+            "context_recall": None,
+        },
+        None,
+    )
 
 
 def _handle_auto_create_baseline(
@@ -483,11 +488,12 @@ def main(
     )
     total_entries = len(entry_results)
     breakdown = aggregate_breakdown(entry_results)
-    ragas_metrics = _resolve_ragas_metrics(runner_mode, entry_results)
+    ragas_metrics, judge_identity = _resolve_ragas_metrics(runner_mode, entry_results)
     totals = RunTotals(entries=total_entries, ok=total_entries - error_count, errors=error_count)
     git_sha = _get_git_sha(repo_path)
     run = _build_run(
-        runner_mode, started_at, git_sha, totals, breakdown, ragas_metrics, entry_results
+        runner_mode, started_at, git_sha, totals, breakdown, ragas_metrics, entry_results,
+        judge_identity,
     )
     write_run(output_path, run)
 

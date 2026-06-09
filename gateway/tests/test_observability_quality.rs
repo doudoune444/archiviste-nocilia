@@ -123,7 +123,8 @@ async fn insert_live_run(
          (id, git_sha, runner_mode, golden_set_version, \
           faithfulness, answer_relevancy, context_precision, context_recall, \
           entries_total, entries_ok, entries_errors, started_at, finished_at) \
-         VALUES ($1, 'abc123', 'live', $2, $3, $4, $5, $6, 10, 10, 0, \
+         VALUES ($1, 'abc123', 'live', $2, \
+         $3::numeric, $4::numeric, $5::numeric, $6::numeric, 10, 10, 0, \
          NOW() - INTERVAL '1 hour', \
          '2026-01-01 00:00:00+00'::timestamptz + ($7 || ' seconds')::interval)",
     )

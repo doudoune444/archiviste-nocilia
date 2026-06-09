@@ -7,8 +7,8 @@ Le mode live de l'eval runner appelle aujourd'hui `ragas.evaluate()` sans passer
 ## Acceptance criteria
 
 - AC-1 : `eval/metrics.py` expose une fonction de construction du juge qui, selon `RAGAS_JUDGE_PROVIDER` (valeurs `mistral` | `openai`, défaut `mistral` en l'absence de la variable), retourne le couple `(llm, embeddings)` à passer à `ragas.evaluate(llm=..., embeddings=...)`.
-- AC-2 : Pour `RAGAS_JUDGE_PROVIDER=mistral` (ou non-défini), la fonction construit un `ragas.llms.LangchainLLMWrapper` enveloppant un `langchain_mistralai.ChatMistralAI` et un `langchain_mistralai.MistralAIEmbeddings`.
-- AC-3 : Pour `RAGAS_JUDGE_PROVIDER=openai`, la fonction construit l'équivalent OpenAI (`langchain_openai.ChatOpenAI` enveloppé en `LangchainLLMWrapper` + `langchain_openai.OpenAIEmbeddings`).
+- AC-2 : Pour `RAGAS_JUDGE_PROVIDER=mistral` (ou non-défini), la fonction construit un `ragas.llms.LangchainLLMWrapper` enveloppant un `langchain_mistralai.ChatMistralAI`, et un `ragas.embeddings.LangchainEmbeddingsWrapper` enveloppant un `langchain_mistralai.MistralAIEmbeddings` (le wrapper embeddings est requis par ragas ≥0.4, cf OQ-3).
+- AC-3 : Pour `RAGAS_JUDGE_PROVIDER=openai`, la fonction construit l'équivalent OpenAI (`langchain_openai.ChatOpenAI` enveloppé en `LangchainLLMWrapper` + `langchain_openai.OpenAIEmbeddings` enveloppé en `ragas.embeddings.LangchainEmbeddingsWrapper`).
 - AC-4 : Une valeur de `RAGAS_JUDGE_PROVIDER` hors `{mistral, openai}` fait lever une erreur explicite citant la valeur reçue et l'ensemble des valeurs autorisées ; aucun appel `ragas.evaluate()` n'a lieu.
 - AC-5 : `ragas.evaluate()` est invoqué avec les objets `llm=` et `embeddings=` produits par la fonction de sélection (le run live n'utilise plus le juge OpenAI implicite par défaut de Ragas).
 - AC-6 : Le modèle chat du juge `mistral` est par défaut un snapshot daté pinné (ex. `mistral-large-2411`, id exact confirmé à l'impl), surchargeable via `RAGAS_JUDGE_MODEL` ; le modèle d'embeddings du juge `mistral` est `mistral-embed` (pas de snapshot daté existant, modèle stable), surchargeable via `RAGAS_JUDGE_EMBEDDINGS_MODEL`.

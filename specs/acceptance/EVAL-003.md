@@ -88,4 +88,4 @@ S — une fonction de sélection (~30-50 lignes) + câblage `llm=`/`embeddings=`
 
 ## Status
 
-draft
+ready

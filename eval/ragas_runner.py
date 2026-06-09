@@ -6,6 +6,7 @@ Exit codes:
   2 — schema/CLI error (bad golden set, missing --mode, invalid baseline)
   3 — workers unreachable at startup
   4 — persist failure (DB unreachable, constraint, timeout)
+  5 — OIDC token fetch failure (authenticated target)
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 import httpx
 import structlog
+from pydantic import SecretStr
 
 from eval.baseline_skip import should_skip_gate_b
 from eval.clients import EntryError, GenerateClient, RetrieveClient
@@ -34,6 +36,13 @@ from eval.metrics import (
     compute_context_recall_structural,
     compute_keyword_overlap,
     compute_ragas_metrics,
+)
+from eval.oidc import (
+    IdTokenProvider,
+    MetadataIdTokenProvider,
+    OidcTokenError,
+    derive_audience,
+    is_authenticated_target,
 )
 from eval.run_writer import EntryResult, RunFile, RunTotals, write_run
 from eval.stub_llm import RetrievedChunk as StubChunk
@@ -81,9 +90,15 @@ def _get_git_sha(repo_path: Path) -> str:
         return "unknown"
 
 
-def _check_workers_reachable(workers_url: str) -> bool:
+def _check_workers_reachable(
+    workers_url: str,
+    auth_header: SecretStr | None = None,
+) -> bool:
+    headers: dict[str, str] = {}
+    if auth_header is not None:
+        headers["Authorization"] = f"Bearer {auth_header.get_secret_value()}"
     try:
-        resp = httpx.get(f"{workers_url}/healthz", timeout=5.0)
+        resp = httpx.get(f"{workers_url}/healthz", headers=headers, timeout=5.0)
         return resp.is_success
     except (httpx.HTTPError, OSError):
         return False
@@ -413,8 +428,16 @@ def _maybe_persist(
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point. Returns exit code."""
+def main(
+    argv: list[str] | None = None,
+    provider: IdTokenProvider | None = None,
+) -> int:
+    """CLI entry point. Returns exit code.
+
+    The optional *provider* parameter is a test seam (D-4): when None the real
+    MetadataIdTokenProvider is used; tests inject a fake to avoid metadata calls.
+    AC-3: no new CLI flag/env — auth decision derived from --workers-url only.
+    """
     args = _parse_args(argv)
     runner_mode: Literal["live", "offline"] = args.mode
     workers_url: str = args.workers_url
@@ -429,7 +452,21 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"schema error: {exc}\n")
         return 2
 
-    if not _check_workers_reachable(workers_url):
+    # AC-6, D-3: fetch OIDC token fail-fast before any entry or healthz probe
+    auth_header: SecretStr | None = None
+    if is_authenticated_target(workers_url):
+        audience = derive_audience(workers_url)
+        effective_provider: IdTokenProvider = (
+            provider if provider is not None else MetadataIdTokenProvider()
+        )
+        try:
+            auth_header = effective_provider.fetch(audience)
+        except OidcTokenError:
+            # AC-7: log audience only — no token bytes
+            log.warning("oidc_token_failed", audience=audience)
+            return 5
+
+    if not _check_workers_reachable(workers_url, auth_header):
         sys.stderr.write(f"workers unreachable at {workers_url}\n")
         return 3
 
@@ -438,8 +475,8 @@ def main(argv: list[str] | None = None) -> int:
         / f"{datetime.datetime.now(datetime.UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     )
     baseline_run = _load_baseline(args.baseline)
-    retrieve_client = RetrieveClient(base_url=workers_url)
-    generate_client = GenerateClient(base_url=workers_url)
+    retrieve_client = RetrieveClient(base_url=workers_url, auth_header=auth_header)
+    generate_client = GenerateClient(base_url=workers_url, auth_header=auth_header)
 
     entry_results, error_count = _run_all_entries(
         golden_entries, runner_mode, retrieve_client, generate_client

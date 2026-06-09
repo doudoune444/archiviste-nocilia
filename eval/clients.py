@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import httpx
+from pydantic import SecretStr
 
 RETRIEVE_TIMEOUT_SECONDS = 60
 GENERATE_TIMEOUT_SECONDS = 60
@@ -52,6 +53,7 @@ class RetrieveClient:
 
     base_url: str
     timeout: float = RETRIEVE_TIMEOUT_SECONDS
+    auth_header: SecretStr | None = field(default=None)
 
     def search(
         self,
@@ -59,7 +61,9 @@ class RetrieveClient:
         request_id: str,
     ) -> RetrieveResponse | EntryError:
         """Call POST /v1/retrieve and return chunks or an EntryError."""
-        headers = {"X-Request-Id": request_id}
+        headers: dict[str, str] = {"X-Request-Id": request_id}
+        if self.auth_header is not None:
+            headers["Authorization"] = f"Bearer {self.auth_header.get_secret_value()}"
         try:
             resp = httpx.post(
                 f"{self.base_url}/v1/retrieve",
@@ -95,6 +99,7 @@ class GenerateClient:
 
     base_url: str
     timeout: float = GENERATE_TIMEOUT_SECONDS
+    auth_header: SecretStr | None = field(default=None)
 
     def generate(
         self,
@@ -103,7 +108,9 @@ class GenerateClient:
         contexts: list[str] | None = None,
     ) -> GenerateResponse | EntryError:
         """Call POST /v1/generate and return answer or an EntryError."""
-        headers = {"X-Request-Id": request_id}
+        headers: dict[str, str] = {"X-Request-Id": request_id}
+        if self.auth_header is not None:
+            headers["Authorization"] = f"Bearer {self.auth_header.get_secret_value()}"
         payload: dict[str, object] = {
             "query": query,
             "top_k": RETRIEVE_TOP_K,

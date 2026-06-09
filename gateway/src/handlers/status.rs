@@ -13,10 +13,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::{extract::State, Json};
+use axum::{extract::State, response::Response};
 use serde::Serialize;
 
-use crate::state::AppState;
+use crate::{handlers::json_utf8, state::AppState};
 
 /// Hard per-probe timeout (AC-8 / D-4).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -56,12 +56,12 @@ pub struct StatusResponse {
 ///
 /// Delegates to the `HealthSnapshotCache` on `AppState`; the cache runs the
 /// three probes in parallel when a fresh snapshot is needed (AC-9/AC-10).
-pub async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
+pub async fn status(State(state): State<Arc<AppState>>) -> Response {
     let snapshot = state
         .health_cache
         .get_or_refresh(|| run_probes(Arc::clone(&state)))
         .await;
-    Json(snapshot)
+    json_utf8(snapshot)
 }
 
 /// Run all 3 probes in parallel (AC-9) and build a `StatusResponse`.

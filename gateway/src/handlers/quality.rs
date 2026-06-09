@@ -9,14 +9,14 @@ use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{Extension, State},
-    Json,
+    response::Response,
 };
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::FromRow;
 
-use crate::{errors::ApiError, state::AppState, RequestId};
+use crate::{errors::ApiError, handlers::json_utf8, state::AppState, RequestId};
 
 /// Full row returned by `SELECT … LIMIT 1` when a live run exists (AC-1).
 #[derive(Debug, FromRow)]
@@ -87,7 +87,7 @@ pub enum QualityResponse {
 pub async fn quality(
     Extension(req_id): Extension<RequestId>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<QualityResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let request_id = &req_id.0;
     let start = Instant::now();
 
@@ -117,7 +117,7 @@ pub async fn quality(
             latency_ms,
             has_data = true,
         );
-        Ok(Json(QualityResponse::Metrics(QualityMetrics {
+        Ok(json_utf8(QualityResponse::Metrics(QualityMetrics {
             faithfulness: r.faithfulness,
             answer_relevancy: r.answer_relevancy,
             context_precision: r.context_precision,
@@ -132,7 +132,7 @@ pub async fn quality(
             latency_ms,
             has_data = false,
         );
-        Ok(Json(QualityResponse::NoData(NoDataResponse {
+        Ok(json_utf8(QualityResponse::NoData(NoDataResponse {
             status: "no_data",
         })))
     }

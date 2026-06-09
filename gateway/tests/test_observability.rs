@@ -597,9 +597,18 @@ async fn ac4_ac5_stats_zero_conversations(pool: sqlx::PgPool) {
         .expect("content-type missing")
         .to_str()
         .unwrap();
-    assert!(
-        ct.starts_with("application/json"),
-        "expected application/json, got: {ct}"
+    assert_eq!(
+        ct, "application/json; charset=utf-8",
+        "expected application/json; charset=utf-8, got: {ct}"
+    );
+    // Exactly one content-type header (no duplicate).
+    assert_eq!(
+        resp.headers()
+            .get_all(axum::http::header::CONTENT_TYPE)
+            .iter()
+            .count(),
+        1,
+        "must have exactly one content-type header"
     );
 
     let json = body_json(resp).await;

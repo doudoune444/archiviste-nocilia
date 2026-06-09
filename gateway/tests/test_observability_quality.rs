@@ -240,6 +240,28 @@ async fn ac1_ac3_ac6_one_live_row_six_keys(pool: sqlx::PgPool) {
     let resp = get_anon(router(state), "/v1/quality").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
+
+    // AC-1 charset: content-type must be application/json; charset=utf-8.
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .expect("content-type missing on 200")
+        .to_str()
+        .unwrap();
+    assert_eq!(
+        ct, "application/json; charset=utf-8",
+        "AC-1: content-type must be application/json; charset=utf-8, got: {ct}"
+    );
+    // Exactly one content-type header (no duplicate).
+    assert_eq!(
+        resp.headers()
+            .get_all(axum::http::header::CONTENT_TYPE)
+            .iter()
+            .count(),
+        1,
+        "AC-1: must have exactly one content-type header"
+    );
+
     let json = body_json(resp).await;
 
     // AC-1: exactly 6 keys.

@@ -8,12 +8,12 @@ use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{Extension, State},
-    Json,
+    response::Response,
 };
 use serde::Serialize;
 use sqlx::FromRow;
 
-use crate::{errors::ApiError, state::AppState, RequestId};
+use crate::{errors::ApiError, handlers::json_utf8, state::AppState, RequestId};
 
 /// Response body for `GET /v1/stats` (AC-4: exactly one field).
 #[derive(Debug, Serialize)]
@@ -41,7 +41,7 @@ struct CountRow {
 pub async fn stats(
     Extension(req_id): Extension<RequestId>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<StatsResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let request_id = &req_id.0;
     let start = Instant::now();
 
@@ -65,5 +65,5 @@ pub async fn stats(
         conversation_count,
     );
 
-    Ok(Json(StatsResponse { conversation_count }))
+    Ok(json_utf8(StatsResponse { conversation_count }))
 }

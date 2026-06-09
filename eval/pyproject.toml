@@ -13,6 +13,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# live: runtime deps for live eval mode (API-only: Ragas + OpenAI judge + Mistral generate).
+# Installed in the Docker image via --extra live --no-dev (no test/lint tools baked).
+# Also listed in dev so the PR lint/test path (uv run --extra dev) stays unchanged.
+live = [
+    "ragas>=0.2",
+    "datasets>=3.2",
+    "langchain-openai>=0.2",
+]
 dev = [
     "pytest>=8.3",
     "pytest-httpserver>=1.1",

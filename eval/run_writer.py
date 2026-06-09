@@ -59,6 +59,8 @@ class RunFile:
     breakdown_by_mode: dict[str, object]
     metrics: dict[str, float | None]
     entries: list[EntryResult]
+    # Additive EVAL-003 AC-10: judge identity (provider + chat_model). None for offline runs.
+    judge: dict[str, str] | None = None
 
 
 def _collect_secret_values() -> list[str]:
@@ -80,7 +82,7 @@ def _redact_raw(raw: str, secrets: list[str]) -> str:
 
 def _build_run_dict(run: RunFile) -> dict[str, object]:
     """Serialize RunFile to a plain dict matching AC-5 schema."""
-    return {
+    run_dict: dict[str, object] = {
         "mode": run.mode,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
@@ -107,6 +109,10 @@ def _build_run_dict(run: RunFile) -> dict[str, object]:
             for e in run.entries
         ],
     }
+    # AC-10: emit judge identity only when set (live path); omit for offline (judge=None).
+    if run.judge is not None:
+        run_dict["judge"] = run.judge
+    return run_dict
 
 
 def write_run(path: Path, run: RunFile) -> None:

@@ -20,6 +20,7 @@ live = [
     "ragas>=0.2",
     "datasets>=3.2",
     "langchain-openai>=0.2",
+    "langchain-mistralai>=0.2",
 ]
 dev = [
     "pytest>=8.3",
@@ -30,6 +31,7 @@ dev = [
     "ragas>=0.2",
     "datasets>=3.2",
     "langchain-openai>=0.2",
+    "langchain-mistralai>=0.2",
     "pip-audit>=2.7",
     "types-requests>=2.32",
 ]
@@ -68,7 +70,7 @@ warn_return_any = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["ragas", "ragas.*", "datasets", "datasets.*", "structlog", "structlog.*", "psycopg2", "psycopg2.*"]
+module = ["ragas", "ragas.*", "datasets", "datasets.*", "structlog", "structlog.*", "psycopg2", "psycopg2.*", "langchain_mistralai", "langchain_mistralai.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

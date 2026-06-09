@@ -20,8 +20,12 @@ python eval/ragas_runner.py --mode live --set specs/golden_qa.jsonl \
 |---|---|---|
 | `WORKERS_URL` | No (default `http://localhost:8000`) | Workers base URL |
 | `LLM_PROVIDER` | Live only (default `mistral`) | Provider for `/v1/generate` calls |
-| `RAGAS_JUDGE_PROVIDER` | Live only (default `openai`) | LLM judge provider for Ragas metrics |
-| `LLM_API_KEY` | Live only | API key for the LLM judge (Ragas) |
+| `RAGAS_JUDGE_PROVIDER` | Live only (default **`mistral`**) | LLM judge provider for Ragas metrics (`mistral`\|`openai`) |
+| `RAGAS_JUDGE_MODEL` | No (default `mistral-large-2411`) | Chat model snapshot for the Ragas judge. Pinned dated snapshot prevents silent score drift. Override to `mistral-large-latest` etc. |
+| `RAGAS_JUDGE_EMBEDDINGS_MODEL` | No (default `mistral-embed`) | Embeddings model for the Ragas judge. |
+| `LLM_API_KEY` | Live only | API key for the LLM judge (Ragas). Read as `pydantic.SecretStr` — never logged or written to the run file. |
+
+> **EVAL-001 AC-14 supersession**: EVAL-001 documented the intent of a configurable Ragas judge with an OpenAI default. EVAL-003 implements that intent with Mistral as the effective default (`RAGAS_JUDGE_PROVIDER=mistral`, pinned snapshot `mistral-large-2411`). The env var name is unchanged; only the default value changes from `openai` to `mistral`.
 
 ## Exit Codes
 
@@ -55,6 +59,7 @@ quality measurement.
 ## Estimated Cost (live mode)
 
 ~$0.01/sample with OpenAI gpt-4o as Ragas judge (46 entries ≈ $0.46/run).
+Mistral (`mistral-large-2411`, default): pricing per Mistral API docs — costs vary, first live run required for exact estimate.
 
 ## Baseline Management
 

@@ -188,14 +188,21 @@ dev = [
     { name = "ruff" },
     { name = "types-requests" },
 ]
+live = [
+    { name = "datasets" },
+    { name = "langchain-openai" },
+    { name = "ragas" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'dev'", specifier = ">=3.2" },
+    { name = "datasets", marker = "extra == 'live'", specifier = ">=3.2" },
     { name = "google-auth", specifier = ">=2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.122" },
     { name = "langchain-openai", marker = "extra == 'dev'", specifier = ">=0.2" },
+    { name = "langchain-openai", marker = "extra == 'live'", specifier = ">=0.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
@@ -203,11 +210,12 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "pytest-httpserver", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "ragas", marker = "extra == 'dev'", specifier = ">=0.2" },
+    { name = "ragas", marker = "extra == 'live'", specifier = ">=0.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.32" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["live", "dev"]
 
 [[package]]
 name = "ast-serialize"

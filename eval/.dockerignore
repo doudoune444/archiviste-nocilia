@@ -1,0 +1,9 @@
+tests/
+runs/
+fixtures/
+__pycache__/
+*.pyc
+*.pyo
+seed_test_corpus.py
+.venv/
+.git/

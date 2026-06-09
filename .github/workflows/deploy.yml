@@ -62,6 +62,23 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # OBS-008: build and push eval runner image on every merge to main.
+      # Reuses repo archiviste (AC-8: no new Terraform resource). Placed among the
+      # build steps; a build/push failure here fails the job (AC-7) and, being upstream
+      # of the canary/promote steps, will gate the gateway/workers deploy too.
+      - name: build and push eval
+        uses: docker/build-push-action@v6
+        with:
+          context: eval
+          file: infra/docker/eval.Dockerfile
+          push: true
+          # :sha = immutable ref; :latest = moving pointer for OBS-009 Cloud Run Job.
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/eval:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/eval:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       # AC-12 step 3: deploy canary revisions with --no-traffic.
       - name: deploy gateway canary (no traffic)
         id: deploy_gateway

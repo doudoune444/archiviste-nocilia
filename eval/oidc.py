@@ -10,12 +10,20 @@ Responsibilities:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
 
 from google.auth.transport.requests import Request
 from google.oauth2.id_token import fetch_id_token
 from pydantic import SecretStr
+
+# Cast untyped google-auth function to a typed Callable so that call sites
+# satisfy mypy --strict (no-untyped-call) without relaxing any strict flag.
+# google.oauth2.id_token has no type stubs; the cast is the typed boundary.
+_fetch_id_token: Callable[[Request, str], str] = cast(
+    "Callable[[Request, str], str]", fetch_id_token
+)
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -83,7 +91,7 @@ class MetadataIdTokenProvider:
         Raises OidcTokenError if the metadata server is unreachable or returns an error.
         """
         try:
-            token: str = cast(str, fetch_id_token(Request(), audience))
+            token: str = _fetch_id_token(Request(), audience)
         except Exception as exc:
             raise OidcTokenError(f"failed to fetch OIDC token for {audience!r}") from exc
         return SecretStr(token)

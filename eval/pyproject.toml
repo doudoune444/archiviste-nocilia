@@ -66,7 +66,3 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["google.auth", "google.auth.*", "google.oauth2", "google.oauth2.*"]
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["eval.oidc"]
-disallow_untyped_calls = false

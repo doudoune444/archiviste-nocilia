@@ -4,6 +4,14 @@ Uses the injected `provider` param on main() to avoid real metadata calls (AC-5)
 Tests run in-process (no subprocess) so the injected fake provider is reachable — per
 plan Risk #1: confirmed approach for the exit-5 failure path (AC-3 preserved: no new
 CLI flag/env).
+
+AC-11(b) coverage note: test_token_not_in_any_output_on_success_path exercises the
+path where a token IS produced (SpyProvider returns FAKE_TOKEN_SENTINEL wrapped in
+SecretStr) and used (attached as Bearer header to mocked worker calls).  The test
+fails if redaction regresses — e.g. if auth_header were logged with its raw value
+instead of through SecretStr, or if get_secret_value() output were written to the
+run file or any log.  The existing test_token_not_in_stdout_stderr_on_exit_5 covers
+the failure path (no token produced); both tests are required for full AC-11 coverage.
 """
 
 from __future__ import annotations
@@ -198,3 +206,77 @@ def test_token_not_in_stdout_stderr_on_exit_5(
     captured = capsys.readouterr()
     assert FAKE_TOKEN_SENTINEL not in captured.out, "token leaked in stdout"
     assert FAKE_TOKEN_SENTINEL not in captured.err, "token leaked in stderr"
+
+
+# ---------------------------------------------------------------------------
+# AC-11(b): token sentinel absent from ALL outputs on the SUCCESS path
+#
+# This test covers the case where a token IS produced (SpyProvider returns
+# FAKE_TOKEN_SENTINEL) and IS used (Bearer header attached on every workers
+# call).  It would fail if redaction broke — e.g. if auth_header were passed
+# to structlog without SecretStr wrapping, or if run-file JSON serialised the
+# raw SecretStr value instead of redacting it.
+# ---------------------------------------------------------------------------
+
+
+def test_token_not_in_any_output_on_success_path(
+    tmp_path: Path,
+    httpserver: HTTPServer,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-11(b): when token is produced and used, sentinel must not appear anywhere.
+
+    Redaction regression detector: if auth_header.get_secret_value() were logged
+    directly (bypassing SecretStr), or if the run-file writer serialised the raw
+    token, FAKE_TOKEN_SENTINEL would appear and the assertion would catch it.
+    """
+    # Serve mocked workers endpoints so the run completes past token fetch.
+    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/v1/retrieve").respond_with_json({
+        "chunks": [{"source_path": "intro_p01", "text": "archiviste nocilia text here"}]
+    })
+
+    workers_url = httpserver.url_for("")  # http://localhost:NNNN
+
+    # Patch is_authenticated_target to treat the httpserver URL as an authed target
+    # so the provider IS invoked and the token IS fetched and attached.
+    # This isolates the redaction invariant from the scheme/host routing logic.
+    import eval.ragas_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "is_authenticated_target", lambda _url: True)
+
+    spy = _SpyProvider()  # returns SecretStr(FAKE_TOKEN_SENTINEL)
+    output_path = tmp_path / "run.json"
+    golden = FIXTURES / "golden_valid.jsonl"
+
+    exit_code = main(
+        argv=[
+            "--mode", "offline",
+            "--set", str(golden),
+            "--output", str(output_path),
+            "--workers-url", workers_url,
+        ],
+        provider=spy,
+    )
+
+    # Token must have been fetched (provider was called) — otherwise the test is vacuous.
+    assert spy.calls, "SpyProvider was not called; test is vacuous — check monkeypatch"
+
+    captured = capsys.readouterr()
+    all_text_output = captured.out + captured.err
+
+    # AC-11(b): sentinel must not appear in stdout or stderr
+    assert FAKE_TOKEN_SENTINEL not in all_text_output, (
+        "token sentinel leaked into stdout/stderr — redaction broken"
+    )
+
+    # AC-11(b): sentinel must not appear in the run-file JSON
+    if output_path.exists():
+        run_file_content = output_path.read_text(encoding="utf-8")
+        assert FAKE_TOKEN_SENTINEL not in run_file_content, (
+            "token sentinel leaked into run-file — redaction broken"
+        )
+
+    # Run must succeed (exit 0 or 1 for gate violations; not exit 5).
+    assert exit_code != 5, f"unexpected exit 5; run failed on auth path: {all_text_output!r}"

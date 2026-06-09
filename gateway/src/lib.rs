@@ -531,10 +531,12 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Public API routes (AC-11: marker #[public] — all handlers accept anonymous).
     // OBS-001: /v1/stats mounted here — no auth gate (AC-6).
     // OBS-002: /v1/status mounted here — anonymous, no auth guard (AC-7).
+    // OBS-004: /v1/quality mounted here — anonymous, no auth guard (AC-5).
     let public_api = Router::new()
         .route("/v1/me", get(routes::me::me))
         .route("/v1/stats", get(handlers::stats::stats))
-        .route("/v1/status", get(handlers::status::status));
+        .route("/v1/status", get(handlers::status::status))
+        .route("/v1/quality", get(handlers::quality::quality));
 
     // Author-gated dashboard API routes (UI-002 PR1 — AC-5..AC-12, AC-19..AC-23).
     // `RequireAuthor` extractor gates each handler — no `#[public]` marker (AC-11).

@@ -95,7 +95,7 @@ fn assert_security_headers(resp: &axum::response::Response) {
 // AC-1 / AC-2 / AC-5 (happy-path shape + sanitisation + 200)
 // ---------------------------------------------------------------------------
 
-/// AC-1: GET /v1/status → 200, content-type application/json, body has 3 deps + no mistral.
+/// AC-1: GET /v1/status → 200, content-type application/json; charset=utf-8, body has 3 deps + no mistral.
 /// AC-2: each dep has exactly status + latency_ms; status ∈ {ok,down}; no host/url/msg.
 /// AC-5: 200 OK even when all deps down (db_pool=None → degraded).
 #[tokio::test]
@@ -110,15 +110,25 @@ async fn ac1_ac2_ac5_status_shape_200_sanitised() {
         "AC-5: must be 200 even degraded"
     );
 
+    // AC-1 charset: content-type must be exactly application/json; charset=utf-8.
     let ct = resp
         .headers()
         .get("content-type")
         .expect("content-type missing")
         .to_str()
         .unwrap();
-    assert!(
-        ct.starts_with("application/json"),
-        "AC-1: content-type must be JSON, got: {ct}"
+    assert_eq!(
+        ct, "application/json; charset=utf-8",
+        "AC-1: content-type must be application/json; charset=utf-8, got: {ct}"
+    );
+    // Exactly one content-type header (no duplicate).
+    assert_eq!(
+        resp.headers()
+            .get_all(axum::http::header::CONTENT_TYPE)
+            .iter()
+            .count(),
+        1,
+        "AC-1: must have exactly one content-type header"
     );
 
     let json = body_json(resp).await;

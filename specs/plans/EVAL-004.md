@@ -1,63 +1,48 @@
-# Plan — EVAL-004 First live Mistral run + re-bake baseline + Gate A recalibration
+# Plan — EVAL-004 Fix live CI judge to Mistral + honestly defer baseline re-bake
 
 ## Goal
-Execute the first paid live Mistral-judged run against PROD workers over the 46-entry golden set, freeze its real scores verbatim as `eval/baseline.json`, and recalibrate `GATE_A_THRESHOLDS` from the observed canon metrics — so Gate A/B measure real quality instead of bootstrap zeros.
+Make `--mode live` in CI operable with the Mistral judge alone (drop the dead OpenAI key + `openai` provider override), and document in `eval/README.md` + CHANGELOG that the baseline re-bake and Gate A recalibration are deferred to EVAL-002 because the live job seeds smoke-corpus pseudo-embeddings.
 
 ## Acceptance criteria recap
-- AC-1: human runs `workflow_dispatch` `--mode live --set specs/golden_qa.jsonl` vs PROD workers (OIDC), 46 entries, judge `mistral` (`mistral-large-2411`); artifact `eval/runs/<ts>.json` has `runner_mode:"live"`, `totals.entries==46`, `errors/entries ≤ 0.10` else rejected/uncommitted.
-- AC-2: `eval/baseline.json` byte-identical to that `eval/runs/<ts>.json` (verbatim copy, no hand edits); `runner_mode:"live"`, root `metrics` aggregated canon-only, real `git_sha`.
-- AC-3: commit updating `eval/baseline.json` has message exactly `chore(eval): bump baseline`, touches ONLY `eval/baseline.json`, and is HEAD of the PR at merge (triggers EVAL-001 AC-17 Gate-B skip).
-- AC-4: the `GATE_A_THRESHOLDS` edit in `eval/gates.py` is a SEPARATE commit, ordered BEFORE the baseline-bump commit.
-- AC-5: each threshold = `floor((observed_canon − 0.05) × 100) / 100`, applied to the 4 root `metrics.*` of the AC-1 run.
-- AC-6: recalculated threshold NEVER below floor `0.50`; if `< 0.50` for any metric → hard stop (no thresholds edited, no baseline frozen, human investigates; gate never silently disabled).
-- AC-7: any threshold `0.50 ≤ new < old` = named human concession, listed `<metric> : <old> → <new> (observé <value>)` in PR body AND `eval/README.md` Gates section.
-- AC-8: `eval/README.md` Gates + Estimated Cost updated for (a) post-recalibration Gate A thresholds, (b) real Mistral cost band `~$0.50–$1.00/run` (replacing `~$0.46/run`), (c) baseline run date/`git_sha`.
-- AC-9: no migration, no OpenAPI, no golden_qa, no runner-code change (`eval/*.py` except `eval/gates.py`); `eval/gates.py` limited to `GATE_A_THRESHOLDS`.
-- AC-10: frozen baseline self-consistent by construction — delta(baseline, baseline) == 0 ≥ Gate B negative tolerances; logical property, NO additional paid run.
+- AC-1 : Le job `live` de `.github/workflows/eval.yml` déclare `RAGAS_JUDGE_PROVIDER: mistral` (explicite) dans l'environnement de l'étape `run eval live`, ne contient plus aucune occurrence de `RAGAS_JUDGE_PROVIDER: openai`, et ne référence plus `OPENAI_API_KEY` (ligne supprimée) — aucun chemin de code ne consomme cette variable une fois le juge en Mistral.
+- AC-2 : `--mode live` en CI est opérable avec la seule clé Mistral `LLM_API_KEY` (aucune clé OpenAI requise) : le juge Ragas résout en Mistral (`mistral-large-2411`) via le wiring EVAL-003 (`eval/metrics.py:110` défaut `mistral` + l'env corrigé en AC-1), de sorte que l'étape `run eval live` exécute le pipeline de bout en bout sans dépendre d'un secret OpenAI absent.
+- AC-3 : `eval/README.md` documente (a) que l'eval live est câblé et exécutable avec le juge Mistral, (b) que le re-bake de `eval/baseline.json` et la recalibration des seuils Gate A sont **déférés**, avec la raison explicite que le job `live` seed des pseudo-embeddings de smoke-corpus (un baseline-worthy run exige un futur seed CI à corpus réel + bge-m3 réel), et (c) nomme le ticket de suivi portant ce seed corpus réel + le bake du baseline.
+- AC-4 : Ce ticket n'introduit aucune migration, aucun changement de `specs/openapi/gateway-to-workers.yml`, aucun changement de `specs/golden_qa.jsonl`, aucun changement d'un fichier `eval/*.py` (y compris **aucune** édition de seuil dans `eval/gates.py`), et aucun changement de `eval/baseline.json`. Seuls `.github/workflows/eval.yml`, `eval/README.md`, `CHANGELOG.md`, et optionnellement un nouveau `docs/adr/NNNN-*.md` sont touchés.
 
 ## Files to touch
-- `eval/baseline.json` — replaced verbatim by the AC-1 run artifact (human-only file; bump commit = HEAD).
-- `eval/gates.py` — `GATE_A_THRESHOLDS` 4 values recalibrated (dict only, no logic change). Separate commit, ordered before bump.
-- `eval/README.md` — Gates thresholds, named concessions, `~$0.50–$1.00/run` cost band, baseline date/`git_sha`.
-- `CHANGELOG.md` — `## [Unreleased]` EVAL entry.
-- NOT touched: `migrations/*`, `specs/openapi/*`, `specs/golden_qa.jsonl`, `eval/fixtures/`, any `eval/*.py` except `gates.py`.
+- `.github/workflows/eval.yml` — step `run eval live`: line 236 `RAGAS_JUDGE_PROVIDER: openai` → `mistral`; delete line 234 `OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}`. No other step touched.
+- `eval/README.md` — amend "Estimated Cost" (line 59-62, drop OpenAI cost framing, state live runnable w/ Mistral) + add a deferral note (pseudo-embeddings → baseline re-bake + Gate A recalibration deferred to EVAL-002). Reuse existing EVAL-002 pointer (line 55).
+- `CHANGELOG.md` — `## [Unreleased]` → `### Fixed` entry, EVAL-004.
+- `docs/adr/0011-eval-004-defer-baseline-rebake.md` — RECOMMENDED (see Risks). Format = `docs/adr/0000-template.md`.
 
 ## Test strategy
-- Integration (human/AC-1): `workflow_dispatch` live run → artifact `runner_mode=="live"`, `entries==46`, `errors/46 ≤ 0.10`.
-- Contract (AC-2): `diff <(jq -S . eval/baseline.json) <(jq -S . eval/runs/<ts>.json)` → 0; baseline `git_sha != "initial"`.
-- Unit table (AC-5): for each metric `committed_threshold == floor((observed − 0.05)*100)/100` vs the 4 run values.
-- Review (AC-6/AC-7): floor `≥ 0.50` asserted; any lowering named in README + PR body.
-- Contract (AC-3/AC-4): `git log --oneline` order (gates edit before bump-HEAD), `git diff --name-only HEAD~1 HEAD == eval/baseline.json`.
-- Contract (AC-8/AC-9): `grep` README for 4 thresholds + cost band + `git_sha`; `git diff` on forbidden paths → 0.
-- Logic (AC-10): demonstrate delta==0 ≥ each negative tolerance — no paid run.
-- No property test (`specs/properties.md` lists no Gate-A-threshold invariant). No schemathesis (no OpenAPI). No new pytest (existing `test_gates.py` already covers gate logic; thresholds are data).
+- AC-1 (contract/grep): in `.github/workflows/eval.yml` — `grep "RAGAS_JUDGE_PROVIDER: mistral"` ≥1; `grep "RAGAS_JUDGE_PROVIDER: openai"` == 0; `grep "OPENAI_API_KEY"` == 0. `actionlint` parses clean (wired pre-commit `.pre-commit-config.yaml:5` + CI `ci.yml:30`).
+- AC-2 (logic/read): joint read of corrected YAML (`LLM_API_KEY` only, `RAGAS_JUDGE_PROVIDER: mistral`) + `eval/metrics.py:110` default `mistral` + `_build_mistral_judge` → resolves `mistral-large-2411`, no OpenAI secret. No new test (no code change).
+- AC-3 (grep): `eval/README.md` contains "Mistral" live-runnable mention + "pseudo-embeddings" + "baseline" + "Gate A" deferral wording + "EVAL-002".
+- AC-4 (contract): `git diff --name-only main...HEAD` ⊆ `{.github/workflows/eval.yml, eval/README.md, CHANGELOG.md, docs/adr/0011-*.md}`; `git diff` on `migrations/`, `specs/openapi/`, `specs/golden_qa.jsonl`, `eval/*.py`, `eval/baseline.json`, `eval/fixtures/` → 0.
+- No property test (`specs/properties.md` lists no relevant invariant). No schemathesis (OpenAPI untouched). No Ragas run (no RAG code path changed; this ticket triggers no run).
 
 ## Implementation steps (ordered)
-**Phase H — human operator (live op, no LOC):**
-1. Confirm Mistral pricing; ensure `LLM_API_KEY` (Mistral, with credit) present in `workflow_dispatch` env; confirm PROD workers reachable (OIDC OBS-007/OBS-009).
-2. Resolve the CI-workflow judge-provider blocker (see Risks #1) BEFORE dispatch — the run MUST execute with `RAGAS_JUDGE_PROVIDER=mistral`.
-3. Trigger `workflow_dispatch` live run; capture `eval/runs/<ts>.json` artifact. If `errors/46 > 0.10` or judge/key/snapshot failure → reject, investigate, re-run (AC-1 / Failure modes). Do NOT proceed.
-4. Read the 4 root `metrics.*` from the artifact; compute `floor((observed−0.05)*100)/100` per metric. If any `< 0.50` → HARD STOP, escalate, abort ticket (AC-6).
+1. Edit `.github/workflows/eval.yml`: delete OPENAI_API_KEY line (234), change provider `openai`→`mistral` (236). Run `actionlint`.
+2. Edit `eval/README.md`: rewrite Estimated Cost section for Mistral + add deferral note citing pseudo-embeddings + EVAL-002.
+3. Add `CHANGELOG.md` `### Fixed` EVAL-004 entry under `[Unreleased]`.
+4. Write `docs/adr/0011-eval-004-defer-baseline-rebake.md` (recommended).
+5. Verify scope with `git diff --name-only` against the allowlist (AC-4 oracle).
 
-**Phase A — agent code/doc (after a valid artifact exists):**
-5. Edit `eval/gates.py` `GATE_A_THRESHOLDS` to the 4 computed values. → commit `chore(eval): recalibrate Gate A thresholds` (or `fix(eval):`).
-6. Update `eval/README.md`: thresholds, named concessions (AC-7), cost band, baseline date/`git_sha`. Update `CHANGELOG.md`. → same commit OR a doc commit, but BOTH ordered before the bump (AC-4).
-7. Copy artifact verbatim into `eval/baseline.json`. → commit `chore(eval): bump baseline`, touching ONLY `eval/baseline.json`, as HEAD (AC-3).
-8. Verify `git log --oneline` order + `git diff --name-only HEAD~1 HEAD == eval/baseline.json` before pushing.
+Commit grouping (spec mandates no multi-commit choreography — no baseline bump):
+single commit `fix(eval): live CI judge to Mistral, defer baseline re-bake (EVAL-004)` covering all four files. ADR + README + CHANGELOG are one logical change with the YAML fix; no ordering constraint exists (Gate-B skip choreography does not apply, baseline untouched).
 
 ## Risks / open questions
-- **Blocker (must resolve before dispatch):** `.github/workflows/eval.yml:236` hardcodes `RAGAS_JUDGE_PROVIDER: openai` in the live job. AC-1 requires the baseline run be judged by `mistral`. The spec names only the OBS-009 *prod-job* judge mismatch as out-of-scope — it does NOT cover this CI-workflow line. As written, dispatching produces an OpenAI-judged baseline, violating AC-1. Editing `eval.yml` is NOT in AC-9's forbidden list but IS outside the spec's named Touch points. Per no-workaround.md: surface to human — either (a) human overrides the env at dispatch time if the workflow allows, or (b) a one-line `eval.yml` fix is human-approved as in-scope. Do not silently proceed with `openai`.
-- AC-7 concession depends on observed values: if any canon metric `< 0.85` (faithfulness/answer_relevancy) or `< 0.70` (context_precision/context_recall) but `≥ 0.50`, the lowered threshold MUST be named. Values unknown until the run completes.
-- `write_run` serializes with `sort_keys=True`; the verbatim copy is already canonically ordered, so AC-2's `jq -S` diff is trivially 0. Ensure the copy preserves trailing newline / exact bytes (use file copy, not re-serialize).
-- Cost band `~$0.50–$1.00` is an estimate; the real run's `started_at`/`finished_at` + Mistral invoice are the only ground truth. Documented, not capped (per spec).
-- OBS-009 PROD job runs `RAGAS_JUDGE_PROVIDER=openai` (`cloud_run_job.tf`) vs this baseline's `mistral` — named follow-up, NOT resolved here.
+- ADR decision — **RECOMMEND INCLUDE**. The ticket records two durable decisions: (a) deferring the baseline re-bake / Gate A recalibration with a stated precondition (real-corpus + bge-m3 seed), and (b) parking OBS-009 prod live-eval. These are architectural "why we did NOT act" records that future readers (esp. whoever picks up EVAL-002) need; an ADR is the canonical home, README is operational. Cost ≈ 20 lines, well within budget. Skip only if the human prefers README-only.
+- `OPENAI_API_KEY` removal safety — **confirmed safe**: grepped all of `.github/workflows/`; the only occurrence is line 234 in the `run eval live` step. No other step or job reads it. Once the judge is `mistral`, `eval/metrics.py` never reads `OPENAI_API_KEY` (key comes from `LLM_API_KEY`). No breakage.
+- `secrets.OPENAI_API_KEY` referenced but absent in repo today — removing the reference is strictly a reduction of secret surface (security.md A09 / spec §Security), no functional regression.
 
-## Out of scope
-- Realigning OBS-009 prod job judge (openai→mistral) — explicit follow-up ticket.
-- Any change to `GATE_B_TOLERANCES` / `GATE_B_OFFLINE_TOLERANCES`.
-- Runner code, `/v1/generate` path, `LLM_PROVIDER`, the judge wiring (EVAL-003), system prompt.
-- `specs/golden_qa.jsonl`, `eval/fixtures/ci_smoke_qa.jsonl`.
-- Re-pinning the `mistral-large-2411` judge snapshot.
-- Any variance/multi-run margin — fixed 0.05 on a single run.
-- Any coded cost cap; any new CI gate (Gate A stays live-dispatch-only by design).
-- A second paid run for AC-10 (logical property, no run needed).
+## Out of scope (AC-4 + Non-goals)
+- No paid live run; no `eval/baseline.json` re-bake/bump (stays bootstrap all-zeros).
+- No `GATE_A_THRESHOLDS` / `eval/gates.py` edit; no Gate B tolerance change.
+- No `eval/*.py` change at all; no migration; no `specs/openapi`; no `specs/golden_qa.jsonl`; no `eval/fixtures/`.
+- No real-corpus + bge-m3 CI seed (the EVAL-002 precondition).
+- No OBS-009 prod live-eval realignment (parked); no `mistral-large-2411` re-pin; no generation/system-prompt change.
+
+## LOC
+~2 lines YAML, ~10 README, ~3 CHANGELOG, ~20 ADR ≈ <40 LOC. Well under 300.

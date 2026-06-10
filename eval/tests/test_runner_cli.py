@@ -53,7 +53,7 @@ def test_missing_mode_exits_2() -> None:
 
 # AC-9 : --baseline pointing to non-existent file → auto-create + exit 0
 def test_baseline_absent_auto_create(tmp_path: Path, httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     httpserver.expect_request("/v1/retrieve").respond_with_json({
         "chunks": [{"source_path": "intro_p01", "text": "archiviste nocilia text here"}]
     })
@@ -83,7 +83,7 @@ def test_error_rate_exceeds_threshold_exits_1(tmp_path: Path, httpserver: HTTPSe
         '{"id": "q3", "mode": "canon", "question": "Q3?", "expected_contexts": [], "expected_answer_keywords": ["kw"]}\n',
         encoding="utf-8",
     )
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     # Respond 500 for q1 (error), ok for others
     httpserver.expect_request("/v1/retrieve").respond_with_data("", status=500)
 
@@ -105,7 +105,7 @@ def test_secrets_not_leaked_in_run_file(tmp_path: Path, httpserver: HTTPServer) 
     fake_api_key = "sk-fakesecretkey12345"
     fake_db_url = "postgres://user:supersecretpwd@host/db"
 
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     httpserver.expect_request("/v1/retrieve").respond_with_json({
         "chunks": [{"source_path": "intro_p01", "text": "some text"}]
     })
@@ -215,7 +215,7 @@ def test_secrets_redaction_property_100_runs(tmp_path: Path) -> None:
 # (modulo started_at / finished_at / git_sha).
 def test_offline_double_run_byte_identical(tmp_path: Path, httpserver: HTTPServer) -> None:
     """AC-4: double offline run must produce SHA-256-identical payloads (deterministic)."""
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     httpserver.expect_request("/v1/retrieve").respond_with_json({
         "chunks": [
             {"source_path": "intro_p01", "text": "archiviste nocilia intro text"},

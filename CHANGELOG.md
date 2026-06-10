@@ -9,6 +9,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **EVAL-006**: live eval workers reachability probe (`eval/ragas_runner.py`) now targets `/health` instead of `/healthz` and waits 30s instead of 5s. Cloud Run's public frontend reserves the literal `/healthz` path and 404s it before it reaches the container (workers exposes `/health` as the reachable alias), so the probe always reported the service unreachable → the `archiviste-eval` Job (OBS-009) exited 3 before running any entry. The 5s timeout also could not clear the ~20s workers cold-start. Path + timeout extracted to named constants; CLI healthcheck test mocks updated `/healthz` → `/health`.
+
 - **EVAL-005**: `GoldenEntry` (`eval/loader.py`) now accepts the optional `category` metadata field carried by every entry of `specs/golden_qa.jsonl`. Previously `model_config = {"extra": "forbid"}` rejected `category` with a Pydantic `extra_forbidden` error, so the live eval runner failed at golden-set parse (exit 2) before any judge call — the `archiviste-eval` Cloud Run Job (OBS-009) could never persist a row. Mirrors the existing optional `difficulty` field; unknown fields stay forbidden.
 
 ### Added

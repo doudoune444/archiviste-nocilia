@@ -29,6 +29,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **EVAL-004**: live CI eval judge forced to Mistral (`mistral-large-2411`) — dead `OPENAI_API_KEY` reference removed from `eval.yml`; baseline re-bake and Gate A recalibration deferred to EVAL-002 (blocking precondition: real-corpus + bge-m3 CI seed).
 - **fix(workers)**: anonymous conversations were never persisted — the gateway derives a fingerprint UUIDv5 `user_id` (SEC-001) that has no `users` row, so `conversations.user_id` FK rejected the insert with `unknown_user` (best-effort logger swallowed it), leaving `GET /v1/stats` `conversation_count` permanently 0. `ConversationRepository.create_if_absent` now upserts the anon user (`INSERT INTO users (id, tier) VALUES ($1, 'anonymous') ON CONFLICT DO NOTHING`) in the same transaction before the conversation insert; members/authors no-op on conflict. Anonymous chat histories now persist and the usage counter reflects real traffic. Integration test added. No schema/migration change.
 - **fix(gateway)**: main `/` page nav rendered unstyled — the shared `<nav>` CSS lived only in `observability.css`, which `index.html` does not load. Moved the base `nav` rules into the shared `styles.css`; `observability.css` keeps only the page-active highlight + `#usage-widget`.
 

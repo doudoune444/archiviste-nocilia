@@ -231,9 +231,8 @@ jobs:
       - name: run eval live
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           LLM_PROVIDER: mistral
-          RAGAS_JUDGE_PROVIDER: openai
+          RAGAS_JUDGE_PROVIDER: mistral
           WORKERS_URL: http://localhost:8000
         run: |
           uv --project eval run python -m eval.ragas_runner \

@@ -74,4 +74,4 @@ XS — édition de 2 lignes dans `.github/workflows/eval.yml` (1 changée, 1 sup
 
 ## Status
 
-draft
+ready

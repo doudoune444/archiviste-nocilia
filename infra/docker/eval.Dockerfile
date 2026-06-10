@@ -13,6 +13,7 @@ COPY pyproject.toml uv.lock ./
 
 # Install live deps only (no test/lint tools). --no-install-project: skip building the eval
 # wheel since source is served via raw COPY below (OQ-2: no editable install needed).
+# google-cloud-storage is declared in the live extra and pinned via uv.lock (A08 reproducible builds).
 RUN uv sync --frozen --extra live --no-dev --no-install-project
 
 # Bake runner source (eval/*.py) and baseline.json. eval/.dockerignore excludes tests/,

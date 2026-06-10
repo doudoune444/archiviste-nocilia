@@ -564,3 +564,73 @@ uv run python -m archiviste_workers.ingest --path ../lore/
 Si `secrets.GDRIVE_SA_KEY` est absent, le workflow échoue en première step
 avec le message `secret GDRIVE_SA_KEY missing — see docs/runbook.md` sans
 effectuer de checkout ni d'installation.
+
+## Publication golden + exécution eval one-shot (OBS-009)
+
+Le golden set (`specs/golden_qa.jsonl`) est gitignored et ne transite jamais
+par git. L'opérateur le publie manuellement dans le bucket privé
+`archiviste-lore-corpus`, puis déclenche le Job Cloud Run `archiviste-eval`.
+
+### (a) Publier le golden set dans GCS
+
+```bash
+# Depuis la racine du repo local (specs/golden_qa.jsonl doit exister).
+gcloud storage cp specs/golden_qa.jsonl \
+  gs://archiviste-lore-corpus/golden/golden_qa.jsonl
+
+# Vérifier l'intégrité : sha256 GCS == sha256 local (AC-5).
+gcloud storage cat gs://archiviste-lore-corpus/golden/golden_qa.jsonl \
+  | sha256sum
+sha256sum specs/golden_qa.jsonl
+# Les deux checksums doivent être identiques.
+```
+
+Cette étape est one-time (ou à répéter après mise à jour du golden set).
+Le bucket est privé (`public_access_prevention=enforced`) ; seul
+`archiviste-runtime` y a accès en lecture (`roles/storage.objectViewer`
+provisionné dans `infra/terraform/storage.tf`).
+
+### (b) Déclencher le Job eval
+
+```bash
+# Exécuter le Job et attendre sa complétion (bloquant).
+gcloud run jobs execute archiviste-eval \
+  --region=<region> \
+  --wait
+# Attendu : exit 0, dernière ligne du log = event=eval_summary.
+```
+
+### (c) Vérifier le snapshot en base
+
+```bash
+# Avant exécution — noter la valeur de référence.
+psql "$DATABASE_URL" -c "SELECT count(*) FROM eval_runs WHERE runner_mode='live';"
+
+# Après exécution — le compteur doit avoir augmenté de 1 (AC-2).
+psql "$DATABASE_URL" -c "SELECT count(*) FROM eval_runs WHERE runner_mode='live';"
+
+# Vérifier la ligne insérée (AC-3).
+psql "$DATABASE_URL" -c \
+  "SELECT runner_mode, finished_at, faithfulness, answer_relevancy \
+   FROM eval_runs ORDER BY finished_at DESC LIMIT 1;"
+# runner_mode='live', finished_at non nul.
+```
+
+### (d) Vérifier le dashboard qualité
+
+```bash
+# AC-4 : GET /v1/quality doit retourner 200 avec un corps non no_data.
+curl -s https://<gateway-url>/v1/quality | jq .
+# Attendu : {"faithfulness": <float>, ..., "finished_at": "<iso8601>"}
+# finished_at doit correspondre à la ligne insérée en (c).
+```
+
+### Logs d'exécution
+
+```bash
+# Consulter les logs du Job (remplacer EXECUTION_ID par l'ID renvoyé par gcloud run jobs execute).
+gcloud logging read \
+  'resource.type="cloud_run_job" resource.labels.job_name="archiviste-eval"' \
+  --limit=200 \
+  --format="table(timestamp, jsonPayload.event, jsonPayload.message)"
+```

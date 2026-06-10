@@ -90,6 +90,16 @@ def _get_git_sha(repo_path: Path) -> str:
         return "unknown"
 
 
+# Cloud Run's public frontend reserves the literal `/healthz` path and 404s it
+# before it reaches the container, so workers exposes `/health` as the reachable
+# alias (workers routers/health.py). Probing `/healthz` against a Cloud Run workers
+# service therefore always 404s -> false "unreachable".
+_WORKERS_HEALTH_PATH = "/health"
+# Workers cold-start (heavy LangChain image, scaled to zero between rare eval runs)
+# is ~20s; the probe must clear it. 30s = security.md A04 external-call hard cap.
+_HEALTH_PROBE_TIMEOUT_SECONDS = 30.0
+
+
 def _check_workers_reachable(
     workers_url: str,
     auth_header: SecretStr | None = None,
@@ -98,7 +108,11 @@ def _check_workers_reachable(
     if auth_header is not None:
         headers["Authorization"] = f"Bearer {auth_header.get_secret_value()}"
     try:
-        resp = httpx.get(f"{workers_url}/healthz", headers=headers, timeout=5.0)
+        resp = httpx.get(
+            f"{workers_url}{_WORKERS_HEALTH_PATH}",
+            headers=headers,
+            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
+        )
         return resp.is_success
     except (httpx.HTTPError, OSError):
         return False
@@ -457,7 +471,7 @@ def main(
         sys.stderr.write(f"schema error: {exc}\n")
         return 2
 
-    # AC-6, D-3: fetch OIDC token fail-fast before any entry or healthz probe
+    # AC-6, D-3: fetch OIDC token fail-fast before any entry or health probe
     auth_header: SecretStr | None = None
     if is_authenticated_target(workers_url):
         audience = derive_audience(workers_url)

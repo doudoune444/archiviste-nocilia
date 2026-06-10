@@ -65,11 +65,11 @@ def test_exit_5_on_oidc_failure_before_any_entry(
 ) -> None:
     """AC-6: failing provider on https target → exit 5; no retrieve/generate attempted."""
     # Use an HTTPS-looking URL — but we override main(provider=...) so no real network call
-    # to the metadata server. Workers /healthz is never called because fail-fast fires first.
+    # to the metadata server. Workers /health is never called because fail-fast fires first.
     output_path = tmp_path / "run.json"
     golden = FIXTURES / "golden_valid.jsonl"
 
-    # Use httpserver just to get a URL; calls to it should not happen (fail-fast before /healthz)
+    # Use httpserver just to get a URL; calls to it should not happen (fail-fast before /health)
     workers_https_url = "https://workers.example.run.app"
 
     exit_code = main(
@@ -158,7 +158,7 @@ def test_provider_not_called_on_localhost_target(
     tmp_path: Path, httpserver: HTTPServer
 ) -> None:
     """AC-10: localhost workers URL → provider.fetch() is never called."""
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     httpserver.expect_request("/v1/retrieve").respond_with_json({
         "chunks": [{"source_path": "intro_p01", "text": "archiviste nocilia text here"}]
     })
@@ -232,7 +232,7 @@ def test_token_not_in_any_output_on_success_path(
     token, FAKE_TOKEN_SENTINEL would appear and the assertion would catch it.
     """
     # Serve mocked workers endpoints so the run completes past token fetch.
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     httpserver.expect_request("/v1/retrieve").respond_with_json({
         "chunks": [{"source_path": "intro_p01", "text": "archiviste nocilia text here"}]
     })

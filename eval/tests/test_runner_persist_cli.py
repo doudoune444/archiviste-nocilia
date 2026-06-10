@@ -65,7 +65,7 @@ def _no_canon_golden(tmp_path: Path) -> Path:
 
 
 def _mock_workers_offline(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
+    httpserver.expect_request("/health").respond_with_json({"status": "ok"})
     httpserver.expect_request("/v1/retrieve").respond_with_json({
         "chunks": [{"source_path": "intro_p01", "text": "archiviste nocilia text"}]
     })

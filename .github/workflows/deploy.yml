@@ -34,7 +34,7 @@ jobs:
       # buildx with docker-container driver — required for cache-to type=gha
       # (default docker driver rejects "Cache export is not supported").
       - name: set up buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # AC-12 step 1-2: build and push images tagged with git SHA.
       - name: build and push gateway

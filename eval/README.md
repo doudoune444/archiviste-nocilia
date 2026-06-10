@@ -58,8 +58,21 @@ quality measurement.
 
 ## Estimated Cost (live mode)
 
-~$0.01/sample with OpenAI gpt-4o as Ragas judge (46 entries ≈ $0.46/run).
-Mistral (`mistral-large-2411`, default): pricing per Mistral API docs — costs vary, first live run required for exact estimate.
+Live eval is runnable with the Mistral judge (`mistral-large-2411`, default via `RAGAS_JUDGE_PROVIDER=mistral`).
+Only `LLM_API_KEY` (Mistral) is required — no OpenAI key needed.
+Pricing per Mistral API docs; costs vary, first live run required for exact estimate.
+
+### Baseline re-bake and Gate A recalibration — deferred to EVAL-002
+
+The `eval/baseline.json` re-bake and Gate A threshold recalibration are **deferred**.
+
+The live CI job seeds the smoke corpus via `eval.seed_test_corpus`, which produces
+pseudo-embeddings (hash-based, not real bge-m3). Freezing a baseline from such a run
+would measure retrieval quality against vectors with no semantic content — worse than no
+baseline. A baseline-worthy run requires a future CI seed at real corpus + real bge-m3
+embeddings. That seed is the blocking precondition of **EVAL-002** (already referenced
+at line 55 above). Until EVAL-002 ships, `eval/baseline.json` remains the bootstrap
+all-zeros (`git_sha: "initial"`, `metrics: null`) and Gate A thresholds stay as-is.
 
 ## Baseline Management
 

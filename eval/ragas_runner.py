@@ -170,7 +170,6 @@ def _run_entry_live(
     generate_response = generate_client.generate(
         entry_result.question,
         entry_result.request_id,
-        contexts=[c.source_path for c in chunks],
     )
     if isinstance(generate_response, EntryError):
         entry_result.status = generate_response.status

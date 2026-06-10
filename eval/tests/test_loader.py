@@ -52,6 +52,17 @@ def test_load_keywords_not_list(tmp_path: Path) -> None:
         load_golden_set(bad)
 
 
+# EVAL-005 : optional category metadata accepted (present on every golden entry)
+def test_load_category_accepted(tmp_path: Path) -> None:
+    good = tmp_path / "good.jsonl"
+    good.write_text(
+        '{"id": "q4", "mode": "canon", "question": "x", "expected_contexts": [], "expected_answer_keywords": [], "category": "factual"}\n',
+        encoding="utf-8",
+    )
+    entries = load_golden_set(good)
+    assert entries[0].category == "factual"
+
+
 # AC-1 : extra field forbidden
 def test_load_extra_field_forbidden(tmp_path: Path) -> None:
     bad = tmp_path / "bad.jsonl"

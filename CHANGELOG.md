@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **EVAL-005**: `GoldenEntry` (`eval/loader.py`) now accepts the optional `category` metadata field carried by every entry of `specs/golden_qa.jsonl`. Previously `model_config = {"extra": "forbid"}` rejected `category` with a Pydantic `extra_forbidden` error, so the live eval runner failed at golden-set parse (exit 2) before any judge call — the `archiviste-eval` Cloud Run Job (OBS-009) could never persist a row. Mirrors the existing optional `difficulty` field; unknown fields stay forbidden.
+
 ### Added
 
 - **OBS-009**: Cloud Run Job `archiviste-eval` provisioned in Terraform (`infra/terraform/eval_job.tf`). Executes a one-shot live Ragas eval against prod workers, persists one row in `eval_runs` with `runner_mode='live'`, and makes `GET /v1/quality` return a real measurement instead of `no_data`. Job mirrors the ingest Job (`cloud_run_job.tf`): `archiviste-runtime` SA, `max_retries=0`, Cloud SQL IAM-auth volume, `DATABASE_URL` IAM-auth (SA email `%40`-encoded), `MISTRAL_API_KEY` secret via `secret_key_ref` (injected as `LLM_API_KEY` for the Ragas judge). Two-step command: fetch golden from `gs://archiviste-lore-corpus/golden/golden_qa.jsonl` → `/tmp/golden_qa.jsonl` using `google-cloud-storage`, then `python -m eval.ragas_runner --mode live --persist`. `eval.Dockerfile` updated to install `google-cloud-storage>=2.18` into the venv. No new IAM role or binding (objectViewer + cloudsql.client/instanceUser + run.invoker on workers already granted). One-time golden publication and manual execution procedure documented in `docs/runbook.md`.

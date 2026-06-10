@@ -22,6 +22,7 @@ class GoldenEntry(BaseModel):
     expected_contexts: list[str]
     expected_answer_keywords: list[str]
     difficulty: str | None = None
+    category: str | None = None
 
     @field_validator("expected_contexts", mode="before")
     @classmethod

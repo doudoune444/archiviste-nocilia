@@ -24,7 +24,7 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
 
       # Cloud SQL managed volume: same pattern as cloud_run_job.tf (ingest Job).
       # The Cloud Run integrated Auth Proxy exposes the Unix socket at /cloudsql;
-      # DATABASE_URL routes asyncpg to it via the ?host= query param (AC-6).
+      # DATABASE_URL routes psycopg2 to it via the ?host= query param (AC-6).
       volumes {
         name = "cloudsql"
         cloud_sql_instance {
@@ -70,9 +70,11 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
         env {
           name = "DATABASE_URL"
           # HIGH-5: SA email contains '@' — percent-encode as '%40' (RFC 3986 userinfo).
-          # Scheme postgresql+asyncpg (Python asyncpg driver). SA username = email with
-          # ".gserviceaccount.com" stripped (Cloud SQL IAM user convention, cloud_sql.tf).
-          value = "postgresql+asyncpg://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
+          # Scheme postgresql:// (plain libpq/psycopg2). eval/persist.py uses psycopg2
+          # which cannot parse the postgresql+asyncpg:// SQLAlchemy dialect scheme.
+          # SA username = email with ".gserviceaccount.com" stripped (Cloud SQL IAM user
+          # convention, cloud_sql.tf). IAM-auth socket mechanism via host= is unchanged.
+          value = "postgresql://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
         }
 
         # RAGAS_JUDGE_PROVIDER=mistral: metrics.py defaults to mistral but we pin it

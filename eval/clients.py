@@ -14,6 +14,9 @@ RETRIEVE_TOP_K = 5
 # Seed corpus uses default access_tier='public' (migrations/0002_schema.sql).
 # `anonymous` reads only `public` chunks → matches the eval seed.
 EVAL_USER_TIER = "anonymous"
+# Synthetic anonymous user identity for eval; /v1/generate requires X-User-Id (uuid)
+# per the gateway→workers contract (specs/openapi/gateway-to-workers.yml §generate).
+EVAL_USER_ID = "ec0de000-0000-4000-8000-000000000001"
 
 
 @dataclass(frozen=True)
@@ -105,19 +108,23 @@ class GenerateClient:
         self,
         query: str,
         request_id: str,
-        contexts: list[str] | None = None,
     ) -> GenerateResponse | EntryError:
-        """Call POST /v1/generate and return answer or an EntryError."""
-        headers: dict[str, str] = {"X-Request-Id": request_id}
+        """Call POST /v1/generate and return answer or an EntryError.
+
+        Headers X-User-Id and X-User-Tier are required by the workers contract
+        (specs/openapi/gateway-to-workers.yml); user_id/user_tier are NOT body fields.
+        """
+        headers: dict[str, str] = {
+            "X-Request-Id": request_id,
+            "X-User-Id": EVAL_USER_ID,
+            "X-User-Tier": EVAL_USER_TIER,
+        }
         if self.auth_header is not None:
             headers["Authorization"] = f"Bearer {self.auth_header.get_secret_value()}"
         payload: dict[str, object] = {
             "query": query,
-            "top_k": RETRIEVE_TOP_K,
-            "user_tier": EVAL_USER_TIER,
+            "request_id": request_id,
         }
-        if contexts is not None:
-            payload["contexts"] = contexts
         try:
             resp = httpx.post(
                 f"{self.base_url}/v1/generate",

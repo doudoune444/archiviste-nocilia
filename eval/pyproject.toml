@@ -21,6 +21,7 @@ live = [
     "datasets>=3.2",
     "langchain-openai>=0.2",
     "langchain-mistralai>=0.2",
+    "google-cloud-storage>=2.18",
 ]
 dev = [
     "pytest>=8.3",
@@ -34,6 +35,7 @@ dev = [
     "langchain-mistralai>=0.2",
     "pip-audit>=2.7",
     "types-requests>=2.32",
+    "google-cloud-storage>=2.18",
 ]
 
 [build-system]
@@ -74,5 +76,5 @@ module = ["ragas", "ragas.*", "datasets", "datasets.*", "structlog", "structlog.
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["google.auth", "google.auth.*", "google.oauth2", "google.oauth2.*"]
+module = ["google.auth", "google.auth.*", "google.oauth2", "google.oauth2.*", "google.cloud", "google.cloud.*"]
 ignore_missing_imports = true

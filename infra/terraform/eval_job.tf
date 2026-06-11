@@ -22,9 +22,11 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
       # must inspect logs and re-execute manually (AC-1). Mirrors ingest Job.
       max_retries = 0
 
-      # default task timeout is 600s; a throttled live Ragas run (max_workers=3) over
-      # the full golden set needs more headroom to complete the judge phase (EVAL-008).
-      timeout = "3600s"
+      # default task timeout is 600s; a throttled live Ragas run (RAGAS_MAX_WORKERS=1)
+      # over the full golden set completes the judge phase in ~10-15 min. 7200s is
+      # generous safety headroom against a slow Mistral tier / extra 429 backoff
+      # (EVAL-008, widened EVAL-009).
+      timeout = "7200s"
 
       # Cloud SQL managed volume: same pattern as cloud_run_job.tf (ingest Job).
       # The Cloud Run integrated Auth Proxy exposes the Unix socket at /cloudsql;
@@ -86,6 +88,14 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
         env {
           name  = "RAGAS_JUDGE_PROVIDER"
           value = "mistral"
+        }
+
+        # RAGAS_MAX_WORKERS: Ragas judge concurrency, tuned to the Mistral tier's rate
+        # limit. 1 avoids 429 storms that blow the task timeout (EVAL-009). Tunable live
+        # via `gcloud run jobs update --update-env-vars` without an image rebuild.
+        env {
+          name  = "RAGAS_MAX_WORKERS"
+          value = "1"
         }
 
         # LLM_API_KEY: read by eval/metrics.py build_ragas_judge() (line 111).

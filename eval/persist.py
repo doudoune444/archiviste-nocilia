@@ -29,6 +29,7 @@ import google.auth.transport.requests
 # without ever using # type: ignore (no-workaround rule).
 import psycopg2
 import psycopg2.extensions
+from pydantic import SecretStr
 
 _INSERT_SQL = (
     "INSERT INTO eval_runs"
@@ -88,12 +89,13 @@ def derive_golden_set_version(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _fetch_iam_db_token() -> str:
+def _fetch_iam_db_token() -> SecretStr:
     """Fetch a Cloud SQL IAM OAuth access token from Application Default Credentials.
 
-    Used only when CLOUD_SQL_IAM_AUTH=true.  The returned token is the raw
-    OAuth access token string — it is the DB password for IAM-authenticated
-    Cloud SQL connections.  NEVER log this value (security.md §A09).
+    Used only when CLOUD_SQL_IAM_AUTH=true.  The token is the DB password for
+    IAM-authenticated Cloud SQL connections; it is wrapped in SecretStr so it
+    redacts in any repr/log output (security.md §A09 — mirrors the workers'
+    auth_metadata/token.py).
 
     google.auth stubs are incomplete (ignore_missing_imports in pyproject.toml);
     explicit casts satisfy mypy --strict without # type: ignore.
@@ -105,8 +107,7 @@ def _fetch_iam_db_token() -> str:
     # cast the Request() call result to Any so mypy accepts creds.refresh(request)
     request: Any = google.auth.transport.requests.Request()
     creds.refresh(request)
-    token: str = cast(str, creds.token)
-    return token
+    return SecretStr(cast(str, creds.token))
 
 
 def persist_eval_run(row: EvalRunRow) -> str:
@@ -143,7 +144,7 @@ def persist_eval_run(row: EvalRunRow) -> str:
             iam_token = _fetch_iam_db_token()
             conn = cast(
                 psycopg2.extensions.connection,
-                psycopg2.connect(database_url, password=iam_token),
+                psycopg2.connect(database_url, password=iam_token.get_secret_value()),
             )
         else:
             conn = cast(psycopg2.extensions.connection, psycopg2.connect(database_url))

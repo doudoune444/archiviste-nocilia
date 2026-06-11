@@ -88,6 +88,14 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
           value = "mistral"
         }
 
+        # RAGAS_MAX_WORKERS: Ragas judge concurrency, tuned to the Mistral tier's rate
+        # limit. 1 avoids 429 storms that blow the task timeout (EVAL-009). Tunable live
+        # via `gcloud run jobs update --update-env-vars` without an image rebuild.
+        env {
+          name  = "RAGAS_MAX_WORKERS"
+          value = "1"
+        }
+
         # LLM_API_KEY: read by eval/metrics.py build_ragas_judge() (line 111).
         # Secret Manager reference — never a plaintext value (AC-6, security.md §A02).
         env {

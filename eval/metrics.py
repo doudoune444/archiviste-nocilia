@@ -17,11 +17,21 @@ if TYPE_CHECKING:
 DEFAULT_MISTRAL_JUDGE_MODEL = "mistral-large-2411"
 DEFAULT_MISTRAL_EMBEDDINGS_MODEL = "mistral-embed"
 
-# Ragas concurrency throttle: ragas.evaluate() defaults to max_workers=16 which floods
-# Mistral with 16 concurrent requests → HTTP 429 storms → retry backoff exceeds the
-# Cloud Run Job task timeout (600 s). 3 workers stays within Mistral's per-second limit;
-# backoff values absorb remaining spikes (EVAL-008).
-RAGAS_MAX_WORKERS = 3
+# Ragas concurrency: ragas.evaluate() defaults to max_workers=16, which floods Mistral
+# with concurrent requests → HTTP 429 storms → backoff that exceeds the Cloud Run task
+# timeout. Env-tunable (non-secret operational knob) so concurrency can be matched to the
+# Mistral tier's rate limit via `gcloud run jobs update` without an image rebuild; default 1
+# stays safely under a low per-second cap (EVAL-008/EVAL-009).
+def _ragas_max_workers() -> int:
+    raw = os.getenv("RAGAS_MAX_WORKERS", "1")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    return value if value >= 1 else 1
+
+
+RAGAS_MAX_WORKERS = _ragas_max_workers()
 RAGAS_CALL_TIMEOUT_SECONDS = 180
 RAGAS_MAX_RETRIES = 10
 RAGAS_MAX_WAIT_SECONDS = 60

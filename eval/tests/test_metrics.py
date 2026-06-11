@@ -10,11 +10,31 @@ import pytest
 
 from eval.metrics import (
     RAGAS_MAX_WORKERS,
+    _ragas_max_workers,
     compute_context_recall_structural,
     compute_keyword_overlap,
 )
 
 _FAKE_API_KEY = "sk-secret-test-key-do-not-log"
+
+
+# EVAL-009 : RAGAS_MAX_WORKERS is env-tunable with a safe default + validation
+def test_ragas_max_workers_default_is_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RAGAS_MAX_WORKERS", raising=False)
+    assert _ragas_max_workers() == 1
+
+
+def test_ragas_max_workers_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAGAS_MAX_WORKERS", "4")
+    assert _ragas_max_workers() == 4
+
+
+def test_ragas_max_workers_rejects_non_positive_and_garbage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for bad in ("0", "-3", "abc", ""):
+        monkeypatch.setenv("RAGAS_MAX_WORKERS", bad)
+        assert _ragas_max_workers() == 1
 
 
 # AC-7 : keyword_overlap case-insensitive substring match
@@ -73,10 +93,10 @@ def test_context_recall_structural_empty_expected() -> None:
     assert result == 0.0
 
 
-# EVAL-008: ragas.evaluate must be called with run_config.max_workers == RAGAS_MAX_WORKERS (3)
+# EVAL-008/009: ragas.evaluate must be called with run_config.max_workers == RAGAS_MAX_WORKERS
 # so 16 concurrent Mistral calls are throttled to 3, preventing HTTP 429 storms.
 def test_run_ragas_evaluate_passes_run_config_max_workers() -> None:
-    """EVAL-008: _run_ragas_evaluate passes run_config with max_workers=3 to ragas.evaluate().
+    """EVAL-008: _run_ragas_evaluate passes run_config with max_workers=RAGAS_MAX_WORKERS to ragas.evaluate().
 
     Ragas defaults to max_workers=16 which floods Mistral with concurrent requests →
     HTTP 429 storms → retry backoff exceeds the Cloud Run Job task timeout.

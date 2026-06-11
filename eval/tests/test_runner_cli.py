@@ -19,6 +19,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def _run_runner(
     args: list[str],
     env_extra: dict[str, str] | None = None,
+    timeout: int = 30,
 ) -> tuple[int, str, str]:
     """Run ragas_runner.py and return (returncode, stdout, stderr).
 
@@ -40,7 +41,7 @@ def _run_runner(
         text=True,
         env=env,
         cwd=str(REPO_ROOT),
-        timeout=30,
+        timeout=timeout,
     )
     return result.returncode, result.stdout, result.stderr
 
@@ -88,13 +89,16 @@ def test_error_rate_exceeds_threshold_exits_1(tmp_path: Path, httpserver: HTTPSe
     httpserver.expect_request("/v1/retrieve").respond_with_data("", status=500)
 
     output_path = tmp_path / "run.json"
+    # EVAL-008: retry-with-backoff means each 500 is retried up to 4 times with
+    # exponential sleep (1+2+4 s per entry) → higher timeout than the default 30 s.
     code, _stdout, stderr = _run_runner(
         [
             "--mode", "offline",
             "--set", str(golden),
             "--output", str(output_path),
             "--workers-url", httpserver.url_for(""),
-        ]
+        ],
+        timeout=60,
     )
     assert code == 1, f"exit={code} stderr={stderr}"
     assert "error rate" in stderr.lower() or "10%" in stderr

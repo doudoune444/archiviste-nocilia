@@ -17,6 +17,15 @@ if TYPE_CHECKING:
 DEFAULT_MISTRAL_JUDGE_MODEL = "mistral-large-2411"
 DEFAULT_MISTRAL_EMBEDDINGS_MODEL = "mistral-embed"
 
+# Ragas concurrency throttle: ragas.evaluate() defaults to max_workers=16 which floods
+# Mistral with 16 concurrent requests → HTTP 429 storms → retry backoff exceeds the
+# Cloud Run Job task timeout (600 s). 3 workers stays within Mistral's per-second limit;
+# backoff values absorb remaining spikes (EVAL-008).
+RAGAS_MAX_WORKERS = 3
+RAGAS_CALL_TIMEOUT_SECONDS = 180
+RAGAS_MAX_RETRIES = 10
+RAGAS_MAX_WAIT_SECONDS = 60
+
 
 def compute_keyword_overlap(answer: str, keywords: list[str]) -> bool:
     """Return True if answer contains at least one keyword (case-insensitive, AC-7)."""
@@ -203,6 +212,7 @@ def _run_ragas_evaluate(
         import datasets  # noqa: PLC0415
         import ragas  # noqa: PLC0415
         import ragas.metrics  # noqa: PLC0415
+        from ragas.run_config import RunConfig  # noqa: PLC0415
     except ImportError as exc:
         raise RuntimeError(
             "ragas and datasets are required for live mode metrics; "
@@ -224,6 +234,12 @@ def _run_ragas_evaluate(
             for e in entries
         ]
     )
+    run_config = RunConfig(
+        max_workers=RAGAS_MAX_WORKERS,
+        timeout=RAGAS_CALL_TIMEOUT_SECONDS,
+        max_retries=RAGAS_MAX_RETRIES,
+        max_wait=RAGAS_MAX_WAIT_SECONDS,
+    )
     eval_result = ragas.evaluate(
         dataset,
         metrics=[
@@ -234,6 +250,7 @@ def _run_ragas_evaluate(
         ],
         llm=llm,
         embeddings=embeddings,
+        run_config=run_config,
     )
     # EvaluationResult.to_pandas() produces a DataFrame with per-metric columns.
     scores = eval_result.to_pandas()  # type: ignore[union-attr]

@@ -1,4 +1,4 @@
-"""Unit tests for eval/persist.py — AC-6, AC-7, AC-8, AC-9, AC-10, AC-11.
+"""Unit tests for eval/persist.py — AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, EVAL-010.
 
 AC-6: derive_golden_set_version determinism + 1-byte sensitivity.
 AC-7: two persist_eval_run calls produce two INSERTs with distinct ids; no UPDATE/UPSERT.
@@ -6,6 +6,7 @@ AC-8: static grep of persist.py source confirms no f-string / .format( / %-inter
 AC-9: EvalRunRow has no answer/question/contexts/citations fields; params contain none.
 AC-10: PersistError message never contains DATABASE_URL value or password substring.
 AC-11: psycopg2.connect raising → PersistError raised → _maybe_persist returns 4.
+EVAL-010: CLOUD_SQL_IAM_AUTH=true injects IAM token as psycopg2 password; token never logged.
 """
 
 from __future__ import annotations
@@ -252,7 +253,10 @@ def test_maybe_persist_returns_4_on_persist_error(
 
     monkeypatch.setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:1/db")
 
-    with patch("eval.persist.persist_eval_run", side_effect=PersistError("db down")):
+    with patch(
+        "eval.persist.persist_eval_run",
+        side_effect=PersistError("db down", error_class="OperationalError", pgcode=None),
+    ):
         result = _maybe_persist(args, run, "live")
 
     assert result == 4
@@ -333,3 +337,118 @@ def test_maybe_persist_returns_4_when_metrics_are_none(tmp_path: Path) -> None:
 
     result = _maybe_persist(args, run, "live")
     assert result == 4
+
+
+# ---------------------------------------------------------------------------
+# EVAL-010: Cloud SQL IAM auth — token injected as psycopg2 password
+# ---------------------------------------------------------------------------
+
+
+class _FakeCreds:
+    """Minimal ADC credentials stub: .refresh() sets .token to a fixed value."""
+
+    def __init__(self) -> None:
+        self.token: str | None = None
+
+    def refresh(self, request: object) -> None:
+        self.token = "fake-iam-token"
+
+
+def _make_fake_google_auth(fake_creds: _FakeCreds) -> Any:
+    """Return a module-level patcher for google.auth.default."""
+    return patch(
+        "eval.persist.google.auth.default",
+        return_value=(fake_creds, "test-project"),
+    )
+
+
+def test_iam_auth_injects_token_as_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EVAL-010: when CLOUD_SQL_IAM_AUTH=true, psycopg2.connect is called with password=<token>."""
+    monkeypatch.setenv("CLOUD_SQL_IAM_AUTH", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://sa%40project.iam@/db?host=/cloudsql/inst")
+
+    fake_creds = _FakeCreds()
+    connect_kwargs: list[dict[str, Any]] = []
+
+    def _capture_connect(dsn: str, **kwargs: Any) -> Any:
+        connect_kwargs.append({"dsn": dsn, **kwargs})
+        conn = MagicMock()
+        conn.cursor.return_value = MagicMock()
+        return conn
+
+    with (
+        _make_fake_google_auth(fake_creds),
+        patch("eval.persist.google.auth.transport.requests.Request", return_value=object()),
+        patch("psycopg2.connect", side_effect=_capture_connect),
+    ):
+        persist_eval_run(_make_row())
+
+    assert len(connect_kwargs) == 1
+    assert connect_kwargs[0]["password"] == "fake-iam-token"
+
+
+def test_no_iam_auth_no_password_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EVAL-010: without CLOUD_SQL_IAM_AUTH=true, psycopg2.connect has no password kwarg."""
+    monkeypatch.delenv("CLOUD_SQL_IAM_AUTH", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h/db")
+
+    connect_kwargs: list[dict[str, Any]] = []
+
+    def _capture_connect(dsn: str, **kwargs: Any) -> Any:
+        connect_kwargs.append({"dsn": dsn, **kwargs})
+        conn = MagicMock()
+        conn.cursor.return_value = MagicMock()
+        return conn
+
+    with patch("psycopg2.connect", side_effect=_capture_connect):
+        persist_eval_run(_make_row())
+
+    assert len(connect_kwargs) == 1
+    assert "password" not in connect_kwargs[0]
+
+
+def test_iam_token_not_in_persist_error_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EVAL-010: when psycopg2.connect raises after IAM token fetch, token does not appear
+    in PersistError string repr (security.md §A09 — token is a credential, must not leak).
+    """
+    monkeypatch.setenv("CLOUD_SQL_IAM_AUTH", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://sa%40project.iam@/db?host=/cloudsql/inst")
+
+    fake_creds = _FakeCreds()
+
+    class _FakePsycopgError(Exception):
+        pgcode = "28000"
+
+    with (
+        _make_fake_google_auth(fake_creds),
+        patch("eval.persist.google.auth.transport.requests.Request", return_value=object()),
+        patch("psycopg2.connect", side_effect=_FakePsycopgError("auth")),
+        pytest.raises(PersistError) as exc_info,
+    ):
+        persist_eval_run(_make_row())
+
+    err = exc_info.value
+    assert err.error_class == "_FakePsycopgError"
+    assert err.pgcode == "28000"
+    # Token must never appear in the PersistError string
+    assert "fake-iam-token" not in str(err)
+    assert "fake-iam-token" not in repr(err)
+
+
+def test_persist_error_carries_error_class_and_pgcode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EVAL-010: PersistError carries error_class and pgcode from the underlying exception."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h/db")
+    monkeypatch.delenv("CLOUD_SQL_IAM_AUTH", raising=False)
+
+    class _FakeDBError(Exception):
+        pgcode = "08006"
+
+    with (
+        patch("psycopg2.connect", side_effect=_FakeDBError("connection failure")),
+        pytest.raises(PersistError) as exc_info,
+    ):
+        persist_eval_run(_make_row())
+
+    err = exc_info.value
+    assert err.error_class == "_FakeDBError"
+    assert err.pgcode == "08006"

@@ -434,14 +434,24 @@ def _maybe_persist(
     row = _build_eval_run_row(run, golden_set_version)
     if row is None:
         # Abnormal live run: one or more metrics are None; must not insert NULL (AC-11).
-        log.warning("persist_failed")
+        log.warning("persist_failed", error_class="NullMetrics", pgcode=None)
         return 4
+    # Log metric scores before touching the DB so a persist failure does not
+    # lose the judged scores — Cloud Logging captures this even on exit 4.
+    log.info(
+        "persist_attempt",
+        faithfulness=row.faithfulness,
+        answer_relevancy=row.answer_relevancy,
+        context_precision=row.context_precision,
+        context_recall=row.context_recall,
+        golden_set_version=golden_set_version,
+    )
     try:
         run_id = persist_eval_run(row)
         log.info("persist_ok", id=run_id, golden_set_version=golden_set_version,
                  finished_at=run.finished_at)
-    except PersistError:
-        log.warning("persist_failed")
+    except PersistError as exc:
+        log.warning("persist_failed", error_class=exc.error_class, pgcode=exc.pgcode)
         return 4
     return None
 

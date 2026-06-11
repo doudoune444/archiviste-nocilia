@@ -22,6 +22,10 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
       # must inspect logs and re-execute manually (AC-1). Mirrors ingest Job.
       max_retries = 0
 
+      # default task timeout is 600s; a throttled live Ragas run (max_workers=3) over
+      # the full golden set needs more headroom to complete the judge phase (EVAL-008).
+      timeout = "3600s"
+
       # Cloud SQL managed volume: same pattern as cloud_run_job.tf (ingest Job).
       # The Cloud Run integrated Auth Proxy exposes the Unix socket at /cloudsql;
       # DATABASE_URL routes psycopg2 to it via the ?host= query param (AC-6).

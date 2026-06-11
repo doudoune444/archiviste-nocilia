@@ -4,6 +4,11 @@ Writes a single aggregated row per live run into the eval_runs table.
 No LLM payload is stored — only numeric metrics and run metadata (AC-9).
 INSERT is always parameterised; never f-string/format into SQL (AC-8).
 DATABASE_URL is read from the environment with no fallback (AC-10, secret-hygiene).
+
+When CLOUD_SQL_IAM_AUTH=true (prod), an IAM OAuth access token is fetched via
+google.auth and passed as the psycopg2 password — the DSN carries the IAM SA
+username and Cloud SQL socket path but no password (prod DATABASE_URL has no
+inline password).  The token is never logged (security.md §A09).
 """
 
 from __future__ import annotations
@@ -15,10 +20,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+# google.auth provides Application Default Credentials for the Cloud SQL IAM token.
+# google-auth ships no type stubs; ignore_missing_imports covers it in pyproject.toml.
+import google.auth
+import google.auth.transport.requests
+
 # psycopg2 is untyped; cast() and explicit local annotations keep mypy --strict happy
 # without ever using # type: ignore (no-workaround rule).
 import psycopg2
 import psycopg2.extensions
+from pydantic import SecretStr
 
 _INSERT_SQL = (
     "INSERT INTO eval_runs"
@@ -29,9 +40,21 @@ _INSERT_SQL = (
     " (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
 )
 
+# Cloud SQL IAM auth scope — mirrors workers' auth_metadata/token.py CLOUD_SQL_SCOPE.
+_CLOUD_SQL_IAM_SCOPE = "https://www.googleapis.com/auth/sqlservice.admin"
+
 
 class PersistError(Exception):
-    """Raised when the eval_runs INSERT fails for any reason."""
+    """Raised when the eval_runs INSERT fails for any reason.
+
+    Carries safe diagnostic fields (error_class, pgcode) that callers may log
+    without leaking DSN or token bytes (security.md §A09).
+    """
+
+    def __init__(self, message: str, *, error_class: str, pgcode: str | None) -> None:
+        super().__init__(message)
+        self.error_class: str = error_class
+        self.pgcode: str | None = pgcode
 
 
 @dataclass
@@ -66,15 +89,38 @@ def derive_golden_set_version(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _fetch_iam_db_token() -> SecretStr:
+    """Fetch a Cloud SQL IAM OAuth access token from Application Default Credentials.
+
+    Used only when CLOUD_SQL_IAM_AUTH=true.  The token is the DB password for
+    IAM-authenticated Cloud SQL connections; it is wrapped in SecretStr so it
+    redacts in any repr/log output (security.md §A09 — mirrors the workers'
+    auth_metadata/token.py).
+
+    google.auth stubs are incomplete (ignore_missing_imports in pyproject.toml);
+    explicit casts satisfy mypy --strict without # type: ignore.
+    """
+    # google.auth.default returns (Credentials, project); Credentials is untyped
+    # in the stub-less google-auth package — cast to Any so attribute access type-checks.
+    creds: Any
+    creds, _ = google.auth.default(scopes=[_CLOUD_SQL_IAM_SCOPE])
+    # cast the Request() call result to Any so mypy accepts creds.refresh(request)
+    request: Any = google.auth.transport.requests.Request()
+    creds.refresh(request)
+    return SecretStr(cast(str, creds.token))
+
+
 def persist_eval_run(row: EvalRunRow) -> str:
     """Insert one row into eval_runs and return the inserted UUID string.
 
     Reads DATABASE_URL from the environment; raises KeyError if absent (no default,
-    secret-hygiene §Production).  On any psycopg2 error, raises PersistError with a
-    generic message — the raw exception (which may embed the DSN) is never forwarded
-    to the caller or logged (AC-10, AC-11).
+    secret-hygiene §Production).  When CLOUD_SQL_IAM_AUTH=true, fetches a Cloud SQL
+    IAM access token and passes it as the psycopg2 password (overrides any inline
+    password in the DSN).  On any error, raises PersistError carrying error_class and
+    pgcode — never the DSN or token (AC-10, AC-11, security.md §A09).
     """
     database_url: str = os.environ["DATABASE_URL"]
+    use_iam_auth = os.getenv("CLOUD_SQL_IAM_AUTH") == "true"
     run_id = str(uuid.uuid4())
     params = (
         run_id,
@@ -94,12 +140,25 @@ def persist_eval_run(row: EvalRunRow) -> str:
     conn: Any = None
     cursor: Any = None
     try:
-        conn = cast(psycopg2.extensions.connection, psycopg2.connect(database_url))
+        if use_iam_auth:
+            iam_token = _fetch_iam_db_token()
+            conn = cast(
+                psycopg2.extensions.connection,
+                psycopg2.connect(database_url, password=iam_token.get_secret_value()),
+            )
+        else:
+            conn = cast(psycopg2.extensions.connection, psycopg2.connect(database_url))
         cursor = cast(psycopg2.extensions.cursor, conn.cursor())
         cursor.execute(_INSERT_SQL, params)
         conn.commit()
     except Exception as exc:
-        raise PersistError("eval_runs insert failed") from exc
+        error_class = type(exc).__name__
+        pgcode: str | None = getattr(exc, "pgcode", None)
+        raise PersistError(
+            "eval_runs insert failed",
+            error_class=error_class,
+            pgcode=pgcode,
+        ) from exc
     finally:
         if cursor is not None:
             cursor.close()

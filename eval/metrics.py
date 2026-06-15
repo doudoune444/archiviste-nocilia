@@ -315,7 +315,7 @@ def _run_ragas_evaluate(
             {
                 "question": e.question,
                 "answer": e.answer or "",
-                "contexts": e.retrieved_contexts,
+                "contexts": e.retrieved_chunk_texts,
                 "ground_truth": e.ground_truth or "",
             }
             for e in entries

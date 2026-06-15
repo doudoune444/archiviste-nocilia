@@ -308,6 +308,67 @@ def test_run_ragas_evaluate_passes_judge_to_ragas() -> None:
 
 
 # ---------------------------------------------------------------------------
+# EVAL-012 AC-1/AC-2 : Ragas dataset `contexts` = chunk TEXT, never source paths
+# ---------------------------------------------------------------------------
+
+
+def test_run_ragas_evaluate_contexts_are_chunk_texts_not_paths() -> None:
+    """EVAL-012 AC-2: dataset `contexts` carries chunk text, not retrieved_contexts paths.
+
+    Regression for the live-mode bug where _run_ragas_evaluate fed source paths as
+    contexts (faithfulness/precision/recall ~ 0). retrieved_contexts (paths) must stay
+    intact for compute_context_recall_structural (AC-3); only the Ragas dataset switches.
+    """
+    import pandas as pd
+
+    from eval.metrics import _run_ragas_evaluate
+    from eval.run_writer import EntryResult
+
+    chunk_text = "Nocilia is a tidal city of glass spires."
+    source_path = "lore/cities/nocilia.md"
+    entries = [
+        EntryResult(
+            id="q1",
+            mode="canon",
+            question="What is Nocilia?",
+            status="ok",
+            answer="A tidal city.",
+            ground_truth="tidal city",
+            retrieved_contexts=[source_path],
+            retrieved_chunk_texts=[chunk_text],
+        )
+    ]
+
+    captured: dict[str, Any] = {}
+
+    def fake_evaluate(dataset: Any, metrics: Any = None, **kwargs: Any) -> Any:
+        captured["contexts"] = dataset[0]["contexts"]
+        mock_result = MagicMock()
+        mock_result.to_pandas.return_value = pd.DataFrame(
+            {
+                "faithfulness": [0.9],
+                "answer_relevancy": [0.85],
+                "context_precision": [0.8],
+                "context_recall": [0.75],
+            }
+        )
+        return mock_result
+
+    with (
+        _set_env(RAGAS_JUDGE_PROVIDER="mistral", LLM_API_KEY=_FAKE_API_KEY),
+        patch("ragas.evaluate", fake_evaluate),
+    ):
+        _run_ragas_evaluate(entries)
+
+    assert captured["contexts"] == [chunk_text], (
+        "Ragas dataset `contexts` must be the chunk text, not the source paths"
+    )
+    assert source_path not in captured["contexts"], (
+        "source paths must never reach the Ragas judge as contexts"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC-6 : pinned default model + overrides
 # ---------------------------------------------------------------------------
 

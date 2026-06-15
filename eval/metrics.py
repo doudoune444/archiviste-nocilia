@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 DEFAULT_MISTRAL_JUDGE_MODEL = "mistral-large-2411"
 DEFAULT_MISTRAL_EMBEDDINGS_MODEL = "mistral-embed"
 
+# Anthropic (Claude) judge (EVAL-011): pinned dated snapshot, same anti-drift rationale.
+# Anthropic exposes no embeddings API, so the embeddings half is decoupled from the chat
+# provider (see _build_judge_embeddings) and defaults to Mistral embeddings.
+DEFAULT_ANTHROPIC_JUDGE_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small"
+DEFAULT_JUDGE_EMBEDDINGS_PROVIDER = "mistral"
+
 # Ragas concurrency: ragas.evaluate() defaults to max_workers=16, which floods Mistral
 # with concurrent requests → HTTP 429 storms → backoff that exceeds the Cloud Run task
 # timeout. Env-tunable (non-secret operational knob) so concurrency can be matched to the
@@ -101,7 +108,7 @@ def build_ragas_judge() -> tuple[LangchainLLMWrapper, LangchainEmbeddingsWrapper
         (LangchainLLMWrapper, LangchainEmbeddingsWrapper) for ragas.evaluate(llm=, embeddings=).
 
     Raises:
-        ValueError: when RAGAS_JUDGE_PROVIDER is not in {mistral, openai}.
+        ValueError: when RAGAS_JUDGE_PROVIDER is not in {mistral, openai, anthropic}.
     """
     llm, embeddings, _, _ = _build_ragas_judge_with_identity()
     return llm, embeddings
@@ -117,7 +124,7 @@ def _build_ragas_judge_with_identity() -> (
     All heavy imports are lazy (inside builders) to keep module import dep-free.
 
     Raises:
-        ValueError: when RAGAS_JUDGE_PROVIDER is not in {mistral, openai}.
+        ValueError: when RAGAS_JUDGE_PROVIDER is not in {mistral, openai, anthropic}.
     """
     try:
         from pydantic import SecretStr  # noqa: PLC0415
@@ -135,8 +142,11 @@ def _build_ragas_judge_with_identity() -> (
     if provider == "openai":
         llm, embeddings, chat_model_id = _build_openai_judge(api_key)
         return llm, embeddings, provider, chat_model_id
+    if provider == "anthropic":
+        llm, embeddings, chat_model_id = _build_anthropic_judge(api_key)
+        return llm, embeddings, provider, chat_model_id
     raise ValueError(
-        f"Unknown RAGAS_JUDGE_PROVIDER: received={provider!r} allowed=mistral|openai"
+        f"Unknown RAGAS_JUDGE_PROVIDER: received={provider!r} allowed=mistral|openai|anthropic"
     )
 
 
@@ -187,6 +197,73 @@ def _build_openai_judge(
     chat_llm = ChatOpenAI(model=chat_model, api_key=api_key)
     embeddings = OpenAIEmbeddings(model=emb_model, api_key=api_key)
     return LangchainLLMWrapper(chat_llm), LangchainEmbeddingsWrapper(embeddings), chat_model
+
+
+def _build_anthropic_judge(
+    api_key: SecretStr,
+) -> tuple[LangchainLLMWrapper, LangchainEmbeddingsWrapper, str]:
+    """Build Anthropic (Claude) chat judge + decoupled embeddings. All imports lazy (PLC0415).
+
+    Anthropic exposes no embeddings API, so the embeddings half is built from a separate
+    provider (RAGAS_JUDGE_EMBEDDINGS_PROVIDER) with its own key (see _build_judge_embeddings).
+    Returns (llm_wrapper, embeddings_wrapper, chat_model_id).
+    """
+    try:
+        from langchain_anthropic import ChatAnthropic  # noqa: PLC0415
+        from ragas.llms.base import LangchainLLMWrapper  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "langchain-anthropic and ragas are required for anthropic judge; install [live] extras"
+        ) from exc
+
+    chat_model = os.environ.get("RAGAS_JUDGE_MODEL", DEFAULT_ANTHROPIC_JUDGE_MODEL)
+    # model_name= is the pydantic alias for the `model` field (mirrors ChatMistralAI above).
+    # timeout/stop are required by the ChatAnthropic typed signature; Ragas RunConfig governs
+    # the effective per-call timeout, so we pin the client timeout to the same ceiling.
+    chat_llm = ChatAnthropic(
+        model_name=chat_model,
+        api_key=api_key,
+        timeout=RAGAS_CALL_TIMEOUT_SECONDS,
+        stop=None,
+    )
+    embeddings = _build_judge_embeddings()
+    return LangchainLLMWrapper(chat_llm), embeddings, chat_model
+
+
+def _build_judge_embeddings() -> LangchainEmbeddingsWrapper:
+    """Build the Ragas judge embeddings half, decoupled from the chat provider (EVAL-011).
+
+    Provider from RAGAS_JUDGE_EMBEDDINGS_PROVIDER (default mistral), key from
+    RAGAS_JUDGE_EMBEDDINGS_API_KEY, model from RAGAS_JUDGE_EMBEDDINGS_MODEL. Needed because
+    Anthropic exposes no embeddings API. All imports lazy (PLC0415).
+
+    Raises:
+        ValueError: when RAGAS_JUDGE_EMBEDDINGS_PROVIDER is not in {mistral, openai}.
+    """
+    try:
+        from pydantic import SecretStr  # noqa: PLC0415
+        from ragas.embeddings.base import LangchainEmbeddingsWrapper  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "pydantic and ragas are required for the judge embeddings; install [live] extras"
+        ) from exc
+
+    provider = os.environ.get("RAGAS_JUDGE_EMBEDDINGS_PROVIDER", DEFAULT_JUDGE_EMBEDDINGS_PROVIDER)
+    emb_key: SecretStr = SecretStr(os.environ.get("RAGAS_JUDGE_EMBEDDINGS_API_KEY", ""))
+
+    if provider == "mistral":
+        from langchain_mistralai import MistralAIEmbeddings  # noqa: PLC0415
+
+        emb_model = os.environ.get("RAGAS_JUDGE_EMBEDDINGS_MODEL", DEFAULT_MISTRAL_EMBEDDINGS_MODEL)
+        return LangchainEmbeddingsWrapper(MistralAIEmbeddings(model=emb_model, api_key=emb_key))
+    if provider == "openai":
+        from langchain_openai import OpenAIEmbeddings  # noqa: PLC0415
+
+        emb_model = os.environ.get("RAGAS_JUDGE_EMBEDDINGS_MODEL", DEFAULT_OPENAI_EMBEDDINGS_MODEL)
+        return LangchainEmbeddingsWrapper(OpenAIEmbeddings(model=emb_model, api_key=emb_key))
+    raise ValueError(
+        f"Unknown RAGAS_JUDGE_EMBEDDINGS_PROVIDER: received={provider!r} allowed=mistral|openai"
+    )
 
 
 def compute_ragas_metrics(

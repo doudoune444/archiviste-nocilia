@@ -11,7 +11,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from eval.metrics import DEFAULT_MISTRAL_JUDGE_MODEL, build_ragas_judge
+from eval.metrics import (
+    DEFAULT_ANTHROPIC_JUDGE_MODEL,
+    DEFAULT_MISTRAL_JUDGE_MODEL,
+    build_ragas_judge,
+)
 from eval.run_writer import RunFile, RunTotals, _build_run_dict
 
 # ---------------------------------------------------------------------------
@@ -20,6 +24,7 @@ from eval.run_writer import RunFile, RunTotals, _build_run_dict
 
 _FAKE_API_KEY = "sk-secret-test-key-do-not-log"
 _FAKE_OAI_KEY = "sk-openai-fake-key"
+_FAKE_ANTHROPIC_KEY = "sk-ant-fake-key-do-not-log"
 
 
 def _set_env(**kwargs: str) -> Any:
@@ -110,29 +115,139 @@ def test_build_judge_openai_embeddings_type() -> None:
 
 
 def test_build_judge_unknown_provider_raises() -> None:
-    """AC-4: unknown provider → ValueError with received value + allowed set."""
+    """AC-4 / EVAL-011 AC-5: unknown provider → ValueError with received value + allowed set.
+
+    'anthropic' is now a supported provider (EVAL-011), so the unknown-provider probe uses
+    'cohere'. The allowed set in the message now lists mistral|openai|anthropic.
+    """
     with (
-        _set_env(RAGAS_JUDGE_PROVIDER="anthropic", LLM_API_KEY=_FAKE_API_KEY),
+        _set_env(RAGAS_JUDGE_PROVIDER="cohere", LLM_API_KEY=_FAKE_API_KEY),
         pytest.raises(ValueError) as exc_info,
     ):
         build_ragas_judge()
 
     msg = str(exc_info.value)
-    assert "anthropic" in msg
+    assert "cohere" in msg
     assert "mistral" in msg
     assert "openai" in msg
+    assert "anthropic" in msg
 
 
 def test_unknown_provider_no_ragas_evaluate_call() -> None:
     """AC-4: unknown provider → build_ragas_judge raises before any judge objects are built."""
     # Assert that the error propagates immediately: no llm/embeddings are returned.
     with (
-        _set_env(RAGAS_JUDGE_PROVIDER="anthropic", LLM_API_KEY=_FAKE_API_KEY),
+        _set_env(RAGAS_JUDGE_PROVIDER="cohere", LLM_API_KEY=_FAKE_API_KEY),
         pytest.raises(ValueError) as exc_info,
     ):
         build_ragas_judge()
     # Confirm the ValueError (not RuntimeError or other) is the one that stops the path.
     assert isinstance(exc_info.value, ValueError)
+
+
+# ---------------------------------------------------------------------------
+# EVAL-011 : RAGAS_JUDGE_PROVIDER=anthropic → ChatAnthropic + decoupled embeddings
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_env(**overrides: str) -> dict[str, str]:
+    """Base env for the anthropic judge: chat key + decoupled mistral embeddings key."""
+    env = {
+        "RAGAS_JUDGE_PROVIDER": "anthropic",
+        "LLM_API_KEY": _FAKE_ANTHROPIC_KEY,
+        "RAGAS_JUDGE_EMBEDDINGS_PROVIDER": "mistral",
+        "RAGAS_JUDGE_EMBEDDINGS_API_KEY": _FAKE_API_KEY,
+    }
+    env.update(overrides)
+    return env
+
+
+def test_build_judge_anthropic_llm_type() -> None:
+    """EVAL-011 AC-2: anthropic provider → LangchainLLMWrapper wrapping a ChatAnthropic."""
+    from ragas.llms.base import LangchainLLMWrapper
+
+    with _set_env(**_anthropic_env()):
+        llm, _ = build_ragas_judge()
+
+    assert isinstance(llm, LangchainLLMWrapper)
+    from langchain_anthropic import ChatAnthropic
+
+    assert isinstance(llm.langchain_llm, ChatAnthropic)
+
+
+def test_build_judge_anthropic_default_chat_model() -> None:
+    """EVAL-011 AC-2: without override, ChatAnthropic uses the pinned dated snapshot."""
+    from langchain_anthropic import ChatAnthropic
+
+    with patch.dict(os.environ, _anthropic_env()):
+        os.environ.pop("RAGAS_JUDGE_MODEL", None)
+        llm, _ = build_ragas_judge()
+
+    assert isinstance(llm.langchain_llm, ChatAnthropic)
+    assert llm.langchain_llm.model == DEFAULT_ANTHROPIC_JUDGE_MODEL
+
+
+def test_build_judge_anthropic_chat_model_override() -> None:
+    """EVAL-011 AC-2: RAGAS_JUDGE_MODEL override is applied to ChatAnthropic."""
+    from langchain_anthropic import ChatAnthropic
+
+    with _set_env(**_anthropic_env(RAGAS_JUDGE_MODEL="claude-sonnet-4-6")):
+        llm, _ = build_ragas_judge()
+
+    assert isinstance(llm.langchain_llm, ChatAnthropic)
+    assert llm.langchain_llm.model == "claude-sonnet-4-6"
+
+
+def test_build_judge_anthropic_embeddings_decoupled_mistral() -> None:
+    """EVAL-011 AC-3: anthropic chat + mistral embeddings (decoupled provider + key)."""
+    from langchain_mistralai import MistralAIEmbeddings
+    from ragas.embeddings.base import LangchainEmbeddingsWrapper
+
+    with _set_env(**_anthropic_env()):
+        _, embeddings = build_ragas_judge()
+
+    assert isinstance(embeddings, LangchainEmbeddingsWrapper)
+    assert isinstance(embeddings.embeddings, MistralAIEmbeddings)
+
+
+def test_build_judge_anthropic_embeddings_decoupled_openai() -> None:
+    """EVAL-011 AC-3: anthropic chat + openai embeddings via RAGAS_JUDGE_EMBEDDINGS_PROVIDER."""
+    from langchain_openai import OpenAIEmbeddings
+    from ragas.embeddings.base import LangchainEmbeddingsWrapper
+
+    with _set_env(
+        **_anthropic_env(
+            RAGAS_JUDGE_EMBEDDINGS_PROVIDER="openai",
+            RAGAS_JUDGE_EMBEDDINGS_API_KEY=_FAKE_OAI_KEY,
+        )
+    ):
+        _, embeddings = build_ragas_judge()
+
+    assert isinstance(embeddings, LangchainEmbeddingsWrapper)
+    assert isinstance(embeddings.embeddings, OpenAIEmbeddings)
+
+
+def test_build_judge_anthropic_unknown_embeddings_provider_raises() -> None:
+    """EVAL-011 AC-5: unknown RAGAS_JUDGE_EMBEDDINGS_PROVIDER → ValueError citing allowed set."""
+    with (
+        _set_env(**_anthropic_env(RAGAS_JUDGE_EMBEDDINGS_PROVIDER="cohere")),
+        pytest.raises(ValueError) as exc_info,
+    ):
+        build_ragas_judge()
+
+    msg = str(exc_info.value)
+    assert "cohere" in msg
+    assert "mistral" in msg
+    assert "openai" in msg
+
+
+def test_anthropic_api_keys_absent_from_repr() -> None:
+    """EVAL-011 AC-6: neither the chat key nor the embeddings key appears in repr()."""
+    with _set_env(**_anthropic_env()):
+        llm, embeddings = build_ragas_judge()
+
+    assert _FAKE_ANTHROPIC_KEY not in repr(llm)
+    assert _FAKE_API_KEY not in repr(embeddings)
 
 
 # ---------------------------------------------------------------------------
@@ -398,3 +513,46 @@ def test_run_ragas_evaluate_openai_judge_identity_records_openai_model() -> None
     assert judge_identity["chat_model"] != DEFAULT_MISTRAL_JUDGE_MODEL, (
         "openai path must not record the mistral default model"
     )
+
+
+def test_run_ragas_evaluate_anthropic_judge_identity() -> None:
+    """EVAL-011 AC-7: anthropic provider → judge_identity records provider + resolved chat model."""
+    import pandas as pd
+
+    from eval.metrics import _run_ragas_evaluate
+    from eval.run_writer import EntryResult
+
+    entries = [
+        EntryResult(
+            id="q1",
+            mode="canon",
+            question="What is Nocilia?",
+            status="ok",
+            answer="A city.",
+            ground_truth="city",
+            retrieved_contexts=["doc/intro.md"],
+        )
+    ]
+
+    def fake_evaluate(dataset: Any, metrics: Any = None, **kwargs: Any) -> Any:
+        mock_result = MagicMock()
+        mock_result.to_pandas.return_value = pd.DataFrame(
+            {
+                "faithfulness": [0.9],
+                "answer_relevancy": [0.85],
+                "context_precision": [0.8],
+                "context_recall": [0.75],
+            }
+        )
+        return mock_result
+
+    with (
+        _set_env(**_anthropic_env()),
+        patch("ragas.evaluate", fake_evaluate),
+    ):
+        os.environ.pop("RAGAS_JUDGE_MODEL", None)
+        _, judge_identity = _run_ragas_evaluate(entries)
+
+    assert judge_identity is not None
+    assert judge_identity["provider"] == "anthropic"
+    assert judge_identity["chat_model"] == DEFAULT_ANTHROPIC_JUDGE_MODEL

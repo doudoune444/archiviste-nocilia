@@ -9,6 +9,19 @@ resource "google_secret_manager_secret" "mistral_api_key" {
   }
 }
 
+# EVAL-011: Anthropic API key for the Ragas judge chat model (Claude) in archiviste-eval.
+# No per-secret IAM binding: archiviste-runtime already holds roles/secretmanager.secretAccessor
+# project-wide (iam.tf), same as mistral_api_key. The secret version is bootstrapped manually
+# post-apply (see docs/runbook/bootstrap-gcp.md): gcloud secrets versions add ANTHROPIC_API_KEY.
+resource "google_secret_manager_secret" "anthropic_api_key" {
+  secret_id = "ANTHROPIC_API_KEY"
+  labels    = local.labels
+
+  replication {
+    auto {}
+  }
+}
+
 # PR-e: JWT signing private key for archiviste-gateway (Ed25519).
 # Version bootstrapped post-apply by operator (see docs/runbook/bootstrap-gcp.md §5b).
 resource "google_secret_manager_secret" "jwt_ed25519_private_key" {

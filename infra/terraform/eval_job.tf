@@ -22,10 +22,10 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
       # must inspect logs and re-execute manually (AC-1). Mirrors ingest Job.
       max_retries = 0
 
-      # default task timeout is 600s; a throttled live Ragas run (RAGAS_MAX_WORKERS=1)
-      # over the full golden set completes the judge phase in ~10-15 min. 7200s is
-      # generous safety headroom against a slow Mistral tier / extra 429 backoff
-      # (EVAL-008, widened EVAL-009).
+      # default task timeout is 600s. EVAL-011: the chat judge is Anthropic (RAGAS_MAX_WORKERS=4),
+      # so the judge phase now completes in minutes (vs ~2.2h serial on free Mistral). 7200s stays
+      # as generous headroom against free-tier Mistral-embed 429 backoff on the decoupled
+      # embeddings half (EVAL-008, widened EVAL-009, judge swap EVAL-011).
       timeout = "7200s"
 
       # Cloud SQL managed volume: same pattern as cloud_run_job.tf (ingest Job).
@@ -83,25 +83,48 @@ resource "google_cloud_run_v2_job" "archiviste_eval" {
           value = "postgresql://${replace(trimsuffix(google_service_account.archiviste_runtime.email, ".gserviceaccount.com"), "@", "%40")}@/archiviste?host=/cloudsql/${google_sql_database_instance.archiviste_db.connection_name}"
         }
 
-        # RAGAS_JUDGE_PROVIDER=mistral: metrics.py defaults to mistral but we pin it
-        # explicitly so the job is self-documenting and resilient to default changes.
+        # RAGAS_JUDGE_PROVIDER=anthropic (EVAL-011): Claude judge via the Anthropic API.
+        # Far higher throughput than the free Mistral tier, so the judge phase finishes in
+        # minutes (vs ~2.2h serial) under the task timeout. metrics.py defaults to mistral;
+        # pinned explicitly so the job is self-documenting.
         env {
           name  = "RAGAS_JUDGE_PROVIDER"
+          value = "anthropic"
+        }
+
+        # RAGAS_JUDGE_EMBEDDINGS_PROVIDER=mistral (EVAL-011): Anthropic exposes no embeddings
+        # API, so the judge embeddings half is decoupled and reuses the existing Mistral key.
+        # Switch to "openai" (+ an OpenAI embeddings key) live if the free Mistral tier 429s.
+        env {
+          name  = "RAGAS_JUDGE_EMBEDDINGS_PROVIDER"
           value = "mistral"
         }
 
-        # RAGAS_MAX_WORKERS: Ragas judge concurrency, tuned to the Mistral tier's rate
-        # limit. 1 avoids 429 storms that blow the task timeout (EVAL-009). Tunable live
-        # via `gcloud run jobs update --update-env-vars` without an image rebuild.
+        # RAGAS_MAX_WORKERS: Ragas judge concurrency. Raised to 4 (EVAL-011) now the chat
+        # judge is on Anthropic's paid tier; the binding limit becomes the free Mistral
+        # embeddings tier. Tunable live via `gcloud run jobs update --update-env-vars` with
+        # no image rebuild — drop back toward 1 if embeddings 429s reappear.
         env {
           name  = "RAGAS_MAX_WORKERS"
-          value = "1"
+          value = "4"
         }
 
-        # LLM_API_KEY: read by eval/metrics.py build_ragas_judge() (line 111).
-        # Secret Manager reference — never a plaintext value (AC-6, security.md §A02).
+        # LLM_API_KEY: chat judge key read by eval/metrics.py build_ragas_judge().
+        # EVAL-011: now the Anthropic key. Secret Manager ref — never plaintext (security.md §A02).
         env {
           name = "LLM_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.anthropic_api_key.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # RAGAS_JUDGE_EMBEDDINGS_API_KEY: decoupled embeddings key (EVAL-011) — the existing
+        # Mistral key, used only for mistral-embed. Secret Manager ref — never plaintext.
+        env {
+          name = "RAGAS_JUDGE_EMBEDDINGS_API_KEY"
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.mistral_api_key.secret_id

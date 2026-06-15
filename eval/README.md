@@ -20,12 +20,16 @@ python eval/ragas_runner.py --mode live --set specs/golden_qa.jsonl \
 |---|---|---|
 | `WORKERS_URL` | No (default `http://localhost:8000`) | Workers base URL |
 | `LLM_PROVIDER` | Live only (default `mistral`) | Provider for `/v1/generate` calls |
-| `RAGAS_JUDGE_PROVIDER` | Live only (default **`mistral`**) | LLM judge provider for Ragas metrics (`mistral`\|`openai`) |
-| `RAGAS_JUDGE_MODEL` | No (default `mistral-large-2411`) | Chat model snapshot for the Ragas judge. Pinned dated snapshot prevents silent score drift. Override to `mistral-large-latest` etc. |
-| `RAGAS_JUDGE_EMBEDDINGS_MODEL` | No (default `mistral-embed`) | Embeddings model for the Ragas judge. |
-| `LLM_API_KEY` | Live only | API key for the LLM judge (Ragas). Read as `pydantic.SecretStr` — never logged or written to the run file. |
+| `RAGAS_JUDGE_PROVIDER` | Live only (default **`mistral`**) | LLM judge provider for Ragas metrics (`mistral`\|`openai`\|`anthropic`) |
+| `RAGAS_JUDGE_MODEL` | No (provider default) | Chat model snapshot for the Ragas judge. Pinned dated snapshot prevents silent score drift. Defaults: `mistral-large-2411` (mistral), `gpt-4o` (openai), `claude-haiku-4-5-20251001` (anthropic). |
+| `RAGAS_JUDGE_EMBEDDINGS_PROVIDER` | No (default `mistral`) | Embeddings provider for the Ragas judge (`mistral`\|`openai`). **Decoupled** from the chat provider — required for `anthropic` (Anthropic has no embeddings API). For a `mistral`/`openai` chat judge it stays the same provider. |
+| `RAGAS_JUDGE_EMBEDDINGS_MODEL` | No (provider default) | Embeddings model. Defaults: `mistral-embed` (mistral), `text-embedding-3-small` (openai). |
+| `RAGAS_JUDGE_EMBEDDINGS_API_KEY` | Anthropic judge | API key for the embeddings provider when decoupled from the chat key (e.g. the Mistral key while the chat judge is Claude). `pydantic.SecretStr` — never logged. |
+| `LLM_API_KEY` | Live only | API key for the **chat** judge (Ragas). For `anthropic`, this is the Anthropic API key. Read as `pydantic.SecretStr` — never logged or written to the run file. |
 
 > **EVAL-001 AC-14 supersession**: EVAL-001 documented the intent of a configurable Ragas judge with an OpenAI default. EVAL-003 implements that intent with Mistral as the effective default (`RAGAS_JUDGE_PROVIDER=mistral`, pinned snapshot `mistral-large-2411`). The env var name is unchanged; only the default value changes from `openai` to `mistral`.
+
+> **EVAL-003 AC-1/AC-4 supersession (EVAL-011)**: the allowed `RAGAS_JUDGE_PROVIDER` set is extended `{mistral, openai}` → `{mistral, openai, anthropic}`. The Anthropic (Claude) judge uses pinned `claude-haiku-4-5-20251001` (override via `RAGAS_JUDGE_MODEL`) and a **decoupled** embeddings provider (`RAGAS_JUDGE_EMBEDDINGS_PROVIDER`, default `mistral`, key `RAGAS_JUDGE_EMBEDDINGS_API_KEY`) because Anthropic has no embeddings API. The Cloud Run `archiviste-eval` job runs the anthropic judge at `RAGAS_MAX_WORKERS=4`. Switching judge (Mistral → Claude) changes the scores, so a baseline re-bake / Gate A recalibration is a separate human follow-up.
 
 ## Exit Codes
 

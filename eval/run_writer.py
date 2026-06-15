@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-SECRET_ENV_VARS = ("LLM_API_KEY", "DATABASE_URL", "WORKERS_URL")
+SECRET_ENV_VARS = (
+    "LLM_API_KEY",
+    "RAGAS_JUDGE_EMBEDDINGS_API_KEY",
+    "DATABASE_URL",
+    "WORKERS_URL",
+)
 
 
 @dataclass

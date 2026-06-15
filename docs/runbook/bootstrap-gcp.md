@@ -117,6 +117,21 @@ echo -n "<YOUR_MISTRAL_API_KEY>" | \
 
 This must happen BEFORE the first `deploy.yml` GHA run — workers boot fails without it.
 
+## 5a. Bootstrap ANTHROPIC_API_KEY secret version (EVAL-011)
+
+The `archiviste-eval` Cloud Run Job uses Claude as the Ragas judge chat model. Terraform
+creates the `ANTHROPIC_API_KEY` secret resource but NOT the version. After `terraform apply`,
+and BEFORE the first `gcloud run jobs execute archiviste-eval`:
+
+```bash
+echo -n "<YOUR_ANTHROPIC_API_KEY>" | \
+  gcloud secrets versions add ANTHROPIC_API_KEY --data-file=-
+```
+
+The eval job binds `LLM_API_KEY` to `version="latest"` of this secret; the job fails at
+container start until a version exists. The judge's embeddings half reuses `MISTRAL_API_KEY`
+(§5) via `RAGAS_JUDGE_EMBEDDINGS_API_KEY`, so no second key is needed.
+
 ## 5b. Bootstrap JWT Ed25519 keypair + GCS signing placeholder
 
 The gateway refuses to boot without 4 env vars (`gateway/src/config.rs:58-87`).

@@ -166,6 +166,9 @@ def _run_entry_live(
 
     chunks = retrieve_response.chunks
     entry_result.retrieved_contexts = [c.source_path for c in chunks]
+    # Ragas judges faithfulness/precision/recall against the chunk TEXT, not the source
+    # paths; retrieved_contexts (paths) stays for compute_context_recall_structural.
+    entry_result.retrieved_chunk_texts = [c.text for c in chunks]
 
     generate_response = generate_client.generate(
         entry_result.question,

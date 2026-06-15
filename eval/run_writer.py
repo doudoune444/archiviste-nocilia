@@ -38,7 +38,8 @@ class EntryResult:
     citations: list[str] = field(default_factory=list)
     request_id: str = ""
     ground_truth: str | None = None
-    # Transient: retrieved chunk texts for offline keyword overlap (not serialized to run file).
+    # Transient (not serialized): chunk texts for offline keyword overlap + live Ragas
+    # `contexts` (Ragas judges chunk text, not paths). retrieved_contexts keeps the paths.
     retrieved_chunk_texts: list[str] = field(default_factory=list, repr=False)
 
 

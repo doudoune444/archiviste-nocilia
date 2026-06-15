@@ -21,6 +21,7 @@ live = [
     "datasets>=3.2",
     "langchain-openai>=0.2",
     "langchain-mistralai>=0.2",
+    "langchain-anthropic>=0.2",
     "google-cloud-storage>=2.18",
 ]
 dev = [
@@ -33,6 +34,7 @@ dev = [
     "datasets>=3.2",
     "langchain-openai>=0.2",
     "langchain-mistralai>=0.2",
+    "langchain-anthropic>=0.2",
     "pip-audit>=2.7",
     "types-requests>=2.32",
     "google-cloud-storage>=2.18",
@@ -72,7 +74,7 @@ warn_return_any = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["ragas", "ragas.*", "datasets", "datasets.*", "structlog", "structlog.*", "psycopg2", "psycopg2.*", "langchain_mistralai", "langchain_mistralai.*", "pandas", "pandas.*"]
+module = ["ragas", "ragas.*", "datasets", "datasets.*", "structlog", "structlog.*", "psycopg2", "psycopg2.*", "langchain_mistralai", "langchain_mistralai.*", "langchain_anthropic", "langchain_anthropic.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

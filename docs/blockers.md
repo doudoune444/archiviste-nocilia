@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-06-16 — BOARD-001 — `aws-lc-sys` NASM build failure blocks cargo clippy/test on Windows
+
+- File : `gateway/Cargo.lock` (aws-lc-sys = 0.41.0)
+- Symptom : `cargo clippy -- -D warnings` and `cargo test` fail with: `NASM command not found! Build cannot continue.` inside `aws-lc-sys v0.41.0` build script. Same failure in both the worktree and the main repo gateway (the pre-existing `gateway/target/debug/archiviste-gateway.exe` was built before aws-lc-sys 0.41.0 was introduced or when NASM was available).
+- Why blocked : `aws-lc-sys >= 0.41.0` requires NASM assembler at build time on Windows x86_64-pc-windows-msvc. NASM is not installed on this machine. `AWS_LC_SYS_NO_ASM=1` skips NASM but then requires cmake, which is also missing. Pre-existing platform constraint — not introduced by BOARD-001.
+- Suggested resolution : Install NASM (https://www.nasm.us/) on the Windows dev machine, or add `.cargo/config.toml` with `[target.x86_64-pc-windows-msvc] rustflags = ["--cfg", "aws_lc_sys_use_pregenerated_src"]` if that flag is supported, or pin aws-lc-sys to a version that bundles pregenerated C sources for Windows. All gateway CI runs on Linux (Cloud Run build) where this is not an issue.
+- Status : open (pre-existing, not introduced by BOARD-001)
+
 ## 2026-06-02 — OPS-003 — Prod 502: migrations never applied + CLOUD_SQL_IAM_AUTH env drift
 
 - File : `.github/workflows/deploy.yml` (no migrate step) + `infra/terraform/cloud_run.tf:180` (`CLOUD_SQL_IAM_AUTH=true`)

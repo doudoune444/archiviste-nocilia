@@ -264,3 +264,60 @@ button:not(:disabled):hover {
   white-space: nowrap;
   border: 0;
 }
+
+/* CTR-002: per-answer contradiction-report control */
+.report-control {
+  margin-top: 0.6rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.45rem;
+}
+
+.report-btn {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+}
+
+.report-btn:not(:disabled):hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  filter: none;
+}
+
+.report-form {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.report-claim {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  resize: vertical;
+  outline: none;
+}
+
+.report-claim:focus {
+  border-color: var(--color-accent);
+}
+
+.report-submit-btn {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.75rem;
+}
+
+.report-feedback {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}

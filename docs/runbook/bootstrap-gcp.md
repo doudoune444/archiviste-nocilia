@@ -284,3 +284,10 @@ redundant). For V1, configure manually once:
 
 Free plan allows 1 rate-limit rule per zone. AC-8 spec amended — see
 `docs/blockers.md` 2026-05-27 INFRA-002 entry.
+
+**CTR-002 note**: `POST /v1/report-contradiction` is multi-LLM-call-heavy (three
+concurrent judge calls per request). The existing global rule above (`100 req/min/IP`)
+already covers this path. If abuse is observed, add a tighter route-scoped CF WAF rule
+targeting only this path (e.g. `20 req/min/IP` on `URI Path` `equals`
+`/v1/report-contradiction`) — Free plan allows only 1 rule total, so either tighten
+the global limit or upgrade to a paid plan before adding a second rule.

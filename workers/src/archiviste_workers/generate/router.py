@@ -142,18 +142,28 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
         )
 
     # MEM-002: read the bounded recent-turns window once, before any LLM/retrieve
-    # call. Read happens before this turn is persisted, so the window holds only
-    # prior turns. last_user_turn makes elliptical follow-ups self-contained for
-    # intent classification and retrieval embedding (no extra LLM call).
+    # call. The read is owner-scoped on parsed.user_id, so a caller passing
+    # someone else's conversation_id gets no history (no cross-conversation leak,
+    # security.md A01). Read happens before this turn is persisted, so the window
+    # holds only prior turns. last_user_turn makes elliptical follow-ups
+    # self-contained for intent + retrieval embedding (no extra LLM call).
     settings = getattr(request.app.state, "settings", None)
     token_budget = settings.memory_token_budget if settings is not None else 0
     window = await load_memory_window(
         getattr(request.app.state, "conversation_repo", None),
         conversation_id,
+        parsed.user_id,
         token_budget=token_budget,
     )
     retrieval_query = (
         f"{window.last_user_turn}\n{parsed.query}" if window.last_user_turn else parsed.query
+    )
+
+    # MEM-002: the augmented query feeds the prior user turn (DB-resident text) to
+    # the classifier; re-run the injection filter on it so a poisoned history turn
+    # still trips the suspected-injection prefix (parity with parsed.query).
+    history_suspected = window.last_user_turn is not None and bool(
+        detect_injection(window.last_user_turn)
     )
 
     ctx = _RequestContext(
@@ -175,7 +185,7 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
     intent_result = await classify_intent(
         llm_client=ctx.llm_client,
         query=ctx.retrieval_query,
-        suspected_injection=bool(suspected),
+        suspected_injection=bool(suspected) or history_suspected,
         request_id=parsed.request_id,
     )
 

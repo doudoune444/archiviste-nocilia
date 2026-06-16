@@ -56,6 +56,19 @@ ORDER BY ordinal DESC
 LIMIT $2
 """
 
+# MEM-002: owner-scoped tail read. The JOIN to conversations enforces ownership
+# in SQL so a caller passing someone else's conversation_id gets zero rows (no
+# cross-conversation history leak — security.md A01 IDOR). conversation_messages
+# has no user_id of its own; ownership lives on the parent conversations row.
+_TAIL_OWNED_SQL = """
+SELECT cm.role, cm.ordinal, cm.content, cm.token_count, cm.created_at
+FROM conversation_messages cm
+JOIN conversations c ON c.id = cm.conversation_id
+WHERE cm.conversation_id = $1::uuid AND c.user_id = $2::uuid
+ORDER BY cm.ordinal DESC
+LIMIT $3
+"""
+
 
 @dataclass(frozen=True)
 class MessageRow:
@@ -66,6 +79,16 @@ class MessageRow:
     content: str
     token_count: int
     created_at: datetime
+
+
+def _to_message_row(row: asyncpg.Record) -> MessageRow:
+    return MessageRow(
+        role=row["role"],
+        ordinal=row["ordinal"],
+        content=row["content"],
+        token_count=row["token_count"],
+        created_at=row["created_at"],
+    )
 
 
 class ConversationRepository:
@@ -116,13 +139,17 @@ class ConversationRepository:
         """Return up to *limit* most recent turns, newest-first by ordinal (MEM-001)."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(_TAIL_SQL, conversation_id, limit)
-        return [
-            MessageRow(
-                role=row["role"],
-                ordinal=row["ordinal"],
-                content=row["content"],
-                token_count=row["token_count"],
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+        return [_to_message_row(row) for row in rows]
+
+    async def fetch_tail_owned(
+        self, conversation_id: str, user_id: str, *, limit: int
+    ) -> list[MessageRow]:
+        """Owner-scoped tail read (MEM-002): zero rows if *user_id* is not the owner.
+
+        Closes the cross-conversation history-leak IDOR: ownership is enforced in
+        SQL (JOIN on conversations.user_id), so the caller cannot read turns from a
+        conversation_id they do not own.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(_TAIL_OWNED_SQL, conversation_id, user_id, limit)
+        return [_to_message_row(row) for row in rows]

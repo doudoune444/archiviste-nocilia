@@ -23,9 +23,11 @@ MEMORY_MAX_TURNS = 50
 
 
 class TailReader(Protocol):
-    """Minimal read surface needed from the conversation store."""
+    """Minimal read surface needed from the conversation store (owner-scoped)."""
 
-    async def fetch_tail(self, conversation_id: str, *, limit: int) -> list[MessageRow]: ...
+    async def fetch_tail_owned(
+        self, conversation_id: str, user_id: str, *, limit: int
+    ) -> list[MessageRow]: ...
 
 
 @dataclass(frozen=True)
@@ -47,16 +49,19 @@ _EMPTY = MemoryWindow(messages=[], last_user_turn=None)
 async def load_memory_window(
     repo: TailReader | None,
     conversation_id: str,
+    user_id: str,
     *,
     token_budget: int,
 ) -> MemoryWindow:
     """Return prior turns within *token_budget*, newest-first selection rendered chronologically.
 
+    The read is owner-scoped: a *user_id* that does not own *conversation_id* gets
+    an empty window (no cross-conversation history leak — security.md A01 IDOR).
     Returns an empty window when no store is wired or the budget is non-positive.
     """
     if repo is None or token_budget <= 0:
         return _EMPTY
-    rows = await repo.fetch_tail(conversation_id, limit=MEMORY_MAX_TURNS)
+    rows = await repo.fetch_tail_owned(conversation_id, user_id, limit=MEMORY_MAX_TURNS)
     if not rows:
         return _EMPTY
     return MemoryWindow(

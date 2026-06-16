@@ -538,7 +538,21 @@ pub fn router(state: Arc<AppState>) -> Router {
     // extractor can gate it (a bare ServeFile carries no extractor, plan R3).
     let dashboard_api = Router::new()
         .route("/dashboard", get(handlers::dashboard::serve_dashboard))
-        .route("/v1/tickets", get(handlers::tickets::list_tickets))
+        .route("/v1/tickets", get(handlers::tickets::list_tickets));
+
+    // HIST-001: owner-scoped conversation history. Each handler resolves the caller
+    // via the `AnonIdentity` extension and enforces ownership in SQL, so anonymous
+    // visitors reach these routes but only ever see their own data. `signed-url` is
+    // owner-or-author (authors moderate any conversation; other tiers only their own).
+    let conversations_api = Router::new()
+        .route(
+            "/v1/conversations",
+            get(handlers::conversations::list_conversations),
+        )
+        .route(
+            "/v1/conversations/{id}/messages",
+            get(handlers::conversations::conversation_messages),
+        )
         .route(
             "/v1/conversations/{id}/signed-url",
             get(handlers::conversations::signed_url),
@@ -562,6 +576,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(auth_router)
         .merge(public_api)
         .merge(dashboard_api)
+        .merge(conversations_api)
         .merge(test_routes)
         .merge(static_router)
         .layer(axum::middleware::from_fn_with_state(

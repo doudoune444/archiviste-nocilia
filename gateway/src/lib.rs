@@ -26,7 +26,7 @@ use secrecy::ExposeSecret;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::postgres::PgConnectOptions;
-use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use tower_http::{
     limit::RequestBodyLimitLayer,
     services::{ServeDir, ServeFile},
@@ -38,10 +38,7 @@ use uuid::Uuid;
 use crate::{
     auth::{
         extractor::{AnonIdentity, UserTier},
-        fingerprint::{
-            compute_fingerprint, extract_ip, extract_user_agent, fingerprint_to_user_id,
-            parse_anon_cookie, ANON_COOKIE_NAME,
-        },
+        fingerprint::{cookie_uuid_to_user_id, parse_anon_cookie, ANON_COOKIE_NAME},
         jwt,
     },
     auth_metadata::TokenProvider,
@@ -217,16 +214,19 @@ async fn resolve_identity(
         Ok(auth) => auth,
     };
 
-    let anon_cookie_to_set = if maybe_auth.is_none() {
-        // Anonymous path: read or generate archiviste_anon cookie.
-        let existing = parse_anon_cookie(&headers);
-        if existing.is_none() {
-            Some(Uuid::new_v4().to_string())
+    // IDN-001: identity is derived solely from the validated cookie UUID.
+    // A missing or invalid cookie gets a fresh UUIDv4 (OsRng) — no fallback
+    // to IP or User-Agent.
+    let (anon_cookie_uuid, anon_cookie_to_set) = if maybe_auth.is_none() {
+        if let Some(existing_uuid) = parse_anon_cookie(&headers) {
+            (existing_uuid, None)
         } else {
-            None // cookie already exists, no need to set it
+            let fresh = Uuid::new_v4();
+            (fresh, Some(fresh.to_string()))
         }
     } else {
-        None
+        // Authenticated path — values are unused below.
+        (Uuid::nil(), None)
     };
 
     let identity = if let Some(auth) = maybe_auth {
@@ -237,26 +237,16 @@ async fn resolve_identity(
             fingerprint: None,
         }
     } else {
-        // Anonymous: compute fingerprint from IP + UA + anon cookie.
-        let anon_id = parse_anon_cookie(&headers)
-            .or_else(|| anon_cookie_to_set.clone())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-        // ConnectInfo is not available in `oneshot` tests (no TCP socket).
-        let connect_info: Option<SocketAddr> = req
-            .extensions()
-            .get::<axum::extract::ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0);
-
-        let ip = extract_ip(&headers, connect_info.as_ref());
-        let ua = extract_user_agent(&headers);
-        let fp = compute_fingerprint(&ip, ua, &anon_id);
-        let user_id = fingerprint_to_user_id(&fp);
+        // Anonymous: derive user_id from the validated cookie UUID alone.
+        // IDN-001: `user_id = UUIDv5(NIL_namespace, cookie_uuid.as_bytes())`.
+        // The cookie UUID string is stored in `fingerprint` for observability
+        // (AC-9: anonymous callers expose a stable non-null fingerprint field).
+        let user_id = cookie_uuid_to_user_id(&anon_cookie_uuid);
 
         AnonIdentity {
             user_id,
             tier: UserTier::Anonymous,
-            fingerprint: Some(fp),
+            fingerprint: Some(anon_cookie_uuid.to_string()),
         }
     };
 

@@ -1,6 +1,6 @@
-//! Handler for `GET /v1/me` — SEC-001 PR-a (AC-9, AC-10).
+//! Handler for `GET /v1/me` — SEC-001 PR-a (AC-9) / IDN-001 (cookie-dominant identity).
 //!
-//! Public route: returns anonymous identity (fingerprint + `UUIDv5`) or
+//! Public route: returns anonymous identity (`user_id` + cookie UUID) or
 //! member/author identity (from valid JWT).  No IDOR possible — the route
 //! always returns the caller's own identity, never a parameterised one.
 
@@ -25,7 +25,9 @@ pub struct MeResponse {
     pub user_id: String,
     /// Tier: `"anonymous"`, `"member"`, or `"author"`.
     pub tier: &'static str,
-    /// SHA-256 hex fingerprint (64 chars) for anonymous; `null` for authenticated.
+    /// Cookie UUID (`archiviste_anon`) for anonymous callers; `null` for authenticated.
+    ///
+    /// IDN-001: the `user_id` is derived solely from this cookie value.
     pub fingerprint: Option<String>,
 }
 
@@ -37,7 +39,7 @@ pub struct MeResponse {
 ///
 /// The `AnonIdentity` extension is set by the `resolve_identity` middleware
 /// before this handler runs. Authenticated callers have `tier=member|author`
-/// and `fingerprint=None`; anonymous callers have `fingerprint=Some(hex)`.
+/// and `fingerprint=None`; anonymous callers have `fingerprint=Some(cookie_uuid)`.
 pub async fn me(
     Extension(identity): Extension<AnonIdentity>,
     Extension(_req_id): Extension<RequestId>,

@@ -1,14 +1,23 @@
-//! Anonymous fingerprint computation — SEC-001 PR-a (AC-10, AC-21).
+//! Anonymous identity derivation — IDN-001 (cookie-dominant identity).
 //!
-//! Fingerprint = SHA-256(`<ip>|<user_agent>|<anon_cookie_uuid>`).
-//! The `user_id` for anonymous requests is `UUIDv5(NIL namespace, fingerprint_hex)`.
+//! The anonymous `user_id` is derived **solely** from the validated
+//! `archiviste_anon` cookie UUID.  IP address and User-Agent are no longer
+//! part of the identity formula so that the same cookie always yields the
+//! same `user_id` regardless of network or browser changes.
 //!
-//! IP priority (AC-21):
-//!   1. `CF-Connecting-IP` header (Cloudflare ingress, V1 production).
-//!   2. `ConnectInfo<SocketAddr>` (dev local without Cloudflare).
+//! Derivation formula:
+//!   `user_id = UUIDv5(NIL_namespace, cookie_uuid.as_bytes())`
+//!
+//! Why `UUIDv5` over the raw cookie bytes rather than returning the cookie UUID
+//! directly: `UUIDv5` keeps `user_id` in the UUID address space while making it
+//! structurally distinct from the cookie value itself, preventing confusion
+//! between the two values in logs and DB rows.  The mapping is bijective for
+//! valid cookie UUIDs so stability is preserved.
+//!
+//! Cookie name `archiviste_anon` (`UUIDv4`, `Max-Age` 31536000, `HttpOnly`, Secure,
+//! `SameSite=Lax`).  A missing or invalid cookie causes the caller to receive a
+//! fresh `UUIDv4` cookie; the derived `user_id` is computed from that fresh value.
 
-use sha2::{Digest, Sha256};
-use std::{fmt::Write as _, net::SocketAddr};
 use uuid::Uuid;
 
 /// Cookie name for the anonymous identity token (AC-10).
@@ -18,47 +27,20 @@ pub const ANON_COOKIE_NAME: &str = "archiviste_anon";
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Compute the 64-char hex fingerprint from the three identity components.
+/// Derive the anonymous `user_id` from the validated cookie UUID.
 ///
-/// `anon_id` is the value of the `archiviste_anon` cookie (new or existing).
-#[must_use]
-pub fn compute_fingerprint(ip: &str, user_agent: &str, anon_id: &str) -> String {
-    let input = format!("{ip}|{user_agent}|{anon_id}");
-    let hash = Sha256::digest(input.as_bytes());
-    encode_hex(hash.as_ref())
-}
-
-/// Derive the anonymous `user_id` (`UUIDv5`, NIL namespace) from the fingerprint.
+/// `cookie_uuid` is the validated value of the `archiviste_anon` cookie (either
+/// an existing UUID from the request or a freshly generated one).
 ///
-/// AC-10 verbatim: "namespace = NIL" — `Uuid::nil()` (all-zero) is the NIL namespace
-/// per RFC 4122 §4.3. Using any other namespace (e.g. `NAMESPACE_DNS`) would produce
-/// different UUIDs, breaking all stored anonymous `user_ids`.
-#[must_use]
-pub fn fingerprint_to_user_id(fingerprint_hex: &str) -> Uuid {
-    Uuid::new_v5(&Uuid::nil(), fingerprint_hex.as_bytes())
-}
-
-/// Extract client IP from an Axum request.
+/// Formula: `UUIDv5(NIL_namespace, cookie_uuid.as_bytes())`
 ///
-/// Prefers `CF-Connecting-IP` header (AC-21). Falls back to the peer `SocketAddr`
-/// from the `ConnectInfo` extension (always present when using `axum::serve`).
+/// The NIL namespace (`Uuid::nil()`, all-zero) is required by the original
+/// SEC-001 AC-10 contract ("namespace = NIL" per RFC 4122 §4.3). Using any
+/// other namespace would break stored anonymous `user_id`s for this derivation
+/// path.
 #[must_use]
-pub fn extract_ip(headers: &axum::http::HeaderMap, connect_info: Option<&SocketAddr>) -> String {
-    if let Some(cf_ip) = headers.get("cf-connecting-ip") {
-        if let Ok(ip) = cf_ip.to_str() {
-            return ip.to_string();
-        }
-    }
-    connect_info.map_or_else(|| "unknown".to_string(), |addr| addr.ip().to_string())
-}
-
-/// Extract the `User-Agent` string (empty string if absent).
-#[must_use]
-pub fn extract_user_agent(headers: &axum::http::HeaderMap) -> &str {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
+pub fn cookie_uuid_to_user_id(cookie_uuid: &Uuid) -> Uuid {
+    Uuid::new_v5(&Uuid::nil(), cookie_uuid.as_bytes())
 }
 
 /// Parse the `archiviste_anon` UUID from the `Cookie` header.
@@ -66,28 +48,16 @@ pub fn extract_user_agent(headers: &axum::http::HeaderMap) -> &str {
 /// Returns `None` if the cookie is absent or cannot be parsed as a UUID
 /// (caller must generate a new one in that case).
 #[must_use]
-pub fn parse_anon_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+pub fn parse_anon_cookie(headers: &axum::http::HeaderMap) -> Option<Uuid> {
     let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for part in cookie_header.split(';') {
         let part = part.trim();
         if let Some(val) = part.strip_prefix(&format!("{ANON_COOKIE_NAME}=")) {
-            // Validate it is a valid UUID to prevent fingerprint manipulation.
-            if Uuid::parse_str(val).is_ok() {
-                return Some(val.to_string());
+            // Validate it is a well-formed UUID to prevent identity manipulation.
+            if let Ok(uuid) = Uuid::parse_str(val) {
+                return Some(uuid);
             }
         }
     }
     None
-}
-
-// ---------------------------------------------------------------------------
-// Private helpers — hex encoding
-// ---------------------------------------------------------------------------
-
-fn encode_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
 }

@@ -1,8 +1,12 @@
-//! Integration tests for `GET /v1/me` (SEC-001 PR-a).
+//! Integration tests for `GET /v1/me` (SEC-001 PR-a, IDN-001).
 //!
-//! Covers AC-9 (tier/fingerprint response) and AC-10 (deterministic anonymous `user_id`).
+//! Covers AC-9 (tier/fingerprint response) and AC-10 (deterministic anonymous
+//! `user_id`).  IDN-001: `user_id` derived solely from `archiviste_anon` cookie
+//! UUID; `fingerprint` field carries the cookie UUID string (not a SHA-256 hex).
 
 #![allow(clippy::unwrap_used)]
+// Pedantic doc_markdown suppressed for test prose (cf. test_observability_status.rs).
+#![allow(clippy::doc_markdown)]
 
 mod common;
 use common::jwt_helpers::{make_test_config, sign_test_token};
@@ -53,8 +57,10 @@ async fn body_json(resp: axum::response::Response) -> serde_json::Value {
 //           cookie archiviste_anon posed in response.
 // ---------------------------------------------------------------------------
 
-/// AC-9 (a): anonymous (no cookie) → 200, tier=anonymous, fingerprint is 64-char hex,
+/// AC-9 (a): anonymous (no cookie) → 200, tier=anonymous, fingerprint is a UUID string,
 ///           Set-Cookie `archiviste_anon` present.
+///
+/// IDN-001: `fingerprint` field now carries the cookie UUID (36 chars), not a SHA-256 hex.
 #[tokio::test]
 async fn ac9a_anonymous_no_cookie_returns_200_with_fingerprint() {
     // AC-9: anonymous request returns user_id/tier/fingerprint
@@ -84,11 +90,16 @@ async fn ac9a_anonymous_no_cookie_returns_200_with_fingerprint() {
     let body = body_json(resp).await;
     assert_eq!(body["tier"], "anonymous");
 
+    // IDN-001: fingerprint is the cookie UUID string (36 chars), not a 64-char SHA-256 hex.
     let fingerprint = body["fingerprint"].as_str().unwrap();
-    assert_eq!(fingerprint.len(), 64, "fingerprint must be 64 hex chars");
+    assert_eq!(
+        fingerprint.len(),
+        36,
+        "fingerprint must be a UUID string (36 chars)"
+    );
     assert!(
-        fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
-        "fingerprint must be hex"
+        uuid::Uuid::parse_str(fingerprint).is_ok(),
+        "fingerprint must be a valid UUID"
     );
 
     let user_id = body["user_id"].as_str().unwrap();
@@ -99,11 +110,11 @@ async fn ac9a_anonymous_no_cookie_returns_200_with_fingerprint() {
 // AC-9 (b): anonymous with existing cookie → same user_id (deterministic).
 // ---------------------------------------------------------------------------
 
-/// AC-9 (b) + AC-10: same IP + UA + cookie → same `user_id` across requests.
+/// AC-9 (b) + AC-10: same cookie → same `user_id` across requests (IDN-001).
 #[tokio::test]
 async fn ac9b_ac10_deterministic_user_id_with_existing_cookie() {
     // AC-9 (b): existing archiviste_anon cookie → same user_id
-    // AC-10: user_id is deterministic UUIDv5(NIL, sha256_hex)
+    // AC-10 / IDN-001: user_id is deterministic UUIDv5(NIL, cookie_uuid.as_bytes())
     let state = make_state();
 
     let anon_uuid = uuid::Uuid::new_v4().to_string();
@@ -123,97 +134,44 @@ async fn ac9b_ac10_deterministic_user_id_with_existing_cookie() {
 
     assert_eq!(
         user_id_1, user_id_2,
-        "same cookie+IP+UA must produce same user_id"
+        "same cookie must produce same user_id"
     );
 }
 
 // ---------------------------------------------------------------------------
-// AC-10: verbatim UUIDv5(NIL, fingerprint_hex) — namespace regression test (HIGH-1 fix).
+// AC-10 / IDN-001: verbatim UUIDv5(NIL, cookie_uuid.as_bytes()) regression test.
 // ---------------------------------------------------------------------------
 
-/// AC-10 verbatim: assert exact `UUIDv5` value for a known (ip, ua, `anon_cookie`) triple.
+/// AC-10 / IDN-001: assert exact `UUIDv5` value for a known cookie UUID.
 ///
-/// Fixture values (fixed):
-///   ip = "127.0.0.1" (no CF-Connecting-IP in test env)
-///   ua = "TestAgent/1.0"
-///   `anon_id` = "00000000-0000-0000-0000-000000000001"
+/// Fixture:
+///   cookie_uuid = "00000000-0000-0000-0000-000000000001"
+///   expected_user_id = UUIDv5(NIL, cookie_uuid.as_bytes())
 ///
-/// `fingerprint_hex` = SHA-256("127.0.0.1|TestAgent/1.0|00000000-0000-0000-0000-000000000001")
-///                   = "8b93792410d3a43b4d3c94407af5e00050d9a553c41a4fc3a0ea6bb4d8bc7f10"
-///
-/// `expected_user_id` = UUIDv5(NIL, `fingerprint_hex`)
-///                    = "0c0a168b-3e2e-5975-8163-0e8e140d59fa"
-///
-/// This test prevents regression to `NAMESPACE_DNS` (AC-10, HIGH-1 fix).
-#[tokio::test]
-async fn ac10_verbatim_uuidv5_nil_namespace() {
-    // AC-10: user_id MUST be UUIDv5(NIL namespace, fingerprint_hex)
-    use archiviste_gateway::auth::fingerprint::{compute_fingerprint, fingerprint_to_user_id};
+/// This test prevents regression to old SHA-256 fingerprint formula or wrong namespace.
+#[test]
+fn ac10_idn001_verbatim_uuidv5_nil_namespace_cookie_bytes() {
+    // AC-10 / IDN-001: user_id MUST be UUIDv5(NIL namespace, cookie_uuid.as_bytes())
+    use archiviste_gateway::auth::fingerprint::cookie_uuid_to_user_id;
 
-    let ip = "127.0.0.1";
-    let ua = "TestAgent/1.0";
-    let anon_id = "00000000-0000-0000-0000-000000000001";
+    let cookie_uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+    let user_id = cookie_uuid_to_user_id(&cookie_uuid);
 
-    let fingerprint = compute_fingerprint(ip, ua, anon_id);
-    assert_eq!(
-        fingerprint, "8b93792410d3a43b4d3c94407af5e00050d9a553c41a4fc3a0ea6bb4d8bc7f10",
-        "fingerprint_hex must match SHA-256 of 'ip|ua|anon_id'"
-    );
-
-    let user_id = fingerprint_to_user_id(&fingerprint);
-    assert_eq!(
-        user_id.to_string(),
-        "0c0a168b-3e2e-5975-8163-0e8e140d59fa",
-        "user_id must be UUIDv5(NIL, fingerprint_hex) — not NAMESPACE_DNS"
-    );
-
-    // Verify it is version 5 (bits 12-15 of time_hi = 0101b = 5).
+    // Verify it is UUID version 5.
     assert_eq!(user_id.get_version_num(), 5, "must be UUID version 5");
-}
 
-// ---------------------------------------------------------------------------
-// AC-21: CF-Connecting-IP header takes priority over X-Forwarded-For and ConnectInfo.
-// ---------------------------------------------------------------------------
-
-/// AC-21: `extract_ip` returns CF-Connecting-IP when present, ignoring other sources.
-#[test]
-fn ac21_cf_connecting_ip_has_priority() {
-    // AC-21: CF-Connecting-IP must take priority over X-Forwarded-For and ConnectInfo.
-    use archiviste_gateway::auth::fingerprint::extract_ip;
-    use axum::http::{HeaderMap, HeaderName, HeaderValue};
-    use std::net::SocketAddr;
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("cf-connecting-ip"),
-        HeaderValue::from_static("1.2.3.4"),
-    );
-    headers.insert(
-        HeaderName::from_static("x-forwarded-for"),
-        HeaderValue::from_static("9.9.9.9"),
-    );
-
-    let connect_info: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let ip = extract_ip(&headers, Some(&connect_info));
-
-    assert_eq!(ip, "1.2.3.4", "CF-Connecting-IP must take priority");
-}
-
-/// AC-21: when CF-Connecting-IP is absent, `ConnectInfo` is used (dev path).
-#[test]
-fn ac21_connect_info_used_when_no_cf_header() {
-    // AC-21: fallback to ConnectInfo when no CF-Connecting-IP header is present.
-    use archiviste_gateway::auth::fingerprint::extract_ip;
-    use axum::http::HeaderMap;
-    use std::net::SocketAddr;
-
-    let headers = HeaderMap::new();
-    let connect_info: SocketAddr = "10.0.0.1:8080".parse().unwrap();
-    let ip = extract_ip(&headers, Some(&connect_info));
-
+    // Verify it uses NIL namespace (not NAMESPACE_DNS or other).
+    // UUIDv5(NIL, bytes) is stable — precomputed expected value:
+    let expected = uuid::Uuid::new_v5(&uuid::Uuid::nil(), cookie_uuid.as_bytes());
     assert_eq!(
-        ip, "10.0.0.1",
-        "ConnectInfo IP must be used when CF header absent"
+        user_id, expected,
+        "user_id must be UUIDv5(NIL, cookie_uuid.as_bytes())"
+    );
+
+    // The user_id must differ from the cookie UUID itself.
+    assert_ne!(
+        user_id, cookie_uuid,
+        "user_id must not equal the cookie UUID"
     );
 }
 

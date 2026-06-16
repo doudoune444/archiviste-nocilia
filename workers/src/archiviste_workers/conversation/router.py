@@ -1,4 +1,4 @@
-"""POST /v1/conversations/{conversation_id}/messages router (ING-003)."""
+"""POST /v1/conversations/{conversation_id}/messages router (ING-003 / MEM-001)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from archiviste_workers.conversation.models import (
     is_valid_conversation_id,
 )
 from archiviste_workers.conversation.repository import ConversationRepository
+from archiviste_workers.conversation.token_counter import count_tokens
 
 router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
 logger = structlog.get_logger()
@@ -57,6 +58,37 @@ def _check_timestamp(timestamp: datetime, *, created_at: datetime) -> None:
         raise _error(422, "timestamp_in_future")
     if ts < created_at:
         raise _error(422, "timestamp_before_conversation")
+
+
+async def _insert_message_best_effort(
+    repository: ConversationRepository,
+    *,
+    conversation_id: str,
+    message: MessageIn,
+    ordinal: int,
+) -> None:
+    """Best-effort structured-store write: logs ALERT on failure, never raises.
+
+    ING-003 invariant: GCS is source of truth. A failure here — whether the
+    token count or the DB insert — MUST NOT affect the 2xx response: the caller
+    has already appended to GCS. Token counting runs inside the guard so a
+    tokenizer error cannot break the post-GCS path either.
+    """
+    try:
+        token_count = count_tokens(message.content)
+        await repository.insert_message(
+            conversation_id=conversation_id,
+            role=message.role,
+            ordinal=ordinal,
+            content=message.content,
+            token_count=token_count,
+        )
+    except (asyncpg.PostgresError, OSError, TimeoutError, ValueError):
+        logger.error(
+            "inconsistency_message_insert_after_gcs",
+            conversation_id=conversation_id,
+            ordinal=ordinal,
+        )
 
 
 @router.post(
@@ -117,16 +149,31 @@ async def post_message(
     except StorageUnavailableError as exc:
         raise _error(503, "storage_unavailable") from exc
 
+    # GCS append succeeded — source of truth updated. All subsequent DB
+    # writes are best-effort; failures are logged and non-fatal (ING-003 AC-5).
+
+    message_count = -1
     try:
         message_count = await repository.increment_message_count(conversation_id)
     except (asyncpg.PostgresError, OSError, TimeoutError):
-        # AC-5: DB failure post-GCS is non-fatal; surface ALERT log, return 201.
         logger.error(
             "inconsistency_db_after_gcs",
             conversation_id=conversation_id,
             gcs_generation=generation,
         )
-        message_count = -1
+
+    # MEM-001: double-write into conversation_messages.
+    # ordinal is zero-based: if message_count succeeded, ordinal = count - 1;
+    # if the counter update failed (message_count == -1), skip structured insert
+    # (no reliable ordinal and the conversation index is already inconsistent).
+    if message_count > 0:
+        ordinal = message_count - 1
+        await _insert_message_best_effort(
+            repository,
+            conversation_id=conversation_id,
+            message=message,
+            ordinal=ordinal,
+        )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     logger.info(

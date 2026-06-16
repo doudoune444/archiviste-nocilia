@@ -1,12 +1,13 @@
-"""Postgres index access for the conversation logger (ING-003)."""
+"""Postgres index access for the conversation logger (ING-003 / MEM-001)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 import asyncpg
 
-from archiviste_workers.conversation.models import UnknownUserError
+from archiviste_workers.conversation.models import Role, UnknownUserError
 
 _INSERT_OR_GET_SQL = """
 WITH inserted AS (
@@ -36,6 +37,36 @@ _UPSERT_ANON_USER_SQL = (
     "INSERT INTO users (id, tier) VALUES ($1::uuid, 'anonymous') ON CONFLICT (id) DO NOTHING"
 )
 
+# MEM-001: next ordinal = current message_count before the increment, which
+# equals the zero-based index of the turn being inserted.
+_INSERT_MESSAGE_SQL = """
+INSERT INTO conversation_messages
+    (conversation_id, role, ordinal, content, token_count)
+VALUES ($1::uuid, $2, $3, $4, $5)
+"""
+
+# MEM-001: bounded tail read, newest-first by ordinal.
+# The index conversation_messages_tail_idx (conversation_id, ordinal DESC)
+# makes this an index-only scan for reasonable limits.
+_TAIL_SQL = """
+SELECT role, ordinal, content, token_count, created_at
+FROM conversation_messages
+WHERE conversation_id = $1::uuid
+ORDER BY ordinal DESC
+LIMIT $2
+"""
+
+
+@dataclass(frozen=True)
+class MessageRow:
+    """One row from conversation_messages returned by fetch_tail."""
+
+    role: Role
+    ordinal: int
+    content: str
+    token_count: int
+    created_at: datetime
+
 
 class ConversationRepository:
     """asyncpg-backed access to the `conversations` index table."""
@@ -60,3 +91,38 @@ class ConversationRepository:
         async with self._pool.acquire() as conn:
             new_count = await conn.fetchval(_INCREMENT_SQL, conversation_id)
         return int(new_count)
+
+    async def insert_message(
+        self,
+        *,
+        conversation_id: str,
+        role: Role,
+        ordinal: int,
+        content: str,
+        token_count: int,
+    ) -> None:
+        """Insert one turn into conversation_messages (best-effort; caller handles errors)."""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _INSERT_MESSAGE_SQL,
+                conversation_id,
+                role,
+                ordinal,
+                content,
+                token_count,
+            )
+
+    async def fetch_tail(self, conversation_id: str, *, limit: int) -> list[MessageRow]:
+        """Return up to *limit* most recent turns, newest-first by ordinal (MEM-001)."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(_TAIL_SQL, conversation_id, limit)
+        return [
+            MessageRow(
+                role=row["role"],
+                ordinal=row["ordinal"],
+                content=row["content"],
+                token_count=row["token_count"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]

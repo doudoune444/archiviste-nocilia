@@ -12,9 +12,11 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from langchain_core.messages import BaseMessage
 from pydantic import ValidationError
 
 from archiviste_workers.generate.injection_filter import detect_injection
+from archiviste_workers.generate.memory import load_memory_window
 from archiviste_workers.generate.models import (
     LORE_GAP_THRESHOLD,
     GenerateRequest,
@@ -112,6 +114,11 @@ class _RequestContext:
     db_pool: Any  # asyncpg.Pool — typed as Any to avoid hard import in dataclass
     embedder: Any  # Embedder | FakeEmbedder — typed as Any (protocol-compatible)
     started: float
+    # MEM-002: prior turns injected into generation; context-aware query for
+    # intent + retrieval embedding (last user turn prepended). Generation,
+    # persistence and query_log keep the raw parsed.query.
+    memory_messages: list[BaseMessage]
+    retrieval_query: str
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -134,6 +141,31 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
             "prompt_injection_suspected", request_id=parsed.request_id, pattern=suspected
         )
 
+    # MEM-002: read the bounded recent-turns window once, before any LLM/retrieve
+    # call. The read is owner-scoped on parsed.user_id, so a caller passing
+    # someone else's conversation_id gets no history (no cross-conversation leak,
+    # security.md A01). Read happens before this turn is persisted, so the window
+    # holds only prior turns. last_user_turn makes elliptical follow-ups
+    # self-contained for intent + retrieval embedding (no extra LLM call).
+    settings = getattr(request.app.state, "settings", None)
+    token_budget = settings.memory_token_budget if settings is not None else 0
+    window = await load_memory_window(
+        getattr(request.app.state, "conversation_repo", None),
+        conversation_id,
+        parsed.user_id,
+        token_budget=token_budget,
+    )
+    retrieval_query = (
+        f"{window.last_user_turn}\n{parsed.query}" if window.last_user_turn else parsed.query
+    )
+
+    # MEM-002: the augmented query feeds the prior user turn (DB-resident text) to
+    # the classifier; re-run the injection filter on it so a poisoned history turn
+    # still trips the suspected-injection prefix (parity with parsed.query).
+    history_suspected = window.last_user_turn is not None and bool(
+        detect_injection(window.last_user_turn)
+    )
+
     ctx = _RequestContext(
         parsed=parsed,
         conversation_id=conversation_id,
@@ -145,13 +177,15 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
         db_pool=getattr(request.app.state, "db_pool", None),
         embedder=getattr(request.app.state, "embedder", None),
         started=time.perf_counter(),
+        memory_messages=window.messages,
+        retrieval_query=retrieval_query,
     )
 
-    # AC-2: classify intent before any retrieve/LLM call.
+    # AC-2: classify intent before any retrieve/LLM call (context-aware query).
     intent_result = await classify_intent(
         llm_client=ctx.llm_client,
-        query=parsed.query,
-        suspected_injection=bool(suspected),
+        query=ctx.retrieval_query,
+        suspected_injection=bool(suspected) or history_suspected,
         request_id=parsed.request_id,
     )
 
@@ -167,7 +201,7 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
     retrieve_started = time.perf_counter()
     try:
         chunks = await ctx.retrieve_client.search(
-            query=parsed.query,
+            query=ctx.retrieval_query,
             top_k=TOP_K,
             user_tier=parsed.user_tier,
             request_id=parsed.request_id,
@@ -195,7 +229,12 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
             ctx, intent_result, chunks=visible_chunks, retrieve_ms=retrieve_ms
         )
 
-    messages = build_messages(parsed.query, visible_chunks, suspected_injection=bool(ctx.suspected))
+    messages = build_messages(
+        parsed.query,
+        visible_chunks,
+        suspected_injection=bool(ctx.suspected),
+        history=ctx.memory_messages,
+    )
 
     llm_started = time.perf_counter()
     try:
@@ -329,7 +368,9 @@ async def _run_mystery(
     No chunk content reaches the LLM — only the mystery system prompt + user query (AC-8).
     """
     parsed = ctx.parsed
-    mystery_messages = build_mystery_messages(parsed.query, suspected_injection=bool(ctx.suspected))
+    mystery_messages = build_mystery_messages(
+        parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
+    )
 
     llm_started = time.perf_counter()
     try:
@@ -460,7 +501,7 @@ async def _run_lore_gap(
 
     # AC-5: build_lore_gap_messages — no chunks, only the raw query.
     lore_gap_messages = build_lore_gap_messages(
-        parsed.query, suspected_injection=bool(ctx.suspected)
+        parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
     )
 
     llm_started = time.perf_counter()
@@ -616,7 +657,7 @@ async def _run_off_topic(ctx: _RequestContext, intent_result: IntentResult) -> G
     parsed = ctx.parsed
 
     refusal_messages = build_off_topic_messages(
-        parsed.query, suspected_injection=bool(ctx.suspected)
+        parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
     )
     refusal_started = time.perf_counter()
     try:

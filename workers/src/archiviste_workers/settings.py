@@ -51,3 +51,9 @@ class Settings(BaseSettings):
     # GEN-001: internal worker -> worker base URL for /v1/retrieve and ING-003.
     workers_internal_base_url: str = "http://localhost:8000"
     conversation_internal_base_url: str = "http://localhost:8000"
+
+    # MEM-002: token budget for the bounded conversation-memory window injected
+    # into generation. Recent turns are accumulated newest-first until this many
+    # Mixtral tokens, then injected as alternating Human/AI messages. Env-tunable
+    # (MEMORY_TOKEN_BUDGET) so cost vs coherence is adjustable without a deploy.
+    memory_token_budget: int = 2000

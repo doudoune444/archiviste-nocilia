@@ -42,22 +42,42 @@ def _render_chunks(chunks: list[Chunk]) -> str:
     return "\n".join(parts)
 
 
-def build_messages(query: str, chunks: list[Chunk], suspected_injection: bool) -> list[BaseMessage]:
-    """Return [SystemMessage, HumanMessage]. Chunks NEVER reach the system role (AC-7)."""
+def _assemble(
+    system_prompt: str, user_content: str, history: list[BaseMessage] | None
+) -> list[BaseMessage]:
+    """[System, *history, Human] — memory turns sit between system and query (MEM-002).
+
+    History is injected at the Human/AI role only, never the system role: prior
+    turns are untrusted/own-output context, kept out of the trusted system zone
+    (security.md A03 / RAG-specific). Empty history preserves the 2-message shape.
+    """
+    messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+    if history:
+        messages.extend(history)
+    messages.append(HumanMessage(content=user_content))
+    return messages
+
+
+def build_messages(
+    query: str,
+    chunks: list[Chunk],
+    suspected_injection: bool,
+    history: list[BaseMessage] | None = None,
+) -> list[BaseMessage]:
+    """Return [System, *history, Human]. Chunks NEVER reach the system role (AC-7)."""
     prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
     user_content = (
         f"{prefix}{query}\n<retrieved_chunks>\n{_render_chunks(chunks)}\n</retrieved_chunks>"
     )
-    return [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_content)]
+    return _assemble(SYSTEM_PROMPT, user_content, history)
 
 
-def build_off_topic_messages(query: str, suspected_injection: bool) -> list[BaseMessage]:
-    """Return [SystemMessage, HumanMessage] for off_topic refusal generation (AC-7/AC-8)."""
+def build_off_topic_messages(
+    query: str, suspected_injection: bool, history: list[BaseMessage] | None = None
+) -> list[BaseMessage]:
+    """Return [System, *history, Human] for off_topic refusal generation (AC-7/AC-8)."""
     prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
-    return [
-        SystemMessage(content=OFF_TOPIC_SYSTEM_PROMPT),
-        HumanMessage(content=f"{prefix}{query}"),
-    ]
+    return _assemble(OFF_TOPIC_SYSTEM_PROMPT, f"{prefix}{query}", history)
 
 
 # AC-3/AC-4: lore-gap system prompt — figé byte-for-byte (GEN-004 AC-4).
@@ -89,26 +109,24 @@ MYSTERY_SYSTEM_PROMPT = (
 )
 
 
-def build_mystery_messages(query: str, suspected_injection: bool) -> list[BaseMessage]:
-    """Return [SystemMessage(MYSTERY_SYSTEM_PROMPT), HumanMessage] — no chunks (AC-8).
+def build_mystery_messages(
+    query: str, suspected_injection: bool, history: list[BaseMessage] | None = None
+) -> list[BaseMessage]:
+    """Return [System(MYSTERY_SYSTEM_PROMPT), *history, Human] — no chunks (AC-8).
 
     No lore chunks injected: blocked chunks must never reach the LLM (security, AC-8).
     """
     prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
-    return [
-        SystemMessage(content=MYSTERY_SYSTEM_PROMPT),
-        HumanMessage(content=f"{prefix}{query}"),
-    ]
+    return _assemble(MYSTERY_SYSTEM_PROMPT, f"{prefix}{query}", history)
 
 
-def build_lore_gap_messages(query: str, suspected_injection: bool) -> list[BaseMessage]:
-    """Return [SystemMessage, HumanMessage] for lore-gap generation (AC-5).
+def build_lore_gap_messages(
+    query: str, suspected_injection: bool, history: list[BaseMessage] | None = None
+) -> list[BaseMessage]:
+    """Return [System, *history, Human] for lore-gap generation (AC-5).
 
     No lore chunks are injected — the retrieved context is irrelevant on this branch
     and omitting it closes the prompt-injection surface W-I-1 (security.md RAG-specific).
     """
     prefix = "[user query, suspected injection]: " if suspected_injection else "[user query]: "
-    return [
-        SystemMessage(content=LORE_GAP_SYSTEM_PROMPT),
-        HumanMessage(content=f"{prefix}{query}"),
-    ]
+    return _assemble(LORE_GAP_SYSTEM_PROMPT, f"{prefix}{query}", history)

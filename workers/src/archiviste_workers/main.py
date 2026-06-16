@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from archiviste_workers import __version__
 from archiviste_workers.auth_metadata.token import SqlTokenProvider, TokenFetchError
+from archiviste_workers.contradiction.router import router as contradiction_router
 from archiviste_workers.conversation.gcs_storage import (
     GcsConversationStorage,
     build_client,
@@ -115,3 +116,4 @@ app.include_router(health.router)
 app.include_router(conversation_router)
 app.include_router(retrieve_router)
 app.include_router(generate_router)
+app.include_router(contradiction_router)

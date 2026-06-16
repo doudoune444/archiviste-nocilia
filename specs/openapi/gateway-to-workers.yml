@@ -88,6 +88,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/GenerateResponse'
 
+  /v1/verify-contradiction:
+    post:
+      summary: Verify a visitor's contradiction report via a multi-judge vote (CTR-001)
+      description: |
+        Re-resolve the answer's cited chunks from the trusted store (ACL-filtered by
+        caller tier), run three independent refute-biased judges over (claim, sources),
+        and on >=2 confirmations raise/increment a lore-gap ticket carrying the claim.
+        No new ticket type. Internal; public exposure + edge rate-limit are CTR-002.
+      parameters:
+        - name: X-User-Id
+          in: header
+          required: true
+          description: Caller user_id. Gateway-set per SEC-001 AC-14.
+          schema:
+            type: string
+            format: uuid
+        - name: X-User-Tier
+          in: header
+          required: true
+          description: Caller tier; bounds ACL re-resolution of cited chunks.
+          schema:
+            type: string
+            enum: [anonymous, members, author_only]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyContradictionRequest'
+      responses:
+        '200':
+          description: Verdict (ticket raised only on >=2 confirmations)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyContradictionResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyContradictionError'
+
 components:
   schemas:
     Health:
@@ -213,6 +256,79 @@ components:
           type: string
           format: uuid
           nullable: true
+
+    VerifyContradictionRequest:
+      type: object
+      required: [claim, conversation_id, citations, request_id]
+      properties:
+        claim:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Visitor's asserted contradiction. Stored verbatim as the ticket question on confirmation.
+        conversation_id:
+          type: string
+          format: uuid
+          description: Conversation the reported answer belongs to. FK target for the raised ticket.
+        citations:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/Citation'
+          description: |
+            The reported answer's cited sources. Source text is re-resolved server-side
+            from the trusted chunks store, never trusted from the client.
+        request_id:
+          type: string
+          format: uuid
+
+    Citation:
+      type: object
+      required: [source_path, chunk_ords]
+      properties:
+        source_path:
+          type: string
+        chunk_ords:
+          type: array
+          maxItems: 200
+          items:
+            type: integer
+            minimum: 0
+
+    VerifyContradictionResponse:
+      type: object
+      required: [contradiction_confirmed, confirmations, ticket_action]
+      properties:
+        contradiction_confirmed:
+          type: boolean
+          description: True iff at least two of three judges confirmed.
+        confirmations:
+          type: integer
+          minimum: 0
+          maximum: 3
+        ticket_action:
+          type: string
+          enum: [created, incremented, skipped_error, not_raised]
+          description: |
+            not_raised when <2 confirmations; skipped_error when confirmed but the
+            ticket write failed (fail-soft, never raises).
+        ticket_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    VerifyContradictionError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_request
+            - invalid_claim
+            - invalid_conversation_id
+            - invalid_citations
 
   responses:
     BadRequest:

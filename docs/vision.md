@@ -60,7 +60,7 @@ Cf. [`architecture.md`](architecture.md) pour le diagramme complet.
 ## Non-goals (toujours valides)
 
 - Pas de multi-univers / multi-tenant (1 univers, 1 auteur).
-- Pas de mémoire conversationnelle multi-turn complexe.
+- Pas de mémoire conversationnelle complexe — fenêtre bornée des tours récents uniquement.
 - Pas de génération illustrations (img2img).
 - Pas de fine-tuning LoRA dédié.
 - Pas de mobile app native.

@@ -73,7 +73,7 @@ paths:
           description: Caller tier. Gateway-set per SEC-001 AC-14.
           schema:
             type: string
-            enum: [anonymous, members, author_only]
+            enum: [anonymous, member, author]
       requestBody:
         required: true
         content:
@@ -110,7 +110,7 @@ paths:
           description: Caller tier; bounds ACL re-resolution of cited chunks.
           schema:
             type: string
-            enum: [anonymous, members, author_only]
+            enum: [anonymous, member, author]
       requestBody:
         required: true
         content:
@@ -241,20 +241,47 @@ components:
 
     GenerateResponse:
       type: object
-      required: [answer, model, cost_eur, lore_gap_detected]
+      required: [answer, citations, mode, conversation_id, request_id, usage, retrieve_ms, llm_ms]
       properties:
         answer:
           type: string
-        model:
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+        mode:
           type: string
+          enum: [canon, off_topic, lore_gap, mystery]
+        conversation_id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+        usage:
+          $ref: '#/components/schemas/Usage'
+        retrieve_ms:
+          type: integer
+          minimum: 0
+        llm_ms:
+          type: integer
+          minimum: 0
+
+    Usage:
+      type: object
+      required: [prompt_tokens, completion_tokens]
+      properties:
+        prompt_tokens:
+          type: integer
+          minimum: 0
+          nullable: true
+        completion_tokens:
+          type: integer
+          minimum: 0
+          nullable: true
         cost_eur:
           type: number
           minimum: 0
-        lore_gap_detected:
-          type: boolean
-        ticket_id:
-          type: string
-          format: uuid
           nullable: true
 
     VerifyContradictionRequest:

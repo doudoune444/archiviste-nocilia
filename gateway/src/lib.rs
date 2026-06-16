@@ -522,11 +522,15 @@ pub fn router(state: Arc<AppState>) -> Router {
     // OBS-001: /v1/stats mounted here — no auth gate (AC-6).
     // OBS-002: /v1/status mounted here — anonymous, no auth guard (AC-7).
     // OBS-004: /v1/quality mounted here — anonymous, no auth guard (AC-5).
+    // BOARD-001: /v1/board — public read-only lore-gap board, no auth gate.
+    // BOARD-001: /board — public HTML page served without auth.
     let public_api = Router::new()
         .route("/v1/me", get(routes::me::me))
         .route("/v1/stats", get(handlers::stats::stats))
         .route("/v1/status", get(handlers::status::status))
-        .route("/v1/quality", get(handlers::quality::quality));
+        .route("/v1/quality", get(handlers::quality::quality))
+        .route("/v1/board", get(handlers::board::list_board))
+        .route("/board", get(handlers::board::serve_board));
 
     // Author-gated dashboard API routes (UI-002 PR1 — AC-5..AC-12, AC-19..AC-23).
     // `RequireAuthor` extractor gates each handler — no `#[public]` marker (AC-11).

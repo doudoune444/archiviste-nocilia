@@ -4,6 +4,7 @@
 //! into a `200 OK` response with `Content-Type: application/json; charset=utf-8`
 //! (security.md §A05 — default content-type must include charset).
 
+pub mod board;
 pub mod chat;
 pub mod conversations;
 pub mod dashboard;

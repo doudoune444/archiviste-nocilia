@@ -124,6 +124,38 @@ article[data-role="error"] small {
   opacity: 0.7;
 }
 
+.sources {
+  align-self: flex-start;
+  max-width: 90%;
+  padding: 0.5rem 1rem 0.6rem;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-surface);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.sources-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.sources-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.sources-list li {
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+  word-break: break-all;
+}
+
 #chat-form {
   display: flex;
   gap: 0.5rem;

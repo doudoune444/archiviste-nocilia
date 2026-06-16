@@ -45,6 +45,47 @@
     article.scrollIntoView({ behavior: "smooth", block: "end" });
   }
 
+  // CIT-001: render a "Sources" list under a canon answer.
+  // `citations` is the response payload: [{ source_path, chunk_ords }].
+  // Off-topic / lore-gap / mystery answers carry no citations, so an empty or
+  // absent list renders nothing — no misleading empty "Sources" block.
+  // Each source_path is written via textContent (never innerHTML) so a poisoned
+  // source path cannot inject markup (security.md output sanitization).
+  function appendSources(citations) {
+    if (!Array.isArray(citations) || citations.length === 0) {
+      return;
+    }
+
+    const list = document.createElement("ul");
+    list.className = "sources-list";
+    for (const citation of citations) {
+      if (!citation || typeof citation.source_path !== "string") {
+        continue;
+      }
+      const item = document.createElement("li");
+      item.textContent = citation.source_path;
+      list.appendChild(item);
+    }
+
+    if (!list.firstChild) {
+      return;
+    }
+
+    const section = document.getElementById("conversation");
+    const sources = document.createElement("section");
+    sources.dataset.role = "sources";
+    sources.className = "sources";
+
+    const heading = document.createElement("h2");
+    heading.className = "sources-title";
+    heading.textContent = "Sources";
+
+    sources.appendChild(heading);
+    sources.appendChild(list);
+    section.appendChild(sources);
+    sources.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
   // Extract request id from response headers or JSON body (best-effort).
   function extractRequestId(response, body) {
     const fromHeader = response.headers.get("x-request-id");
@@ -99,6 +140,8 @@
         if (body && typeof body.answer === "string") {
           // AC-12: render answer via textContent.
           appendArticle("assistant", body.answer, null);
+          // CIT-001: render the cited sources under the answer (canon only).
+          appendSources(body.citations);
         } else {
           // AC-13: missing/invalid answer field treated as error.
           const requestId = extractRequestId(response, body);

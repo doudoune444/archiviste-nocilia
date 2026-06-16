@@ -10,9 +10,11 @@ pub mod conversations;
 pub mod dashboard;
 pub mod health;
 pub mod quality;
+pub mod report_contradiction;
 pub mod stats;
 pub mod status;
 pub mod tickets;
+pub mod workers_proxy;
 
 use axum::{
     http::{HeaderValue, StatusCode},

@@ -496,6 +496,21 @@ pub fn router(state: Arc<AppState>) -> Router {
             crate::middleware::overhead_header,
         ));
 
+    // CTR-002: public `POST /v1/report-contradiction` — accepts anonymous callers.
+    // Body limit 1 MiB (claim ≤ 4 KiB + citations overhead stays well under cap).
+    // OPS-001a: `overhead_header` layer added — this 3-LLM path is more expensive
+    // than chat, so X-Gateway-Overhead-Ms attribution is equally valuable here.
+    let report_contradiction_router = Router::new()
+        .route(
+            "/v1/report-contradiction",
+            axum::routing::post(handlers::report_contradiction::report_contradiction),
+        )
+        .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB
+        .layer(axum::middleware::from_fn(handle_body_limit_error))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::overhead_header,
+        ));
+
     // Static file routes: index.html at /, observability page, assets under /assets/*.
     // ServeDir handles path-traversal rejection natively (AC-5).
     // OBS-001: /observability mounted here — public, no auth (AC-2).
@@ -573,6 +588,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // the Deploy smoke test probes `/health`. Same handler for both.
         .route("/health", get(handlers::health::healthz))
         .merge(chat_router)
+        .merge(report_contradiction_router)
         .merge(auth_router)
         .merge(public_api)
         .merge(dashboard_api)

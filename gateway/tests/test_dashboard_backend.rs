@@ -231,13 +231,23 @@ async fn ac7_non_integer_limit_is_4xx() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-10: GET /v1/conversations/{id}/signed-url — non-author gets 403 (no DB)
+// HIST-001: signed-url is owner-or-author (no longer author-only)
 // ---------------------------------------------------------------------------
+//
+// HIST-001 opened `GET /v1/conversations/{id}/signed-url` to end-users for their
+// OWN conversation (decision: owner-or-author). The route no longer carries an
+// author-only auth gate, so member/anonymous callers are NOT rejected with
+// 401/403 any more — they pass identity resolution and are owner-scoped in SQL.
+// With no test DB the handler short-circuits on the absent pool → 503
+// `upstream_unavailable`. The positive owner/IDOR contract (author reads any,
+// owner reads own, non-owner → 404) is covered DB-backed in
+// `test_hist001_history.rs`. These no-DB tests guard against accidentally
+// re-introducing an auth gate (which would flip 503 back to 401/403).
 
-/// AC-10 sub-case c: member gets 403 `author_required`.
+/// HIST-001: member is no longer auth-rejected on signed-url (was 403 author_required).
 #[tokio::test]
-async fn ac10_signed_url_member_gets_403() {
-    // AC-10 (c): member → 403 author_required
+async fn hist001_signed_url_member_not_auth_rejected() {
+    // HIST-001: member passes the (removed) author gate → 503 (no test DB), never 403.
     let app = router(make_state_no_db());
     let token = member_token();
     let id = Uuid::new_v4();
@@ -247,23 +257,22 @@ async fn ac10_signed_url_member_gets_403() {
         Some(&token),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(resp).await;
-    assert_error_body(&body, "author_required");
+    assert_error_body(&body, "upstream_unavailable");
 }
 
-/// AC-10 sub-case c: anonymous (no JWT) gets 401 `invalid_token`.
-///
-/// SEC-001 AC-12: absent token → 401 `invalid_token` (not 403 `author_required`).
+/// HIST-001: anonymous (no JWT) is no longer auth-rejected on signed-url (was 401).
 #[tokio::test]
-async fn ac10_signed_url_anonymous_gets_401() {
-    // AC-10 (c) / SEC-001 AC-12: anonymous → 401 invalid_token
+async fn hist001_signed_url_anonymous_not_auth_rejected() {
+    // HIST-001: anonymous end-users may read their own conversation's signed-url →
+    // no token is no longer 401; with no test DB the owner-scoped path 503s.
     let app = router(make_state_no_db());
     let id = Uuid::new_v4();
     let resp = get_with_token(app, &format!("/v1/conversations/{id}/signed-url"), None).await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(resp).await;
-    assert_error_body(&body, "invalid_token");
+    assert_error_body(&body, "upstream_unavailable");
 }
 
 /// AC-10 sub-case b: invalid UUID in path gets 404 (Axum rejects non-UUID path param).
@@ -326,7 +335,9 @@ async fn ac12_tickets_security_headers_present() {
     assert_security_headers(&resp);
 }
 
-/// AC-12: `/v1/conversations/{id}/signed-url` 403 response carries all 4 security headers.
+/// AC-12: `/v1/conversations/{id}/signed-url` error response carries all 4 security headers.
+/// HIST-001: member is no longer auth-rejected here, so this exercises the 503 (no-DB) path;
+/// the router-wide header layer applies regardless of status.
 #[tokio::test]
 async fn ac12_conversations_security_headers_present() {
     // AC-12: security headers must be present on /v1/conversations/{id}/signed-url
@@ -654,10 +665,16 @@ async fn ac10_nonexistent_conversation_returns_404(pool: sqlx::PgPool) {
 // AC-11: contract — routes must use RequireAuthor (source inspection)
 // ---------------------------------------------------------------------------
 
-/// AC-11: handlers must not carry `#[public]` and must use `RequireAuthor`.
+/// AC-11: handlers must not carry `#[public]`; tickets stays `RequireAuthor`-gated.
+///
+/// HIST-001 changed the contract for `conversations.rs`: the signed-url route is no
+/// longer author-only — it is owner-or-author, so the handler resolves the caller via
+/// `AnonIdentity` and owner-scopes the query for non-authors. The `#[public]` marker
+/// must still be absent (every handler performs its own ownership check, never a
+/// blanket public bypass).
 #[test]
 fn ac11_routes_have_no_public_marker() {
-    // AC-11: grep src for #[public] on the two dashboard handlers — must be absent
+    // AC-11: grep src for #[public] on the dashboard/conversation handlers — must be absent
     let tickets_src = include_str!("../src/handlers/tickets.rs");
     let conversations_src = include_str!("../src/handlers/conversations.rs");
     assert!(
@@ -672,9 +689,14 @@ fn ac11_routes_have_no_public_marker() {
         tickets_src.contains("RequireAuthor"),
         "tickets handler must use RequireAuthor extractor"
     );
+    // HIST-001: signed-url is owner-or-author — identity via AnonIdentity, ownership in SQL.
     assert!(
-        conversations_src.contains("RequireAuthor"),
-        "conversations handler must use RequireAuthor extractor"
+        conversations_src.contains("AnonIdentity"),
+        "conversations handler must resolve identity via AnonIdentity (HIST-001 owner-or-author)"
+    );
+    assert!(
+        conversations_src.contains("WHERE id = $1 AND user_id = $2"),
+        "conversations handler must owner-scope the signed-url query for non-authors (HIST-001 IDOR)"
     );
 }
 
@@ -731,10 +753,17 @@ async fn high1_expired_jwt_on_tickets_returns_401() {
     assert_error_body(&body, "invalid_token");
 }
 
-/// HIGH-1 regression: expired author JWT on `/v1/conversations/{id}/signed-url` must return 401.
+/// HIST-001: an expired JWT on signed-url is now treated as anonymous (the route is
+/// owner-or-author, not author-gated), so it is owner-scoped rather than 401-rejected.
+///
+/// Supersedes the SEC-001 HIGH-1 expectation for THIS route only (tickets still
+/// returns 401 on an expired JWT — see `high1_expired_jwt_on_tickets_returns_401`).
+/// An expired token must never grant access: `resolve_identity` discards it and the
+/// caller becomes anonymous (cookie identity), which can only read its own
+/// conversations. With no test DB the owner-scoped path short-circuits to 503.
 #[tokio::test]
-async fn high1_expired_jwt_on_signed_url_returns_401() {
-    // AC-10 / SEC-001 AC-12: expired JWT → 401 invalid_token (not 403 author_required)
+async fn hist001_expired_jwt_on_signed_url_treated_anonymous() {
+    // HIST-001: expired JWT → anonymous (not 401), owner-scoped → 503 (no test DB).
     let app = router(make_state_no_db());
     let expired_token = sign_test_token_with_exp(
         Uuid::new_v4(),
@@ -752,11 +781,11 @@ async fn high1_expired_jwt_on_signed_url_returns_401() {
     .await;
     assert_eq!(
         resp.status(),
-        StatusCode::UNAUTHORIZED,
-        "expired JWT must yield 401 not 403"
+        StatusCode::SERVICE_UNAVAILABLE,
+        "expired JWT must be treated as anonymous (owner-scoped), never an auth bypass"
     );
     let body = body_json(resp).await;
-    assert_error_body(&body, "invalid_token");
+    assert_error_body(&body, "upstream_unavailable");
 }
 
 /// HIGH-1 regression: member JWT on `/v1/tickets` must still return 403 `author_required`

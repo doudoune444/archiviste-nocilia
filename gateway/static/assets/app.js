@@ -142,6 +142,8 @@
           appendArticle("assistant", body.answer, null);
           // CIT-001: render the cited sources under the answer (canon only).
           appendSources(body.citations);
+          // HIST-001: a first turn creates the conversation — refresh the list.
+          loadHistory();
         } else {
           // AC-13: missing/invalid answer field treated as error.
           const requestId = extractRequestId(response, body);
@@ -167,6 +169,127 @@
     sendBtn.disabled = false;
   }
 
+  // HIST-001: format an ISO timestamp for a history entry label (locale-aware,
+  // falls back to a neutral label so a malformed value never throws).
+  function formatTimestamp(iso) {
+    if (typeof iso !== "string") {
+      return "Conversation";
+    }
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return "Conversation";
+    }
+    return date.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+  }
+
+  // HIST-001: human label for one conversation summary (date · N message(s)).
+  function historyLabel(conversation) {
+    const count = Number.isFinite(conversation.message_count)
+      ? conversation.message_count
+      : 0;
+    const noun = count === 1 ? "message" : "messages";
+    return formatTimestamp(conversation.updated_at) + " · " + count + " " + noun;
+  }
+
+  // HIST-001: render the owner-scoped conversation list. Each entry is a button
+  // labelled via textContent (never innerHTML) so server data cannot inject markup.
+  function renderHistory(conversations) {
+    const section = document.getElementById("history");
+    const list = document.getElementById("history-list");
+    while (list.firstChild) {
+      list.removeChild(list.firstChild);
+    }
+    for (const conversation of conversations) {
+      if (!conversation || typeof conversation.id !== "string") {
+        continue;
+      }
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.conversationId = conversation.id;
+      button.textContent = historyLabel(conversation);
+      item.appendChild(button);
+      list.appendChild(item);
+    }
+    section.hidden = list.firstChild === null;
+  }
+
+  // HIST-001: fetch the caller's own conversations (cookie identity, same-origin).
+  async function loadHistory() {
+    let response;
+    try {
+      response = await fetch("/v1/conversations", { credentials: "same-origin" });
+    } catch (_) {
+      return;
+    }
+    if (!response.ok) {
+      return;
+    }
+    let body = null;
+    try {
+      body = await response.json();
+    } catch (_) {
+      return;
+    }
+    if (!body || !Array.isArray(body.conversations)) {
+      return;
+    }
+    renderHistory(body.conversations);
+  }
+
+  // HIST-001: reopen a past conversation — load its turns and continue it. A
+  // cross-owner id returns 404 server-side, so this no-ops on anything not owned.
+  async function reopenConversation(conversationId) {
+    let response;
+    try {
+      response = await fetch(
+        "/v1/conversations/" + encodeURIComponent(conversationId) + "/messages",
+        { credentials: "same-origin" },
+      );
+    } catch (_) {
+      return;
+    }
+    if (!response.ok) {
+      return;
+    }
+    let body = null;
+    try {
+      body = await response.json();
+    } catch (_) {
+      return;
+    }
+    if (!body || !Array.isArray(body.messages)) {
+      return;
+    }
+
+    const section = document.getElementById("conversation");
+    while (section.firstChild) {
+      section.removeChild(section.firstChild);
+    }
+    for (const message of body.messages) {
+      if (!message || typeof message.content !== "string") {
+        continue;
+      }
+      const role = message.role === "assistant" ? "assistant" : "user";
+      appendArticle(role, message.content, null);
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEY, conversationId);
+    } catch (_) {
+      // localStorage unavailable — reopen still rendered, id ephemeral this session.
+    }
+  }
+
+  // HIST-001: delegated click on the history list → reopen the chosen conversation.
+  function handleHistoryClick(event) {
+    const button = event.target.closest("button[data-conversation-id]");
+    if (!button) {
+      return;
+    }
+    reopenConversation(button.dataset.conversationId);
+  }
+
   // AC-16: clear conversation and remove persisted conversation id.
   function handleNewConversation() {
     try {
@@ -184,4 +307,9 @@
   document
     .getElementById("new-conversation-btn")
     .addEventListener("click", handleNewConversation);
+  // HIST-001: history list (delegated reopen) + initial load on page open.
+  document
+    .getElementById("history-list")
+    .addEventListener("click", handleHistoryClick);
+  loadHistory();
 })();

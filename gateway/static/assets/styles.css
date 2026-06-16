@@ -156,6 +156,44 @@ article[data-role="error"] small {
   word-break: break-all;
 }
 
+#history {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.75rem;
+}
+
+.history-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.4rem;
+}
+
+#history-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+#history-list button {
+  width: 100%;
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 0.85rem;
+  font-weight: 400;
+  padding: 0.4rem 0.6rem;
+}
+
+#history-list button:not(:disabled):hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  filter: none;
+}
+
 #chat-form {
   display: flex;
   gap: 0.5rem;

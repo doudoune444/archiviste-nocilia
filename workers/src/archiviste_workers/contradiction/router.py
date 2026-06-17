@@ -19,7 +19,14 @@ from archiviste_workers.generate.models import is_valid_uuid
 router = APIRouter(prefix="/v1", tags=["contradiction"])
 logger = structlog.get_logger()
 
-_VALID_TIERS = {"anonymous", "members", "author_only"}
+# Contract vocabulary (specs/openapi/gateway-to-workers.yml X-User-Tier enum) mapped to the
+# internal ACL tier names used by retrieve/schemas.py and services/acl.py.
+# Translation happens at this boundary only — internal code keeps its own vocabulary.
+_CONTRACT_TIER_TO_INTERNAL: dict[str, str] = {
+    "anonymous": "anonymous",
+    "member": "members",
+    "author": "author_only",
+}
 
 
 class _VerifyError(Exception):
@@ -40,7 +47,7 @@ def _parse_request(
     if not raw_user_id or not is_valid_uuid(raw_user_id):
         raise _VerifyError(400, "invalid_request")
     raw_user_tier = headers.get("x-user-tier")
-    if not raw_user_tier or raw_user_tier not in _VALID_TIERS:
+    if not raw_user_tier or raw_user_tier not in _CONTRACT_TIER_TO_INTERNAL:
         raise _VerifyError(400, "invalid_request")
 
     request_id = payload.get("request_id")
@@ -60,7 +67,7 @@ def _parse_request(
             if loc and loc[0] == "citations":
                 raise _VerifyError(400, "invalid_citations") from exc
         raise _VerifyError(400, "invalid_request") from exc
-    return parsed, raw_user_tier, raw_user_id
+    return parsed, _CONTRACT_TIER_TO_INTERNAL[raw_user_tier], raw_user_id
 
 
 @router.post("/verify-contradiction", response_model=VerifyContradictionResponse)

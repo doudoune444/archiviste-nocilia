@@ -8,6 +8,8 @@ from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+# Internal ACL tier names (after boundary mapping from contract vocab in router.py).
+# Contract vocabulary is {anonymous, member, author}; router maps to these internal names.
 UserTier = Literal["anonymous", "members", "author_only"]
 Mode = Literal["canon", "off_topic", "lore_gap", "mystery"]
 

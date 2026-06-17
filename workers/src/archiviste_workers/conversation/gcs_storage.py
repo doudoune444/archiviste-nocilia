@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from typing import Any, cast
 
+import structlog
 from google.api_core.exceptions import (
     GoogleAPICallError,
     PreconditionFailed,
@@ -22,6 +23,8 @@ from archiviste_workers.conversation.models import (
     Role,
     StorageUnavailableError,
 )
+
+logger = structlog.get_logger()
 
 # AC-2 / AC-3: byte-for-byte format. Do not reformat without updating tests.
 _HEADER_TEMPLATE = (
@@ -93,6 +96,13 @@ class GcsConversationStorage:
         except PreconditionFailed as exc:
             raise ConversationAlreadyExistsError from exc
         except (ServiceUnavailable, RetryError, GoogleAPICallError, OSError) as exc:
+            logger.error(
+                "gcs_storage_error",
+                op="upload_header",
+                conversation_id=conversation_id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             raise StorageUnavailableError from exc
         blob.reload()
         return int(blob.generation)
@@ -105,6 +115,13 @@ class GcsConversationStorage:
             try:
                 current = blob.download_as_bytes()
             except (ServiceUnavailable, RetryError, GoogleAPICallError, OSError) as exc:
+                logger.error(
+                    "gcs_storage_error",
+                    op="download_block",
+                    conversation_id=conversation_id,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
                 raise StorageUnavailableError from exc
             generation = int(blob.generation or 0)
             new_payload = current + block.encode("utf-8")
@@ -122,6 +139,13 @@ class GcsConversationStorage:
                     continue
                 break
             except (ServiceUnavailable, RetryError, GoogleAPICallError, OSError) as exc:
+                logger.error(
+                    "gcs_storage_error",
+                    op="upload_block",
+                    conversation_id=conversation_id,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
                 raise StorageUnavailableError from exc
             blob.reload()
             return int(blob.generation), len(new_payload)

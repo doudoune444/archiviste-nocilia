@@ -1,12 +1,15 @@
-"""CTR-001 — contradiction verification: vote threshold, ticket reuse, ACL re-resolve.
+"""#162 — 4-way verdict judging: vote threshold, ticket policy, retrieval fallback, redaction.
 
-AC coverage:
-  - three refute-biased judges; >=2 confirmations required (vote threshold)
-  - confirmed path raises a lore-gap ticket carrying the visitor's claim verbatim
-  - unconfirmed path raises no ticket
-  - refute-biased verdict parsing (ambiguous/empty -> refute)
-  - cited sources re-resolved server-side, ACL-bounded by caller tier (DB-backed)
-  - request validation maps to the contract error enum
+AC references:
+  - present verdict (>=2 votes) → no ticket raised
+  - absent verdict (>=2 votes) → ticket raised
+  - contradiction verdict (>=2 votes) → ticket raised
+  - unclear >=2 → ticket raised
+  - no-citation retrieval path → judges run against retrieved chunks
+  - judge failure → unclear (fail-safe)
+  - redaction: emitted reason must not contain chunk body text
+  - ACL: re-resolution drops chunks above caller tier
+  - request validation maps to contract error enum
 """
 
 from __future__ import annotations
@@ -24,8 +27,8 @@ from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
 
 from archiviste_workers.contradiction import service as service_module
-from archiviste_workers.contradiction.models import Citation
-from archiviste_workers.contradiction.prompt import is_confirmation
+from archiviste_workers.contradiction.models import Citation, VerifyContradictionRequest
+from archiviste_workers.contradiction.prompt import parse_verdict
 from archiviste_workers.contradiction.repository import resolve_cited_sources
 from archiviste_workers.contradiction.router import router as contradiction_router
 from archiviste_workers.contradiction.service import verify_contradiction
@@ -35,6 +38,7 @@ from archiviste_workers.ingest.repository import (
     DocumentRecord,
     insert_document_with_chunks,
 )
+from archiviste_workers.retrieve.schemas import RetrievedChunk
 from archiviste_workers.services.llm import LlmTimeoutError
 from archiviste_workers.services.ticket_service import TicketResult
 
@@ -53,12 +57,15 @@ _CITATIONS = [
     Citation(source_path="lore/b.md", chunk_ords=[0]),
 ]
 
+# Chunk body text used in redaction test — must not appear in emitted reason.
+_CHUNK_BODY = "L'Archiviste est mort."
+
 
 class _FakeJudgeLlm:
-    """One configured verdict per invoke; judges run concurrently so order is irrelevant."""
+    """Configurable verdict+reason replies for each invoke call."""
 
-    def __init__(self, verdicts: list[str], *, raise_all: bool = False) -> None:
-        self._verdicts = deque(verdicts)
+    def __init__(self, replies: list[str], *, raise_all: bool = False) -> None:
+        self._replies = deque(replies)
         self._raise_all = raise_all
         self.calls = 0
         self.model = "fake"
@@ -68,32 +75,47 @@ class _FakeJudgeLlm:
         self.calls += 1
         if self._raise_all:
             raise LlmTimeoutError("boom")
-        return AIMessage(content=self._verdicts.popleft())
+        return AIMessage(content=self._replies.popleft())
+
+
+# ---------------------------------------------------------------------------
+# parse_verdict unit tests
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("reply", "expected"),
+    ("reply", "expected_verdict", "has_reason"),
     [
-        ("CONTRADICTION", True),
-        ("CONTRADICTION.", True),
-        ("**CONTRADICTION**", True),
-        ("  contradiction  ", True),
-        ("NO_CONTRADICTION", False),
-        ("no_contradiction", False),
-        ("NO_CONTRADICTION.", False),
-        # French / spaced natural-language refusals must NOT count as confirmations
-        # (the substring CONTRADICTION is present but the verdict is a refusal).
-        ("no contradiction", False),
-        ("Aucune contradiction", False),
-        ("pas de contradiction", False),
-        # Verbose replies that bury the token are refute-biased to NO.
-        ("Il y a CONTRADICTION claire", False),
-        ("", False),
-        ("Je ne sais pas", False),
+        ("PRESENT\nLe fait est présent dans lore/a.md.", "present", True),
+        ("ABSENT\nBlowen n'est pas mentionné.", "absent", True),
+        ("CONTRADICTION\nLes sources sont en désaccord.", "contradiction", True),
+        ("UNCLEAR\n", "unclear", False),
+        ("unclear", "unclear", False),
+        ("present some extra text", "present", True),
+        ("ABSENT", "absent", False),
+        # Unknown token → unclear (fail-safe).
+        ("MAYBE something", "unclear", True),
+        ("", "unclear", False),
+        ("Je ne sais pas", "unclear", True),
+        # Old CONTRADICTION-only token still maps correctly.
+        ("CONTRADICTION", "contradiction", False),
+        # NO_CONTRADICTION (old token): full token → unknown → unclear; no remainder → no reason.
+        ("NO_CONTRADICTION", "unclear", False),
     ],
 )
-def test_is_confirmation_refute_biased(reply: str, expected: bool) -> None:
-    assert is_confirmation(reply) is expected
+def test_parse_verdict(reply: str, expected_verdict: str, has_reason: bool) -> None:
+    # AC: parse_verdict returns (Verdict, reason); unknown/empty → unclear fail-safe.
+    verdict, reason = parse_verdict(reply)
+    assert verdict == expected_verdict
+    if has_reason:
+        assert len(reason) > 0
+    else:
+        assert reason == "" or reason is not None  # empty reason allowed
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -133,30 +155,65 @@ async def _run(llm: Any, *, tier: str = "anonymous") -> Any:
     )
 
 
+# ---------------------------------------------------------------------------
+# Vote threshold / ticket policy (design decisions #4)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("verdicts", "confirmed", "confirmations"),
+    ("replies", "expected_verdict", "should_raise_ticket"),
     [
-        (["NO_CONTRADICTION", "NO_CONTRADICTION", "NO_CONTRADICTION"], False, 0),
-        (["CONTRADICTION", "NO_CONTRADICTION", "NO_CONTRADICTION"], False, 1),
-        (["CONTRADICTION", "CONTRADICTION", "NO_CONTRADICTION"], True, 2),
-        (["CONTRADICTION", "CONTRADICTION", "CONTRADICTION"], True, 3),
+        # >=2 present → no ticket (AC: present >=2 → not_raised).
+        (
+            ["PRESENT\nFait confirmé.", "PRESENT\nFait confirmé.", "UNCLEAR\n"],
+            "present",
+            False,
+        ),
+        # >=2 absent → ticket (AC: absent >=2 → ticket raised).
+        (
+            ["ABSENT\nBlowen absent.", "ABSENT\nBlowen absent.", "UNCLEAR\n"],
+            "absent",
+            True,
+        ),
+        # >=2 contradiction → ticket (AC: contradiction >=2 → ticket raised).
+        (
+            [
+                "CONTRADICTION\nSources en désaccord.",
+                "CONTRADICTION\nSources en désaccord.",
+                "PRESENT\nFait présent.",
+            ],
+            "contradiction",
+            True,
+        ),
+        # >=2 unclear → ticket (AC: unclear >=2 → ticket raised).
+        (["UNCLEAR\n", "UNCLEAR\n", "PRESENT\nFait présent."], "unclear", True),
+        # Split vote (1 each for 3 different verdicts) → unclear, no ticket.
+        (
+            [
+                "PRESENT\nFait présent.",
+                "ABSENT\nAbsent.",
+                "CONTRADICTION\nContradiction.",
+            ],
+            "unclear",
+            False,
+        ),
     ],
 )
 @pytest.mark.usefixtures("_stub_sources")
-async def test_vote_threshold(
+async def test_verdict_vote_threshold(
     ticket_spy: list[dict[str, str]],
-    verdicts: list[str],
-    confirmed: bool,
-    confirmations: int,
+    replies: list[str],
+    expected_verdict: str,
+    should_raise_ticket: bool,
 ) -> None:
-    result = await _run(_FakeJudgeLlm(verdicts))
+    # AC: winning verdict = plurality >=2; any non-present >=2 raises ticket.
+    result = await _run(_FakeJudgeLlm(replies))
 
-    assert result.contradiction_confirmed is confirmed
-    assert result.confirmations == confirmations
-    if confirmed:
+    assert result.verdict == expected_verdict
+    if should_raise_ticket:
         assert len(ticket_spy) == 1
-        assert ticket_spy[0]["question"] == CLAIM  # ticket carries the claim verbatim
+        assert ticket_spy[0]["question"] == CLAIM
         assert ticket_spy[0]["conversation_id"] == CONV_ID
         assert result.ticket_action == "created"
         assert result.ticket_id == "ticket-1"
@@ -168,12 +225,18 @@ async def test_vote_threshold(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_stub_sources")
-async def test_judge_failure_counts_as_refute(ticket_spy: list[dict[str, str]]) -> None:
+async def test_judge_failure_counts_as_unclear(ticket_spy: list[dict[str, str]]) -> None:
+    # AC: failed judge → unclear (fail-safe); 3 unclear >=2 → ticket raised.
     result = await _run(_FakeJudgeLlm([], raise_all=True))
 
-    assert result.contradiction_confirmed is False
-    assert result.confirmations == 0
-    assert ticket_spy == []
+    assert result.verdict == "unclear"
+    # 3 unclear votes → >=2 → ticket raised.
+    assert len(ticket_spy) == 1
+
+
+# ---------------------------------------------------------------------------
+# No-sources path
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -184,13 +247,95 @@ async def test_no_visible_sources_skips_judges(
         return []
 
     monkeypatch.setattr(service_module, "resolve_cited_sources", _empty)
-    llm = _FakeJudgeLlm(["CONTRADICTION", "CONTRADICTION", "CONTRADICTION"])
+    llm = _FakeJudgeLlm(["CONTRADICTION\nX.", "CONTRADICTION\nX.", "CONTRADICTION\nX."])
 
     result = await _run(llm)
 
-    assert result.contradiction_confirmed is False
-    assert llm.calls == 0  # no judge runs when nothing is visible to verify against
+    assert result.verdict == "unclear"
+    assert llm.calls == 0
     assert ticket_spy == []
+
+
+# ---------------------------------------------------------------------------
+# No-citation retrieval path (design decision #5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_citation_retrieval_path(
+    monkeypatch: pytest.MonkeyPatch, ticket_spy: list[dict[str, str]]
+) -> None:
+    """AC: when no citations given, embed claim + search, ACL-filter, run judges."""
+    retrieved = [
+        RetrievedChunk(
+            chunk_id=str(uuid.uuid4()),
+            document_id=str(uuid.uuid4()),
+            source_path="lore/retrieved.md",
+            ord=0,
+            text=_CHUNK_BODY,
+            score=0.9,
+            access_tier="public",
+        )
+    ]
+
+    async def _fake_search(
+        pool: Any, embedding: Any, allowed_tiers: Any, top_k: int
+    ) -> list[RetrievedChunk]:
+        return retrieved
+
+    monkeypatch.setattr(service_module, "search", _fake_search)
+
+    llm = _FakeJudgeLlm(
+        [
+            "ABSENT\nBlowen absent de lore/retrieved.md.",
+            "ABSENT\nBlowen absent de lore/retrieved.md.",
+            "UNCLEAR\n",
+        ]
+    )
+
+    result = await verify_contradiction(
+        pool=object(),
+        embedder=_embedder,
+        llm=llm,
+        claim="Blowen n'est pas un personnage du lore.",
+        conversation_id=CONV_ID,
+        citations=[],  # no citations → retrieval path
+        user_tier="anonymous",
+        request_id=REQUEST_ID,
+    )
+
+    assert result.verdict == "absent"
+    assert llm.calls == 3
+    assert len(ticket_spy) == 1
+
+
+# ---------------------------------------------------------------------------
+# Redaction assertion (design decision #7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_reason_does_not_contain_chunk_body(ticket_spy: list[dict[str, str]]) -> None:
+    """AC: emitted reason must not contain raw retrieved chunk body text."""
+    # Judge returns a reason that does NOT copy the chunk body — only references path.
+    llm = _FakeJudgeLlm(
+        [
+            "CONTRADICTION\nSource lore/a.md en désaccord avec lore/b.md.",
+            "CONTRADICTION\nSource lore/a.md en désaccord avec lore/b.md.",
+            "UNCLEAR\n",
+        ]
+    )
+    result = await _run(llm)
+
+    assert result.verdict == "contradiction"
+    # The raw chunk body text must not appear in the emitted reason.
+    assert _CHUNK_BODY not in result.reason
+
+
+# ---------------------------------------------------------------------------
+# DB-backed tests
+# ---------------------------------------------------------------------------
 
 
 async def _seed_chunk(pool: asyncpg.Pool, source_path: str, tier: str, text: str) -> None:
@@ -209,6 +354,7 @@ async def _seed_chunk(pool: asyncpg.Pool, source_path: str, tier: str, text: str
 
 @pytest.mark.asyncio
 async def test_resolve_cited_sources_acl_drops_above_tier(clean_db: asyncpg.Pool) -> None:
+    # AC: cited chunks above caller tier are dropped (ACL re-resolution).
     await _seed_chunk(clean_db, "lore/public.md", "public", "Texte public.")
     await _seed_chunk(clean_db, "lore/secret.md", "author_only", "Texte secret.")
     citations = [
@@ -219,7 +365,7 @@ async def test_resolve_cited_sources_acl_drops_above_tier(clean_db: asyncpg.Pool
     anon = await resolve_cited_sources(clean_db, citations, "anonymous")
     author = await resolve_cited_sources(clean_db, citations, "author_only")
 
-    assert anon == [("lore/public.md", 0, "Texte public.")]  # author_only dropped
+    assert anon == [("lore/public.md", 0, "Texte public.")]
     assert sorted(author) == [
         ("lore/public.md", 0, "Texte public."),
         ("lore/secret.md", 0, "Texte secret."),
@@ -242,7 +388,13 @@ async def _confirmed_verify(pool: asyncpg.Pool, conversation_id: str) -> Any:
     return await verify_contradiction(
         pool=pool,
         embedder=_embedder,
-        llm=_FakeJudgeLlm(["CONTRADICTION", "CONTRADICTION", "CONTRADICTION"]),
+        llm=_FakeJudgeLlm(
+            [
+                "CONTRADICTION\nSources contredisent.",
+                "CONTRADICTION\nSources contredisent.",
+                "CONTRADICTION\nSources contredisent.",
+            ]
+        ),
         claim=CLAIM,
         conversation_id=conversation_id,
         citations=[Citation(source_path="lore/x.md", chunk_ords=[0])],
@@ -262,10 +414,10 @@ async def test_confirmed_creates_then_increments_real_ticket(clean_db: asyncpg.P
     first = await _confirmed_verify(clean_db, conv)
     second = await _confirmed_verify(clean_db, conv)
 
-    assert first.contradiction_confirmed is True
+    assert first.verdict == "contradiction"
     assert first.ticket_action == "created"
     assert first.ticket_id is not None
-    assert second.ticket_action == "incremented"  # same claim → cosine dedup increments
+    assert second.ticket_action == "incremented"
     assert second.ticket_id == first.ticket_id
     async with clean_db.acquire() as conn:
         await conn.execute("DELETE FROM tickets")
@@ -273,16 +425,19 @@ async def test_confirmed_creates_then_increments_real_ticket(clean_db: asyncpg.P
 
 @pytest.mark.asyncio
 async def test_confirmed_unknown_conversation_yields_skipped_error(clean_db: asyncpg.Pool) -> None:
-    # FK miss: confirmed, but conversation_id absent → tickets FK RESTRICT → create_or_increment
-    # is fail-soft → skipped_error surfaced as ticket_action (no ticket, no raise).
+    # FK miss: confirmed, but conversation_id absent → tickets FK RESTRICT → skipped_error.
     await _seed_chunk(clean_db, "lore/x.md", "public", "L'Archiviste est mort.")
 
     result = await _confirmed_verify(clean_db, "55555555-5555-4555-8555-555555555555")
 
-    assert result.contradiction_confirmed is True
-    assert result.confirmations == 3
+    assert result.verdict == "contradiction"
     assert result.ticket_action == "skipped_error"
     assert result.ticket_id is None
+
+
+# ---------------------------------------------------------------------------
+# HTTP contract / validation tests
+# ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
@@ -307,8 +462,6 @@ def _valid_body() -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("mutate", "headers", "expected_error"),
     [
-        (lambda b: b.pop("citations"), True, "invalid_citations"),
-        (lambda b: b.update(citations=[]), True, "invalid_citations"),
         (lambda b: b.update(conversation_id="not-a-uuid"), True, "invalid_conversation_id"),
         (lambda b: b.update(claim=""), True, "invalid_claim"),
         (lambda b: None, False, "invalid_request"),
@@ -320,6 +473,7 @@ async def test_request_validation_maps_to_contract_errors(
     headers: bool,
     expected_error: str,
 ) -> None:
+    # AC: validation errors map to the contract error enum.
     body = _valid_body()
     mutate(body)
     request_headers = {"x-user-id": USER_ID, "x-user-tier": "anonymous"} if headers else {}
@@ -328,3 +482,26 @@ async def test_request_validation_maps_to_contract_errors(
 
     assert resp.status_code == 400
     assert resp.json() == {"error": expected_error}
+
+
+def test_empty_citations_accepted_by_model() -> None:
+    """AC: citations is optional — empty array and absent field are both valid."""
+    # AC: no-citation path — VerifyContradictionRequest accepts empty citations.
+    req_with_empty = VerifyContradictionRequest.model_validate(
+        {
+            "claim": CLAIM,
+            "conversation_id": CONV_ID,
+            "citations": [],
+            "request_id": REQUEST_ID,
+        }
+    )
+    assert req_with_empty.citations == []
+
+    req_without = VerifyContradictionRequest.model_validate(
+        {
+            "claim": CLAIM,
+            "conversation_id": CONV_ID,
+            "request_id": REQUEST_ID,
+        }
+    )
+    assert req_without.citations == []

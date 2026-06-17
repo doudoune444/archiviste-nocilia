@@ -1,4 +1,4 @@
-"""POST /v1/verify-contradiction — internal contradiction verification (CTR-001)."""
+"""POST /v1/verify-contradiction — 4-way verdict judging with retrieval fallback (#162)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ _VALID_TIERS = {"anonymous", "members", "author_only"}
 
 
 class _VerifyError(Exception):
-    # Sentinel: emits a body of exactly {"error": code} per the contract enum.
     def __init__(self, status: int, code: str) -> None:
         super().__init__(code)
         self.status = status
@@ -88,13 +87,12 @@ async def post_verify_contradiction(
         request_id=parsed.request_id,
         user_id=user_id,
         conversation_id=parsed.conversation_id,
-        contradiction_confirmed=result.contradiction_confirmed,
-        confirmations=result.confirmations,
+        verdict=result.verdict,
         ticket_action=result.ticket_action,
     )
     return VerifyContradictionResponse(
-        contradiction_confirmed=result.contradiction_confirmed,
-        confirmations=result.confirmations,
+        verdict=result.verdict,
+        reason=result.reason,
         ticket_action=result.ticket_action,
         ticket_id=result.ticket_id,
     )

@@ -47,7 +47,8 @@ const MAX_CHUNK_ORDS: usize = 200;
 struct ValidatedRequest {
     claim: String,
     conversation_id: String,
-    citations: Value,
+    /// None when the client omitted citations (no-citation retrieval path in workers).
+    citations: Option<Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,13 +120,16 @@ fn parse_and_validate(body: &[u8]) -> Result<ValidatedRequest, &'static str> {
         _ => return Err("invalid_request"),
     };
 
+    // Citations are optional (no-citation retrieval path, design decision #5).
+    // When present they must be a valid array of ≤50 items; absent/null → None.
     let citations = match value.get("citations") {
+        None | Some(Value::Null) => None,
         Some(Value::Array(arr)) => {
-            if arr.is_empty() || arr.len() > MAX_CITATIONS {
+            if arr.len() > MAX_CITATIONS {
                 return Err("invalid_request");
             }
             validate_citations(arr)?;
-            Value::Array(arr.clone())
+            Some(Value::Array(arr.clone()))
         }
         _ => return Err("invalid_request"),
     };
@@ -170,6 +174,27 @@ fn validate_citations(arr: &[Value]) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Build the JSON body forwarded to workers `/v1/verify-contradiction`.
+///
+/// When `citations` is `None` (no-citation retrieval path) the field is omitted
+/// so workers falls through to its embed-then-retrieve path.
+fn build_workers_body(
+    claim: &str,
+    conversation_id: &str,
+    citations: Option<&Value>,
+    request_id: &str,
+) -> Value {
+    let mut body = json!({
+        "claim": claim,
+        "conversation_id": conversation_id,
+        "request_id": request_id,
+    });
+    if let Some(cits) = citations {
+        body["citations"] = cits.clone();
+    }
+    body
+}
+
 // ---------------------------------------------------------------------------
 // Forwarding
 // ---------------------------------------------------------------------------
@@ -206,12 +231,12 @@ async fn forward_to_workers(
         }
     };
 
-    let workers_body = json!({
-        "claim": req.claim,
-        "conversation_id": req.conversation_id,
-        "citations": req.citations,
-        "request_id": request_id,
-    });
+    let workers_body = build_workers_body(
+        &req.claim,
+        &req.conversation_id,
+        req.citations.as_ref(),
+        request_id,
+    );
 
     let workers_start = Instant::now();
     let result = state

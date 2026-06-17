@@ -102,7 +102,7 @@ async fn ac1_ac2_valid_report_forwarded_to_workers() {
     let uid_cap = StdArc::clone(&captured_uid);
     let rid_cap = StdArc::clone(&captured_req_id);
 
-    let verdict_body = r#"{"contradiction_confirmed":true,"confirmations":2,"ticket_action":"created","ticket_id":"550e8400-e29b-41d4-a716-446655440001"}"#;
+    let verdict_body = r#"{"verdict":"contradiction","reason":"Sources en désaccord.","ticket_action":"created","ticket_id":"550e8400-e29b-41d4-a716-446655440001"}"#;
 
     let _mock = server
         .mock("POST", "/v1/verify-contradiction")
@@ -126,10 +126,10 @@ async fn ac1_ac2_valid_report_forwarded_to_workers() {
     let app = router(make_state(&server.url()));
     let resp = post_report(app, &valid_payload()).await;
 
-    // AC-2: passthrough 200 body
+    // AC-2: passthrough 200 body (new clean-break shape: verdict + reason, #162)
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
-    assert_eq!(body["contradiction_confirmed"], true);
+    assert_eq!(body["verdict"], "contradiction");
     assert_eq!(body["ticket_action"], "created");
 
     // AC-1: identity headers forwarded
@@ -190,15 +190,89 @@ async fn ac3_bad_conversation_id_returns_400() {
     assert_error_envelope(&body, "invalid_request");
 }
 
-/// AC-3: empty citations array → 400.
+/// No-citation path (#162): empty citations array → forwarded to workers with
+/// `citations: []` in the body (not omitted).
 #[tokio::test]
-async fn ac3_empty_citations_returns_400() {
+async fn no_citation_path_empty_citations_accepted() {
+    use std::sync::{Arc as StdArc, Mutex};
+
+    let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
+    let body_cap = StdArc::clone(&captured_body);
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/verify-contradiction")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body_from_request(move |req| {
+            if let Ok(bytes) = req.body() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                    *body_cap.lock().unwrap() = Some(v);
+                }
+            }
+            r#"{"verdict":"present","reason":"ok","ticket_action":"not_raised","ticket_id":null}"#
+                .into()
+        })
+        .create_async()
+        .await;
+
     let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}","citations":[]}}"#);
-    let app = router(make_state("http://127.0.0.1:1"));
+    let app = router(make_state(&server.url()));
     let resp = post_report(app, &payload).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = body_json(resp).await;
-    assert_error_envelope(&body, "invalid_request");
+
+    // Gateway must accept empty citations and forward (not 400).
+    assert_ne!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // build_workers_body keeps citations present-and-empty when the array is [].
+    let forwarded = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        forwarded["citations"],
+        serde_json::json!([]),
+        "empty citations array must be forwarded as present-and-empty"
+    );
+}
+
+/// No-citation path (#162): absent citations field → forwarded to workers
+/// without the `citations` key (omitted, not null), triggering retrieval path in workers.
+#[tokio::test]
+async fn no_citation_path_absent_citations_accepted() {
+    use std::sync::{Arc as StdArc, Mutex};
+
+    let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
+    let body_cap = StdArc::clone(&captured_body);
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/verify-contradiction")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body_from_request(move |req| {
+            if let Ok(bytes) = req.body() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                    *body_cap.lock().unwrap() = Some(v);
+                }
+            }
+            r#"{"verdict":"present","reason":"ok","ticket_action":"not_raised","ticket_id":null}"#
+                .into()
+        })
+        .create_async()
+        .await;
+
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}"}}"#);
+    let app = router(make_state(&server.url()));
+    let resp = post_report(app, &payload).await;
+
+    // Gateway must accept absent citations and forward (not 400).
+    assert_ne!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // build_workers_body omits citations entirely when the field was absent.
+    let forwarded = captured_body.lock().unwrap().clone().unwrap();
+    assert!(
+        forwarded.get("citations").is_none(),
+        "absent citations must be omitted from forwarded body, got: {forwarded}"
+    );
 }
 
 /// AC-3: more than 50 citations → 400.
@@ -401,7 +475,7 @@ async fn low_overhead_header_present_on_200() {
         .with_status(200)
         .with_header("content-type", "application/json")
         .with_body(
-            r#"{"contradiction_confirmed":false,"confirmations":0,"ticket_action":"none","ticket_id":null}"#,
+            r#"{"verdict":"present","reason":"Fait confirmé.","ticket_action":"not_raised","ticket_id":null}"#,
         )
         .create_async()
         .await;

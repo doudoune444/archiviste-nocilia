@@ -19,7 +19,10 @@ function showError(reqId) {
   errorDiv.hidden = false;
 }
 
-/** @param {{ id: string, priority_score: number, category: string, question: string, created_at: string }} ticket */
+/**
+ * @param {{ id: string, priority_score: number, category: string, question: string,
+ *           created_at: string, judges_not_passed: boolean }} ticket
+ */
 function renderRow(ticket) {
   const tr = document.createElement('tr');
 
@@ -38,6 +41,22 @@ function renderRow(ticket) {
   const tdDate = document.createElement('td');
   tdDate.textContent = ticket.created_at;
   tr.appendChild(tdDate);
+
+  // #163: surface the judges_not_passed flag so visitors can distinguish
+  // judge-confirmed tickets from human-override tickets.
+  const tdConfirmation = document.createElement('td');
+  if (ticket.judges_not_passed === true) {
+    const badge = document.createElement('span');
+    badge.className = 'badge-unconfirmed';
+    badge.textContent = 'non confirmé par les juges';
+    tdConfirmation.appendChild(badge);
+  } else {
+    const badge = document.createElement('span');
+    badge.className = 'badge-confirmed';
+    badge.textContent = 'confirmé';
+    tdConfirmation.appendChild(badge);
+  }
+  tr.appendChild(tdConfirmation);
 
   return tr;
 }

@@ -33,6 +33,35 @@
       >
       <button id="send-btn" type="submit">Envoyer</button>
     </form>
+    <div id="signaler-panel">
+      <button id="signaler-toggle-btn" type="button" class="signaler-toggle-btn" aria-expanded="false">
+        Signaler une incohérence
+      </button>
+      <div id="signaler-form" hidden>
+        <label for="signaler-claim" class="visually-hidden">Décrivez l'incohérence</label>
+        <textarea
+          id="signaler-claim"
+          class="report-claim"
+          placeholder="Décrivez l'incohérence constatée…"
+          maxlength="4096"
+          rows="3"
+        ></textarea>
+        <div class="signaler-actions">
+          <button id="signaler-submit-btn" type="button" class="report-submit-btn">
+            Envoyer le signalement
+          </button>
+        </div>
+        <p id="signaler-feedback" class="report-feedback" hidden></p>
+        <div id="signaler-second-row" class="signaler-second-row" hidden>
+          <button id="signaler-send-anyway-btn" type="button" class="report-submit-btn">
+            Envoyer quand même
+          </button>
+          <button id="signaler-cancel-btn" type="button" class="signaler-cancel-btn">
+            Annuler
+          </button>
+        </div>
+      </div>
+    </div>
   </main>
   <script src="/assets/app.js" defer></script>
 </body>

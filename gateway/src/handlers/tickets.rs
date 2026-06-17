@@ -42,6 +42,8 @@ struct TicketRow {
     status: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// Human override flag — judges did not confirm this ticket (#163).
+    judges_not_passed: bool,
 }
 
 /// Single ticket item in the response (AC-5).
@@ -63,6 +65,8 @@ pub struct TicketItem {
     pub created_at: DateTime<Utc>,
     /// Last-update timestamp (RFC3339 via serde).
     pub updated_at: DateTime<Utc>,
+    /// True when raised via human "send anyway" override — judges did not confirm (#163).
+    pub judges_not_passed: bool,
 }
 
 /// Response envelope for `GET /v1/tickets` (AC-5).
@@ -120,7 +124,8 @@ pub async fn list_tickets(
     // Uses `sqlx::query_as` (runtime-typed) instead of `sqlx::query!` macro to avoid
     // requiring a live DB at compile time (no `.sqlx` offline cache in this repo).
     let rows: Vec<TicketRow> = sqlx::query_as(
-        "SELECT id, conversation_id, question, category, priority_score, status, created_at, updated_at \
+        "SELECT id, conversation_id, question, category, priority_score, status, \
+         created_at, updated_at, judges_not_passed \
          FROM tickets \
          WHERE status = 'open' \
          ORDER BY priority_score DESC, created_at DESC \
@@ -165,6 +170,7 @@ pub async fn list_tickets(
             status: r.status,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            judges_not_passed: r.judges_not_passed,
         })
         .collect();
 

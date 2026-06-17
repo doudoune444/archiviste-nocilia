@@ -38,11 +38,16 @@ async def create_or_increment(
     conversation_id: str,
     question: str,
     request_id: str,
+    judges_not_passed: bool = False,
 ) -> TicketResult:
     """Create a new lore-gap ticket or increment an existing similar one.
 
     Returns TicketResult with action in {"created", "incremented", "skipped_error"}.
     Never raises: all failures are logged as ALERT and return skipped_error.
+
+    judges_not_passed is only written on INSERT (new tickets). Incrementing an
+    existing ticket only bumps priority_score — the original confirmation status is
+    immutable, as it reflects how the first signal was generated (#163).
     """
     try:
         vector = embedder.encode_batch([question], batch_size=1)[0]
@@ -56,7 +61,9 @@ async def create_or_increment(
         return TicketResult(action="skipped_error", ticket_id=None, priority_score=None)
 
     try:
-        return await _run_transaction(pool, vector, conversation_id, question, request_id)
+        return await _run_transaction(
+            pool, vector, conversation_id, question, request_id, judges_not_passed
+        )
     except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError, TimeoutError) as exc:
         logger.error(
             "ticket_service_failed",
@@ -73,6 +80,7 @@ async def _run_transaction(
     conversation_id: str,
     question: str,
     request_id: str,
+    judges_not_passed: bool,
 ) -> TicketResult:
     """Execute the dedup SELECT FOR UPDATE + INSERT/UPDATE in a single transaction."""
     async with pool.acquire() as conn, conn.transaction():
@@ -97,6 +105,8 @@ async def _run_transaction(
 
         if existing is not None:
             # AC-10 step 3: increment priority_score.
+            # judges_not_passed is NOT updated on increment — the original creation
+            # flag reflects the confirmation status at birth and is immutable (#163).
             new_score: int = await conn.fetchval(
                 """
                 UPDATE tickets
@@ -116,12 +126,13 @@ async def _run_transaction(
         new_id: str = await conn.fetchval(
             """
             INSERT INTO tickets (conversation_id, question, question_embedding,
-                                 category, priority_score, status)
-            VALUES ($1, $2, $3, 'uncategorized', 1, 'open')
+                                 category, priority_score, status, judges_not_passed)
+            VALUES ($1, $2, $3, 'uncategorized', 1, 'open', $4)
             RETURNING id::text
             """,
             conversation_id,
             question,
             vector,
+            judges_not_passed,
         )
         return TicketResult(action="created", ticket_id=new_id, priority_score=1)

@@ -8,6 +8,9 @@
 //! - Error envelope never leaks stack traces, file paths, or upstream bodies.
 //! - Log line never contains the raw `claim` field (A09): only `claim_len`.
 //! - `request_id` is always gateway-generated — never from the client body.
+//! - Ownership check (A01 IDOR): `conversation_id` must belong to the caller before
+//!   forwarding — uniform 404 whether the conversation does not exist or belongs to
+//!   someone else (non-owner cannot probe existence; mirrors HIST-001 pattern).
 
 use axum::{
     extract::{Extension, State},
@@ -15,8 +18,10 @@ use axum::{
     response::Response,
 };
 use serde_json::{json, Value};
+use sqlx::FromRow;
 use std::sync::Arc;
 use std::time::Instant;
+use uuid::Uuid;
 
 use crate::handlers::workers_proxy::{
     build_error, build_passthrough, classify_id_token_error, elapsed_ms, map_reqwest_error,
@@ -49,6 +54,17 @@ struct ValidatedRequest {
     conversation_id: String,
     /// None when the client omitted citations (no-citation retrieval path in workers).
     citations: Option<Value>,
+    /// Human override: send ticket even when judges did not confirm (#163).
+    force: bool,
+}
+
+/// Minimal row used to verify conversation ownership (IDOR guard, security.md A01).
+///
+/// We only need `user_id`; `sqlx::FromRow` is derived so `query_as` can map the row
+/// without a compile-time DB connection (mirrors the HIST-001 `ConversationGcsRow` pattern).
+#[derive(FromRow)]
+struct ConversationOwnerRow {
+    user_id: Uuid,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +94,44 @@ pub async fn report_contradiction(
             return build_error(&request_id, code, StatusCode::BAD_REQUEST);
         }
     };
+
+    // A01 IDOR: verify the caller owns the conversation before forwarding.
+    // Uniform 404 whether the conversation does not exist or belongs to another user —
+    // prevents existence probing (mirrors HIST-001 conversations.rs:157 pattern).
+    // Fail-CLOSED: missing pool → 503 (mirrors board.rs:86-89 posture). A missing pool
+    // must never silently bypass the ownership check and forward the request.
+    let Some(pool) = state.db_pool.as_ref() else {
+        let latency_ms = elapsed_ms(start);
+        log_request(&request_id, 0, None, 503, latency_ms);
+        return build_error(
+            &request_id,
+            "upstream_unavailable",
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    };
+    match caller_owns_conversation(pool, &validated.conversation_id, identity.user_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            let latency_ms = elapsed_ms(start);
+            tracing::warn!(
+                event = "report_contradiction.idor_rejected",
+                request_id,
+                user_id = %identity.user_id,
+                conversation_id = validated.conversation_id,
+            );
+            log_request(&request_id, 0, None, 404, latency_ms);
+            return build_error(&request_id, "conversation_not_found", StatusCode::NOT_FOUND);
+        }
+        Err(()) => {
+            let latency_ms = elapsed_ms(start);
+            log_request(&request_id, 0, None, 503, latency_ms);
+            return build_error(
+                &request_id,
+                "upstream_unavailable",
+                StatusCode::SERVICE_UNAVAILABLE,
+            );
+        }
+    }
 
     let claim_len = validated.claim.len();
     let (gateway_status, upstream_status, response) =
@@ -134,10 +188,18 @@ fn parse_and_validate(body: &[u8]) -> Result<ValidatedRequest, &'static str> {
         _ => return Err("invalid_request"),
     };
 
+    // force is optional bool, default false (#163 human override).
+    let force = match value.get("force") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        _ => return Err("invalid_request"),
+    };
+
     Ok(ValidatedRequest {
         claim,
         conversation_id,
         citations,
+        force,
     })
 }
 
@@ -178,21 +240,54 @@ fn validate_citations(arr: &[Value]) -> Result<(), &'static str> {
 ///
 /// When `citations` is `None` (no-citation retrieval path) the field is omitted
 /// so workers falls through to its embed-then-retrieve path.
+/// `force` is always forwarded so workers can apply the human override (#163).
 fn build_workers_body(
     claim: &str,
     conversation_id: &str,
     citations: Option<&Value>,
     request_id: &str,
+    force: bool,
 ) -> Value {
     let mut body = json!({
         "claim": claim,
         "conversation_id": conversation_id,
         "request_id": request_id,
+        "force": force,
     });
     if let Some(cits) = citations {
         body["citations"] = cits.clone();
     }
     body
+}
+
+// ---------------------------------------------------------------------------
+// Ownership check (A01 IDOR, security.md)
+// ---------------------------------------------------------------------------
+
+/// Verify the caller owns `conversation_id` before forwarding to workers.
+///
+/// Returns `Ok(true)` when the conversation belongs to the caller, `Ok(false)` when
+/// no row is found **or** the row belongs to a different user — uniform 404 in both
+/// cases so a non-owner cannot distinguish absence from foreign ownership (same
+/// behaviour as HIST-001 `conversation_messages` endpoint at conversations.rs:157).
+///
+/// Returns `Err(())` on a DB error so the caller can return 503.
+async fn caller_owns_conversation(
+    pool: &sqlx::PgPool,
+    conversation_id: &str,
+    caller: Uuid,
+) -> Result<bool, ()> {
+    // Parse is already guaranteed by `parse_and_validate`, but we need a `Uuid` for binding.
+    let conv_uuid = Uuid::parse_str(conversation_id).map_err(|_| ())?;
+
+    let row: Option<ConversationOwnerRow> =
+        sqlx::query_as("SELECT user_id FROM conversations WHERE id = $1")
+            .bind(conv_uuid)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| ())?;
+
+    Ok(row.is_some_and(|r| r.user_id == caller))
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +331,7 @@ async fn forward_to_workers(
         &req.conversation_id,
         req.citations.as_ref(),
         request_id,
+        req.force,
     );
 
     let workers_start = Instant::now();

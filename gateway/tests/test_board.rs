@@ -522,3 +522,104 @@ fn board_handler_has_limit() {
         "board.rs must enforce a LIMIT clause (security.md A01)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #163: judges_not_passed field surfaced in board items
+// ---------------------------------------------------------------------------
+
+/// #163 AC: board item includes judges_not_passed field; overridden ticket is distinguishable.
+#[sqlx::test(migrations = "../migrations")]
+async fn board_item_includes_judges_not_passed(pool: sqlx::PgPool) {
+    // #163 AC: judges_not_passed surfaced in board JSON — distinguishes judge-confirmed
+    // from human-override tickets.
+    let anon_user_id = Uuid::nil();
+
+    for n in 1_u32..=2 {
+        sqlx::query(
+            "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+        )
+        .bind(Uuid::from_u128(u128::from(n) + 100))
+        .bind(anon_user_id)
+        .bind(format!("gs://archiviste-conversations/conv/163-{n}.md"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    // Judge-confirmed ticket (judges_not_passed=false — the default).
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, judges_not_passed) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(Uuid::from_u128(101))
+    .bind("Question confirmée par les juges")
+    .bind("lore")
+    .bind(2_i32)
+    .bind("open")
+    .bind(false)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Human-override ticket (judges_not_passed=true).
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, judges_not_passed) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(Uuid::from_u128(102))
+    .bind("Question non confirmée — envoyée quand même")
+    .bind("lore")
+    .bind(1_i32)
+    .bind("open")
+    .bind(true)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 2);
+
+    // #163 AC: field present on both items.
+    for item in items {
+        assert!(
+            item.get("judges_not_passed").is_some(),
+            "judges_not_passed must be present in board item: {item}"
+        );
+    }
+
+    // Confirmed ticket (priority 2, first by ordering) → judges_not_passed=false.
+    assert_eq!(
+        items[0]["judges_not_passed"],
+        serde_json::json!(false),
+        "judge-confirmed ticket must have judges_not_passed=false"
+    );
+    // Overridden ticket (priority 1, second) → judges_not_passed=true.
+    assert_eq!(
+        items[1]["judges_not_passed"],
+        serde_json::json!(true),
+        "human-override ticket must have judges_not_passed=true"
+    );
+}
+
+/// #163 AC: board.js renders distinguishing badge text for judges_not_passed.
+#[test]
+fn board_js_renders_confirmation_badge() {
+    // #163 AC: board.js must surface judges_not_passed as a visible badge
+    let js = std::fs::read_to_string("static/assets/board.js")
+        .expect("static/assets/board.js not found");
+    assert!(
+        js.contains("judges_not_passed"),
+        "board.js must reference judges_not_passed to render the badge"
+    );
+    assert!(
+        js.contains("non confirmé par les juges"),
+        "board.js must render 'non confirmé par les juges' badge text"
+    );
+}

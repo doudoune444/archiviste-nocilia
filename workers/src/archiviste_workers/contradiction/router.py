@@ -81,6 +81,7 @@ async def post_verify_contradiction(
         citations=parsed.citations,
         user_tier=user_tier,
         request_id=parsed.request_id,
+        force=parsed.force,
     )
     logger.info(
         "verify_contradiction",

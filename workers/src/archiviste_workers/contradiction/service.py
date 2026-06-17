@@ -219,8 +219,14 @@ async def verify_contradiction(
     citations: list[Citation],
     user_tier: str,
     request_id: str,
+    force: bool = False,
 ) -> VerificationResult:
-    """Verify a claim; raise a lore-gap ticket when the panel verdict is non-present >=2."""
+    """Verify a claim; raise a lore-gap ticket when the panel verdict is non-present >=2.
+
+    When force=True and the judges did NOT confirm (should_raise is False), a ticket is
+    still raised — tagged judges_not_passed=True so the board can distinguish it (#163).
+    Cosine dedup applies in both paths (anti-spam).
+    """
     sources = await _resolve_sources(pool, embedder, citations, user_tier, claim, request_id)
 
     if sources is None:
@@ -256,28 +262,49 @@ async def verify_contradiction(
     safe_reason = _redact_reason(synthesized_reason, winning_verdict, sources)
 
     should_raise = has_majority and winning_verdict in TICKET_TRIGGERING_VERDICTS
-    if not should_raise:
+    if should_raise:
+        ticket: TicketResult = await create_or_increment(
+            pool,
+            embedder,
+            conversation_id=conversation_id,
+            question=claim,
+            request_id=request_id,
+            judges_not_passed=False,
+        )
         logger.info(
-            "contradiction_no_ticket",
+            "contradiction_ticket_raised",
             request_id=request_id,
             conversation_id=conversation_id,
             verdict=winning_verdict,
-            has_majority=has_majority,
+            ticket_action=ticket.action,
         )
-        return VerificationResult(winning_verdict, safe_reason, "not_raised", None)
+        return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)
 
-    ticket: TicketResult = await create_or_increment(
-        pool,
-        embedder,
-        conversation_id=conversation_id,
-        question=claim,
-        request_id=request_id,
-    )
+    if force:
+        # Human override: judges did not confirm, but the visitor insists (#163).
+        # Cosine dedup still applies — no bypass (anti-spam).
+        ticket = await create_or_increment(
+            pool,
+            embedder,
+            conversation_id=conversation_id,
+            question=claim,
+            request_id=request_id,
+            judges_not_passed=True,
+        )
+        logger.info(
+            "contradiction_ticket_forced",
+            request_id=request_id,
+            conversation_id=conversation_id,
+            verdict=winning_verdict,
+            ticket_action=ticket.action,
+        )
+        return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)
+
     logger.info(
-        "contradiction_ticket_raised",
+        "contradiction_no_ticket",
         request_id=request_id,
         conversation_id=conversation_id,
         verdict=winning_verdict,
-        ticket_action=ticket.action,
+        has_majority=has_majority,
     )
-    return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)
+    return VerificationResult(winning_verdict, safe_reason, "not_raised", None)

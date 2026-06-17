@@ -87,129 +87,6 @@
     sources.scrollIntoView({ behavior: "smooth", block: "end" });
   }
 
-  // CTR-002: append the per-answer "Report an inconsistency" control under the
-  // answer, kept separate from appendSources (SRP — sources rendering vs report
-  // widget). `conversationId` is captured at render time (the active id when this
-  // answer was received) and bound to this control — NOT re-read from localStorage
-  // at submit, to prevent wrong-conversation attribution after reopenConversation()
-  // overwrites the global key. Renders nothing when the answer carries no citations.
-  function appendReportControl(citations, conversationId) {
-    if (!Array.isArray(citations) || citations.length === 0) {
-      return;
-    }
-    const section = document.getElementById("conversation");
-    section.appendChild(buildReportControl(citations, conversationId));
-  }
-
-  // CTR-002: build the per-answer contradiction-report widget.
-  // `citations` is the array from the response body (already validated above).
-  // `conversationId` is the id captured at render time for this specific answer;
-  // it must NOT be re-read from localStorage at submit (see appendSources comment).
-  // Security: all text written via textContent; claim sent as JSON (never interpolated).
-  function buildReportControl(citations, conversationId) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "report-control";
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "report-btn";
-    btn.textContent = "Signaler une incohérence";
-
-    const form = document.createElement("div");
-    form.className = "report-form";
-    form.hidden = true;
-
-    const textarea = document.createElement("textarea");
-    textarea.className = "report-claim";
-    textarea.placeholder = "Décrivez l'incohérence constatée…";
-    textarea.maxLength = 4096;
-    textarea.rows = 3;
-
-    const submitBtn = document.createElement("button");
-    submitBtn.type = "button";
-    submitBtn.className = "report-submit-btn";
-    submitBtn.textContent = "Envoyer le signalement";
-
-    const feedback = document.createElement("p");
-    feedback.className = "report-feedback";
-    feedback.hidden = true;
-
-    form.appendChild(textarea);
-    form.appendChild(submitBtn);
-    form.appendChild(feedback);
-
-    wrapper.appendChild(btn);
-    wrapper.appendChild(form);
-
-    btn.addEventListener("click", function () {
-      form.hidden = !form.hidden;
-      if (!form.hidden) {
-        textarea.focus();
-      }
-    });
-
-    submitBtn.addEventListener("click", async function () {
-      const claim = textarea.value.trim();
-      if (!claim) {
-        return;
-      }
-      // CTR-002: use the conversation id captured at render time for this answer.
-      // Do NOT re-read localStorage here — reopenConversation() may have overwritten
-      // the global key with a different conversation since this answer was rendered.
-      if (!conversationId) {
-        feedback.textContent = "Impossible d'envoyer le signalement, réessayez.";
-        feedback.hidden = false;
-        return;
-      }
-
-      submitBtn.disabled = true;
-      feedback.hidden = true;
-
-      try {
-        const resp = await fetch("/v1/report-contradiction", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({
-            claim: claim,
-            conversation_id: conversationId,
-            citations: citations,
-          }),
-        });
-
-        if (resp.ok) {
-          let body = null;
-          try {
-            body = await resp.json();
-          } catch (_) {
-            // ignore parse error — show neutral success
-          }
-          if (body && body.contradiction_confirmed === true) {
-            feedback.textContent =
-              "Merci — nous avons confirmé une incohérence et l'avons transmise aux archivistes.";
-          } else {
-            feedback.textContent =
-              "Nous avons vérifié les sources citées et n'avons pas trouvé de contradiction.";
-          }
-        } else {
-          // 400 or 5xx — never leak error envelope internals (security.md output sanitization).
-          feedback.textContent =
-            "Impossible d'envoyer le signalement, réessayez.";
-        }
-      } catch (_) {
-        // Network drop or fetch failure.
-        feedback.textContent =
-          "Impossible d'envoyer le signalement, réessayez.";
-      }
-
-      feedback.hidden = false;
-      submitBtn.disabled = false;
-      form.hidden = true;
-    });
-
-    return wrapper;
-  }
-
   // Extract request id from response headers or JSON body (best-effort).
   function extractRequestId(response, body) {
     const fromHeader = response.headers.get("x-request-id");
@@ -222,7 +99,212 @@
     return null;
   }
 
+  // ---------------------------------------------------------------------------
+  // #163: Persistent "Signaler" panel — always visible in the composer footer.
+  // Single entry point (not gated on citations). Two-step: submit → if not_raised →
+  // offer "Envoyer quand même" (force=true). All text via textContent (no innerHTML).
+  // ---------------------------------------------------------------------------
+
+  const signalerPanel = document.getElementById("signaler-panel");
+  const signalerToggle = document.getElementById("signaler-toggle-btn");
+  const signalerForm = document.getElementById("signaler-form");
+  const signalerClaim = document.getElementById("signaler-claim");
+  const signalerSubmitBtn = document.getElementById("signaler-submit-btn");
+  const signalerFeedback = document.getElementById("signaler-feedback");
+  const signalerSendAnywayBtn = document.getElementById("signaler-send-anyway-btn");
+  const signalerCancelBtn = document.getElementById("signaler-cancel-btn");
+  const signalerSecondRow = document.getElementById("signaler-second-row");
+
+  function resetSignaler() {
+    signalerClaim.value = "";
+    signalerFeedback.textContent = "";
+    signalerFeedback.hidden = true;
+    signalerSecondRow.hidden = true;
+    signalerSubmitBtn.disabled = false;
+    signalerForm.hidden = true;
+    signalerToggle.setAttribute("aria-expanded", "false");
+  }
+
+  function showSignalerFeedback(text) {
+    signalerFeedback.textContent = text;
+    signalerFeedback.hidden = false;
+  }
+
+  function showSecondStep(verdict, reason) {
+    // verdict + reason shown so the visitor understands the judges' position.
+    const verdictLine = verdict ? "Verdict : " + verdict + "." : "";
+    const reasonLine = reason ? reason : "";
+    signalerFeedback.textContent =
+      (verdictLine ? verdictLine + " " : "") +
+      (reasonLine || "") +
+      " Les juges n'ont pas confirmé — voulez-vous envoyer quand même ?";
+    signalerFeedback.hidden = false;
+    signalerSecondRow.hidden = false;
+    signalerSubmitBtn.disabled = true;
+  }
+
+  async function postReport(claim, conversationId, force) {
+    const bodyObj = { claim: claim, force: force };
+    if (conversationId) {
+      bodyObj.conversation_id = conversationId;
+    }
+    const resp = await fetch("/v1/report-contradiction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(bodyObj),
+    });
+    let body = null;
+    try {
+      body = await resp.json();
+    } catch (_) {
+      // ignore parse error
+    }
+    // Return status so callers can distinguish 404 (ownership check) from other failures.
+    return { ok: resp.ok, status: resp.status, body: body };
+  }
+
+  if (signalerToggle) {
+    signalerToggle.addEventListener("click", function () {
+      const isOpen = signalerForm.hidden === false;
+      if (isOpen) {
+        resetSignaler();
+      } else {
+        signalerForm.hidden = false;
+        signalerToggle.setAttribute("aria-expanded", "true");
+        signalerClaim.focus();
+      }
+    });
+  }
+
+  if (signalerSubmitBtn) {
+    signalerSubmitBtn.addEventListener("click", async function () {
+      const claim = signalerClaim.value.trim();
+      if (!claim) {
+        return;
+      }
+      // conversation_id from localStorage — set by ensureConversationId() during the first
+      // chat POST. Never mint a fresh id for the signal path: a freshly-minted id has no
+      // row in the conversations table and the gateway ownership check (A01 IDOR fix) would
+      // return 404. The visitor must have an active conversation to file a signal.
+      const conversationId = loadConversationId();
+      if (!conversationId) {
+        showSignalerFeedback(
+          "Aucune conversation à signaler — posez d'abord une question."
+        );
+        return;
+      }
+
+      signalerSubmitBtn.disabled = true;
+      signalerFeedback.hidden = true;
+      signalerSecondRow.hidden = true;
+
+      try {
+        const { ok, status, body } = await postReport(claim, conversationId, false);
+        if (!ok) {
+          if (status === 404) {
+            // Ownership check failed: the conversation id no longer resolves to this caller.
+            showSignalerFeedback(
+              "Aucune conversation à signaler — posez d'abord une question."
+            );
+          } else {
+            showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          }
+          signalerSubmitBtn.disabled = false;
+          return;
+        }
+        const action = body && body.ticket_action;
+        if (action === "created" || action === "incremented") {
+          const verdict = (body && body.verdict) || "";
+          const reason = (body && body.reason) || "";
+          showSignalerFeedback(
+            "Signalement enregistré. Verdict : " +
+              verdict +
+              ". " +
+              reason
+          );
+          // FIX 3: re-enable + clear so the panel is not stuck after a successful first submit.
+          signalerSubmitBtn.disabled = false;
+          signalerClaim.value = "";
+        } else if (action === "not_raised") {
+          showSecondStep(body && body.verdict, body && body.reason);
+        } else {
+          // skipped_error or unexpected
+          showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          signalerSubmitBtn.disabled = false;
+        }
+      } catch (_) {
+        showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+        signalerSubmitBtn.disabled = false;
+      }
+    });
+  }
+
+  if (signalerSendAnywayBtn) {
+    signalerSendAnywayBtn.addEventListener("click", async function () {
+      const claim = signalerClaim.value.trim();
+      if (!claim) {
+        return;
+      }
+      // Same guard as the submit handler: never mint a fresh id for the signal path.
+      const conversationId = loadConversationId();
+      if (!conversationId) {
+        showSignalerFeedback(
+          "Aucune conversation à signaler — posez d'abord une question."
+        );
+        return;
+      }
+
+      signalerSendAnywayBtn.disabled = true;
+      signalerCancelBtn.disabled = true;
+
+      try {
+        const { ok, status, body } = await postReport(claim, conversationId, true);
+        signalerSecondRow.hidden = true;
+        if (!ok) {
+          if (status === 404) {
+            showSignalerFeedback(
+              "Aucune conversation à signaler — posez d'abord une question."
+            );
+          } else {
+            showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          }
+          // FIX 3: re-enable both buttons so the panel is not stuck after a send-anyway failure.
+          signalerSendAnywayBtn.disabled = false;
+          signalerCancelBtn.disabled = false;
+          return;
+        }
+        const action = body && body.ticket_action;
+        if (action === "created" || action === "incremented") {
+          showSignalerFeedback(
+            "Signalement envoyé malgré l'absence de confirmation par les juges."
+          );
+          // FIX 3: clear + re-enable so the visitor is not left with a stuck second-step.
+          signalerClaim.value = "";
+          signalerSubmitBtn.disabled = false;
+        } else {
+          showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          signalerSendAnywayBtn.disabled = false;
+          signalerCancelBtn.disabled = false;
+        }
+      } catch (_) {
+        showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+        signalerSendAnywayBtn.disabled = false;
+        signalerCancelBtn.disabled = false;
+      }
+    });
+  }
+
+  if (signalerCancelBtn) {
+    signalerCancelBtn.addEventListener("click", function () {
+      resetSignaler();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // AC-10: submit handler — fetch POST /v1/chat, manage button state.
+  // ---------------------------------------------------------------------------
+
   async function handleSubmit(event) {
     event.preventDefault();
 
@@ -266,9 +348,6 @@
           appendArticle("assistant", body.answer, null);
           // CIT-001: render the cited sources under the answer (canon only).
           appendSources(body.citations);
-          // CTR-002: bind the active conversationId to the report widget at render
-          // time, not lazily at submit from localStorage (wrong-conversation guard).
-          appendReportControl(body.citations, conversationId);
           // HIST-001: a first turn creates the conversation — refresh the list.
           loadHistory();
         } else {

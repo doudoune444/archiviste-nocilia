@@ -39,6 +39,7 @@ async def create_or_increment(
     question: str,
     request_id: str,
     judges_not_passed: bool = False,
+    force: bool = False,
 ) -> TicketResult:
     """Create a new lore-gap ticket or increment an existing similar one.
 
@@ -48,6 +49,10 @@ async def create_or_increment(
     judges_not_passed is only written on INSERT (new tickets). Incrementing an
     existing ticket only bumps priority_score — the original confirmation status is
     immutable, as it reflects how the first signal was generated (#163).
+
+    When force=True the cosine dedup step is skipped entirely: a new ticket is
+    always inserted with judges_not_passed=True, so a forced override appears on the
+    board with its own "non confirmé par les juges" badge (#175).
     """
     try:
         vector = embedder.encode_batch([question], batch_size=1)[0]
@@ -62,7 +67,7 @@ async def create_or_increment(
 
     try:
         return await _run_transaction(
-            pool, vector, conversation_id, question, request_id, judges_not_passed
+            pool, vector, conversation_id, question, request_id, judges_not_passed, force
         )
     except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError, TimeoutError) as exc:
         logger.error(
@@ -81,48 +86,55 @@ async def _run_transaction(
     question: str,
     request_id: str,
     judges_not_passed: bool,
+    force: bool,
 ) -> TicketResult:
-    """Execute the dedup SELECT FOR UPDATE + INSERT/UPDATE in a single transaction."""
+    """Execute the dedup SELECT FOR UPDATE + INSERT/UPDATE in a single transaction.
+
+    When force=True the dedup SELECT is skipped — a new row is always inserted so
+    the forced override gets its own ticket with judges_not_passed=True (#175).
+    """
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             f"SET LOCAL statement_timeout = '{int(TICKET_SQL_TIMEOUT_SECONDS * 1000)}'"
         )
 
-        # AC-10 step 2: find open ticket with cosine similarity >= threshold.
-        existing = await conn.fetchrow(
-            """
-            SELECT id, priority_score
-            FROM tickets
-            WHERE status = 'open'
-              AND 1 - (question_embedding <=> $1) >= $2
-            ORDER BY question_embedding <=> $1 ASC
-            LIMIT 1
-            FOR UPDATE
-            """,
-            vector,
-            TICKET_DEDUP_COSINE_THRESHOLD,
-        )
-
-        if existing is not None:
-            # AC-10 step 3: increment priority_score.
-            # judges_not_passed is NOT updated on increment — the original creation
-            # flag reflects the confirmation status at birth and is immutable (#163).
-            new_score: int = await conn.fetchval(
+        if not force:
+            # AC-10 step 2: find open ticket with cosine similarity >= threshold.
+            existing = await conn.fetchrow(
                 """
-                UPDATE tickets
-                SET priority_score = priority_score + 1, updated_at = NOW()
-                WHERE id = $1
-                RETURNING priority_score
+                SELECT id, priority_score
+                FROM tickets
+                WHERE status = 'open'
+                  AND 1 - (question_embedding <=> $1) >= $2
+                ORDER BY question_embedding <=> $1 ASC
+                LIMIT 1
+                FOR UPDATE
                 """,
-                existing["id"],
-            )
-            return TicketResult(
-                action="incremented",
-                ticket_id=str(existing["id"]),
-                priority_score=new_score,
+                vector,
+                TICKET_DEDUP_COSINE_THRESHOLD,
             )
 
-        # AC-10 step 4: insert new ticket.
+            if existing is not None:
+                # AC-10 step 3: increment priority_score.
+                # judges_not_passed is NOT updated on increment — the original creation
+                # flag reflects the confirmation status at birth and is immutable (#163).
+                new_score: int = await conn.fetchval(
+                    """
+                    UPDATE tickets
+                    SET priority_score = priority_score + 1, updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING priority_score
+                    """,
+                    existing["id"],
+                )
+                return TicketResult(
+                    action="incremented",
+                    ticket_id=str(existing["id"]),
+                    priority_score=new_score,
+                )
+
+        # AC-10 step 4 / #175: insert new ticket.
+        # force=True always reaches here (dedup block skipped above).
         new_id: str = await conn.fetchval(
             """
             INSERT INTO tickets (conversation_id, question, question_embedding,

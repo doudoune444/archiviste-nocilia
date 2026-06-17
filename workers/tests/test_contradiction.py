@@ -140,12 +140,14 @@ def ticket_spy(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         question: str,
         request_id: str,
         judges_not_passed: bool = False,
+        force: bool = False,
     ) -> TicketResult:
         calls.append(
             {
                 "conversation_id": conversation_id,
                 "question": question,
                 "judges_not_passed": judges_not_passed,
+                "force": force,
             }
         )
         return TicketResult(action="created", ticket_id="ticket-1", priority_score=1)
@@ -417,6 +419,8 @@ async def test_force_after_not_raised_creates_ticket_judges_not_passed(
     assert len(ticket_spy) == 1
     # #163 AC: judges_not_passed=True because judges did NOT confirm.
     assert ticket_spy[0]["judges_not_passed"] is True
+    # #175 AC: force=True is threaded through so dedup is bypassed.
+    assert ticket_spy[0]["force"] is True
 
 
 @pytest.mark.asyncio
@@ -438,6 +442,8 @@ async def test_should_raise_path_always_sets_judges_not_passed_false(
     assert len(ticket_spy) == 1
     # #163 AC: judge-confirmed path → judges_not_passed=False regardless of force.
     assert ticket_spy[0]["judges_not_passed"] is False
+    # #175 AC: confirmed path never sets force=True (dedup still applies).
+    assert ticket_spy[0]["force"] is False
 
 
 @pytest.mark.asyncio
@@ -557,6 +563,99 @@ async def test_confirmed_unknown_conversation_yields_skipped_error(clean_db: asy
     assert result.verdict == "contradiction"
     assert result.ticket_action == "skipped_error"
     assert result.ticket_id is None
+
+
+@pytest.mark.asyncio
+async def test_force_always_creates_new_ticket_even_when_similar_open_exists(
+    clean_db: asyncpg.Pool,
+) -> None:
+    """#175 AC-3: worker integration test — force signal creates new judges_not_passed=True row
+    even when a similar open ticket already exists (dedup bypassed).
+    """
+    conv = "66666666-6666-4666-8666-666666666666"
+    await _ensure_conversation(clean_db, conv)
+    async with clean_db.acquire() as conn:
+        await conn.execute("DELETE FROM tickets")
+    await _seed_chunk(clean_db, "lore/y.md", "public", "L'Archiviste est vivant.")
+
+    # Step 1 — confirmed path creates a first (non-forced) ticket.
+    first_result = await verify_contradiction(
+        pool=clean_db,
+        embedder=_embedder,
+        llm=_FakeJudgeLlm(
+            [
+                "CONTRADICTION\nSources contredisent.",
+                "CONTRADICTION\nSources contredisent.",
+                "CONTRADICTION\nSources contredisent.",
+            ]
+        ),
+        claim=CLAIM,
+        conversation_id=conv,
+        citations=[Citation(source_path="lore/y.md", chunk_ords=[0])],
+        user_tier="anonymous",
+        request_id=REQUEST_ID,
+        force=False,
+    )
+    assert first_result.ticket_action == "created"
+    first_ticket_id = first_result.ticket_id
+
+    # Verify the first ticket has judges_not_passed=False (judge-confirmed path).
+    async with clean_db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT judges_not_passed FROM tickets WHERE id=$1",
+            first_ticket_id,
+        )
+    assert row is not None
+    assert row["judges_not_passed"] is False
+
+    # Step 2 — force path (judges disagree, visitor insists) with same claim and open ticket.
+    forced_result = await verify_contradiction(
+        pool=clean_db,
+        embedder=_embedder,
+        llm=_FakeJudgeLlm(
+            [
+                "PRESENT\nFait présent.",
+                "ABSENT\nAbsent.",
+                "CONTRADICTION\nContradiction.",
+            ]
+        ),
+        claim=CLAIM,
+        conversation_id=conv,
+        citations=[Citation(source_path="lore/y.md", chunk_ords=[0])],
+        user_tier="anonymous",
+        request_id=str(uuid.uuid4()),
+        force=True,
+    )
+
+    # AC-1 + AC-2: force produces a new ticket, not an increment of the existing one.
+    assert forced_result.ticket_action == "created"
+    assert forced_result.ticket_id != first_ticket_id
+
+    # Two tickets total in DB.
+    async with clean_db.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM tickets")
+        assert count == 2
+
+    # New ticket has judges_not_passed=True.
+    async with clean_db.acquire() as conn:
+        forced_row = await conn.fetchrow(
+            "SELECT judges_not_passed FROM tickets WHERE id=$1",
+            forced_result.ticket_id,
+        )
+    assert forced_row is not None
+    assert forced_row["judges_not_passed"] is True
+
+    # Original ticket unchanged (priority_score still 1, not incremented).
+    async with clean_db.acquire() as conn:
+        orig = await conn.fetchrow(
+            "SELECT priority_score FROM tickets WHERE id=$1",
+            first_ticket_id,
+        )
+    assert orig is not None
+    assert orig["priority_score"] == 1
+
+    async with clean_db.acquire() as conn:
+        await conn.execute("DELETE FROM tickets")
 
 
 # ---------------------------------------------------------------------------

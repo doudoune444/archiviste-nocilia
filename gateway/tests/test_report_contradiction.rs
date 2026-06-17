@@ -47,7 +47,15 @@ fn make_state_with_short_timeout_and_pool(
     config.workers_url = workers_url.to_string();
     config.connect_timeout_ms = 50;
     config.request_timeout_ms = 500;
-    Arc::new(AppState::new_with_pool(config, pool).unwrap())
+    // Stub workers ID-token (no metadata-server call) + attached pool: the forwarding
+    // path needs a valid bearer, the A01 ownership check needs the pool. `new_with_pool`
+    // alone wires the REAL metadata provider, whose fetch fails in CI → spurious 503.
+    let id_token_provider = Arc::new(
+        archiviste_gateway::auth_metadata::IdTokenProvider::new_stub_always_valid().unwrap(),
+    );
+    let mut state = AppState::new_with_id_token_provider(config, id_token_provider).unwrap();
+    state.db_pool = Some(pool);
+    Arc::new(state)
 }
 
 async fn post_report(app: axum::Router, body: &str) -> axum::response::Response {
@@ -718,7 +726,15 @@ fn make_config_db() -> archiviste_gateway::config::Config {
 fn make_state_with_db_pool(workers_url: &str, pool: sqlx::PgPool) -> Arc<AppState> {
     let mut config = make_config_db();
     config.workers_url = workers_url.to_string();
-    Arc::new(AppState::new_with_pool(config, pool).unwrap())
+    // Stub workers ID-token (no metadata-server call) + attached pool: the forwarding
+    // path needs a valid bearer, the A01 ownership check needs the pool. `new_with_pool`
+    // alone wires the REAL metadata provider, whose fetch fails in CI → spurious 503.
+    let id_token_provider = Arc::new(
+        archiviste_gateway::auth_metadata::IdTokenProvider::new_stub_always_valid().unwrap(),
+    );
+    let mut state = AppState::new_with_id_token_provider(config, id_token_provider).unwrap();
+    state.db_pool = Some(pool);
+    Arc::new(state)
 }
 
 /// Seed a bare anonymous user row and return their `user_id` (derived via `UUIDv5`).

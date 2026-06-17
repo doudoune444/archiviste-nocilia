@@ -11,8 +11,8 @@ from archiviste_workers.conversation.models import Role, UnknownUserError
 
 _INSERT_OR_GET_SQL = """
 WITH inserted AS (
-    INSERT INTO conversations (id, user_id, gcs_uri)
-    VALUES ($1::uuid, $2::uuid, $3)
+    INSERT INTO conversations (id, user_id, gcs_uri, created_at)
+    VALUES ($1::uuid, $2::uuid, $3, $4)
     ON CONFLICT (id) DO NOTHING
     RETURNING id, created_at, TRUE AS is_new
 )
@@ -98,12 +98,22 @@ class ConversationRepository:
         self._pool = pool
 
     async def create_if_absent(
-        self, *, conversation_id: str, user_id: str, gcs_uri: str
+        self, *, conversation_id: str, user_id: str, gcs_uri: str, created_at: datetime
     ) -> tuple[bool, datetime]:
+        """Insert a new conversations row or return the existing one.
+
+        For a new row, `created_at` is stored as the conversation's genesis
+        timestamp (= first message timestamp) rather than DB NOW(), eliminating
+        the app-clock vs DB-clock race that caused false 422s on turn 1.
+        For an existing row (ON CONFLICT DO NOTHING), `created_at` is ignored
+        and the stored value is returned unchanged.
+        """
         try:
             async with self._pool.acquire() as conn, conn.transaction():
                 await conn.execute(_UPSERT_ANON_USER_SQL, user_id)
-                row = await conn.fetchrow(_INSERT_OR_GET_SQL, conversation_id, user_id, gcs_uri)
+                row = await conn.fetchrow(
+                    _INSERT_OR_GET_SQL, conversation_id, user_id, gcs_uri, created_at
+                )
         except asyncpg.ForeignKeyViolationError as exc:
             raise UnknownUserError from exc
         if row is None:  # pragma: no cover - defensive: SELECT branch always returns.

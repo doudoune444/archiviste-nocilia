@@ -63,6 +63,14 @@ class StorageUnavailableError(ConversationLoggerError):
     """Non-recoverable GCS error (5xx, timeout, connection)."""
 
 
+class ConversationObjectMissingError(ConversationLoggerError):
+    """GCS object absent at append time (blob download returned NotFound).
+
+    Raised by _read_modify_write when the object does not exist yet, so the
+    router can self-heal by recreating it before retrying the append.
+    """
+
+
 class ContentTooLargeError(ValueError):
     """Content exceeds MAX_CONTENT_BYTES (mapped to HTTP 413)."""
 

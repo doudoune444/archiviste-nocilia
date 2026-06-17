@@ -246,6 +246,82 @@ async def test_embed_failure_returns_skipped_error(db_pool: asyncpg.Pool) -> Non
 
 
 @pytest.mark.asyncio
+async def test_judges_not_passed_set_on_insert(db_pool: asyncpg.Pool) -> None:
+    # #163 AC: judges_not_passed=True is written on INSERT, readable from the DB.
+    question = "Qui surveille les archives de nuit?"
+    async with db_pool.acquire() as conn:
+        await _ensure_conversation(conn, CONV_ID)
+        await _clean_tickets(conn)
+
+    result = await create_or_increment(
+        db_pool,
+        _embedder,
+        conversation_id=CONV_ID,
+        question=question,
+        request_id=str(uuid.uuid4()),
+        judges_not_passed=True,
+    )
+
+    assert result.action == "created"
+    assert result.ticket_id is not None
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT judges_not_passed FROM tickets WHERE id=$1",
+            result.ticket_id,
+        )
+    assert row is not None
+    assert row["judges_not_passed"] is True
+
+    async with db_pool.acquire() as conn:
+        await _clean_tickets(conn)
+
+
+@pytest.mark.asyncio
+async def test_force_cosine_match_increments_flag_not_flipped(db_pool: asyncpg.Pool) -> None:
+    # #163 AC: force + cosine match → increments, judges_not_passed NOT changed on increment.
+    question = "Quel est le nom du gardien des archives de nuit?"
+    async with db_pool.acquire() as conn:
+        await _ensure_conversation(conn, CONV_ID)
+        await _clean_tickets(conn)
+
+    # First: judge-confirmed insert (judges_not_passed=False).
+    first = await create_or_increment(
+        db_pool,
+        _embedder,
+        conversation_id=CONV_ID,
+        question=question,
+        request_id=str(uuid.uuid4()),
+        judges_not_passed=False,
+    )
+    assert first.action == "created"
+
+    # Second: force=True (judges_not_passed=True) but same question → cosine match → increment.
+    second = await create_or_increment(
+        db_pool,
+        _embedder,
+        conversation_id=CONV_ID,
+        question=question,
+        request_id=str(uuid.uuid4()),
+        judges_not_passed=True,
+    )
+    assert second.action == "incremented"
+    assert second.ticket_id == first.ticket_id
+
+    # Flag must NOT be flipped to True — original False is preserved.
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT judges_not_passed FROM tickets WHERE id=$1",
+            first.ticket_id,
+        )
+    assert row is not None
+    assert row["judges_not_passed"] is False
+
+    async with db_pool.acquire() as conn:
+        await _clean_tickets(conn)
+
+
+@pytest.mark.asyncio
 async def test_db_failure_returns_skipped_error(db_pool: asyncpg.Pool) -> None:
     # AC-16 (g): pool.acquire raises PostgresError → skipped_error + log ALERT reason=db_failed.
     async with db_pool.acquire() as conn:

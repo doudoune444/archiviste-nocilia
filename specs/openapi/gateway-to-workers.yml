@@ -310,6 +310,14 @@ components:
         request_id:
           type: string
           format: uuid
+        force:
+          type: boolean
+          default: false
+          description: |
+            Optional. When true, raises a ticket even if the judges did not confirm the
+            contradiction (human "send anyway" override, #163). The ticket is tagged
+            judges_not_passed=true on the board to distinguish it from judge-confirmed
+            tickets. Cosine dedup still applies (anti-spam).
 
     Citation:
       type: object

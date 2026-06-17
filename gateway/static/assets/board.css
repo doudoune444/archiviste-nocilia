@@ -46,3 +46,24 @@ h1 {
   padding: 0.5rem 1rem;
   cursor: pointer;
 }
+
+/* #163: judges_not_passed badge */
+.badge-confirmed {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  background: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #a5d6a7;
+}
+
+.badge-unconfirmed {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  background: #fff3e0;
+  color: #e65100;
+  border: 1px solid #ffcc80;
+}

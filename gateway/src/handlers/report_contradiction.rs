@@ -49,6 +49,8 @@ struct ValidatedRequest {
     conversation_id: String,
     /// None when the client omitted citations (no-citation retrieval path in workers).
     citations: Option<Value>,
+    /// Human override: send ticket even when judges did not confirm (#163).
+    force: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -134,10 +136,18 @@ fn parse_and_validate(body: &[u8]) -> Result<ValidatedRequest, &'static str> {
         _ => return Err("invalid_request"),
     };
 
+    // force is optional bool, default false (#163 human override).
+    let force = match value.get("force") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        _ => return Err("invalid_request"),
+    };
+
     Ok(ValidatedRequest {
         claim,
         conversation_id,
         citations,
+        force,
     })
 }
 
@@ -178,16 +188,19 @@ fn validate_citations(arr: &[Value]) -> Result<(), &'static str> {
 ///
 /// When `citations` is `None` (no-citation retrieval path) the field is omitted
 /// so workers falls through to its embed-then-retrieve path.
+/// `force` is always forwarded so workers can apply the human override (#163).
 fn build_workers_body(
     claim: &str,
     conversation_id: &str,
     citations: Option<&Value>,
     request_id: &str,
+    force: bool,
 ) -> Value {
     let mut body = json!({
         "claim": claim,
         "conversation_id": conversation_id,
         "request_id": request_id,
+        "force": force,
     });
     if let Some(cits) = citations {
         body["citations"] = cits.clone();
@@ -236,6 +249,7 @@ async fn forward_to_workers(
         &req.conversation_id,
         req.citations.as_ref(),
         request_id,
+        req.force,
     );
 
     let workers_start = Instant::now();

@@ -59,6 +59,8 @@ struct TicketRow {
     status: String,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+    /// True when the ticket was raised via human "send anyway" — judges did not confirm (#163).
+    judges_not_passed: bool,
 }
 
 /// Handler: `GET /v1/board` — anonymous, paginated open tickets (BOARD-001).
@@ -89,7 +91,8 @@ pub async fn list_board(
     // Same SQL as tickets handler — only open tickets, ordered by priority DESC then date DESC.
     // Uses `sqlx::query_as` (runtime-typed) to avoid requiring a live DB at compile time.
     let rows: Vec<TicketRow> = sqlx::query_as(
-        "SELECT id, conversation_id, question, category, priority_score, status, created_at, updated_at \
+        "SELECT id, conversation_id, question, category, priority_score, status, \
+         created_at, updated_at, judges_not_passed \
          FROM tickets \
          WHERE status = 'open' \
          ORDER BY priority_score DESC, created_at DESC \
@@ -126,6 +129,7 @@ pub async fn list_board(
             status: r.status,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            judges_not_passed: r.judges_not_passed,
         })
         .collect();
 

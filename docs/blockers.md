@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-06-17 — #163 — `cargo sqlx prepare` not run (no live DB available on Windows dev machine)
+
+- File : `gateway/src/handlers/board.rs` + `gateway/src/handlers/tickets.rs` (SQL queries extended with `judges_not_passed`)
+- Symptom : Both handlers use `sqlx::query_as` (runtime-typed, intentionally — see blockers MED-3); no `sqlx::query!` macros are used so there is no `.sqlx` offline-cache to regenerate. `cargo sqlx prepare` is therefore not required here, but the migration `0007_tickets_judges_not_passed.up.sql` adds a column that will be present at runtime — the queries will pass once the migration is applied against the live DB.
+- Why blocked : Not blocked. `sqlx::query_as` (string-based) is used throughout this codebase precisely to avoid the offline-cache requirement when no live DB is present at compile time (see `blockers.md MED-3`). No regeneration needed for this ticket.
+- Suggested resolution : Before merging to production, ensure migration `0007` is applied to the Cloud SQL instance (via `migrations/run.sh` or the CI migrate step from OPS-003). The gateway binary will then pick up `judges_not_passed` from the DB at query time.
+- Status : not a blocker; migration application required before production deploy
+
 ## 2026-06-16 — BOARD-001 — `aws-lc-sys` NASM build failure blocks cargo clippy/test on Windows
 
 - File : `gateway/Cargo.lock` (aws-lc-sys = 0.41.0)

@@ -405,6 +405,97 @@ async fn ac3_too_many_chunk_ords_returns_400() {
 }
 
 // ---------------------------------------------------------------------------
+// #163: force field — forwarded, defaults false, invalid type → 400
+// ---------------------------------------------------------------------------
+
+/// #163 AC: force=true is forwarded in the body to workers.
+#[tokio::test]
+async fn force_true_forwarded_to_workers() {
+    use std::sync::{Arc as StdArc, Mutex};
+
+    let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
+    let body_cap = StdArc::clone(&captured_body);
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/verify-contradiction")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body_from_request(move |req| {
+            if let Ok(bytes) = req.body() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                    *body_cap.lock().unwrap() = Some(v);
+                }
+            }
+            r#"{"verdict":"present","reason":"ok","ticket_action":"created","ticket_id":"550e8400-e29b-41d4-a716-446655440001"}"#
+                .into()
+        })
+        .create_async()
+        .await;
+
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}","force":true}}"#);
+    let app = router(make_state(&server.url()));
+    let resp = post_report(app, &payload).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let forwarded = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        forwarded["force"],
+        serde_json::json!(true),
+        "force=true must be forwarded to workers"
+    );
+}
+
+/// #163 AC: force omitted → defaults false, forwarded as false.
+#[tokio::test]
+async fn force_omitted_defaults_false_forwarded() {
+    use std::sync::{Arc as StdArc, Mutex};
+
+    let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
+    let body_cap = StdArc::clone(&captured_body);
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/verify-contradiction")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body_from_request(move |req| {
+            if let Ok(bytes) = req.body() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                    *body_cap.lock().unwrap() = Some(v);
+                }
+            }
+            r#"{"verdict":"present","reason":"ok","ticket_action":"not_raised","ticket_id":null}"#
+                .into()
+        })
+        .create_async()
+        .await;
+
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}"}}"#);
+    let app = router(make_state(&server.url()));
+    let resp = post_report(app, &payload).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let forwarded = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        forwarded["force"],
+        serde_json::json!(false),
+        "omitted force must default to false in forwarded body"
+    );
+}
+
+/// #163 AC: force is not a bool (e.g. a string) → 400 `invalid_request`.
+#[tokio::test]
+async fn force_non_bool_returns_400() {
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}","force":"yes"}}"#);
+    let app = router(make_state("http://127.0.0.1:1"));
+    let resp = post_report(app, &payload).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert_error_envelope(&body, "invalid_request");
+}
+
+// ---------------------------------------------------------------------------
 // LOW: route body-limit → uniform 400 envelope (not raw 413)
 // ---------------------------------------------------------------------------
 

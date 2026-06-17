@@ -129,20 +129,32 @@ def _stub_sources(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def ticket_spy(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
-    calls: list[dict[str, str]] = []
+def ticket_spy(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
 
     async def _fake_create(
-        pool: Any, embedder: Any, *, conversation_id: str, question: str, request_id: str
+        pool: Any,
+        embedder: Any,
+        *,
+        conversation_id: str,
+        question: str,
+        request_id: str,
+        judges_not_passed: bool = False,
     ) -> TicketResult:
-        calls.append({"conversation_id": conversation_id, "question": question})
+        calls.append(
+            {
+                "conversation_id": conversation_id,
+                "question": question,
+                "judges_not_passed": judges_not_passed,
+            }
+        )
         return TicketResult(action="created", ticket_id="ticket-1", priority_score=1)
 
     monkeypatch.setattr(service_module, "create_or_increment", _fake_create)
     return calls
 
 
-async def _run(llm: Any, *, tier: str = "anonymous") -> Any:
+async def _run(llm: Any, *, tier: str = "anonymous", force: bool = False) -> Any:
     return await verify_contradiction(
         pool=object(),
         embedder=_embedder,
@@ -152,6 +164,7 @@ async def _run(llm: Any, *, tier: str = "anonymous") -> Any:
         citations=_CITATIONS,
         user_tier=tier,
         request_id=REQUEST_ID,
+        force=force,
     )
 
 
@@ -376,6 +389,72 @@ async def test_clean_reason_passes_through_unchanged(ticket_spy: list[dict[str, 
     # _CHUNK_BODY ("L'Archiviste est mort.") is only 22 chars — below MIN_LEAK_SUBSTR_CHARS (24),
     # so the short stub sources do not trigger redaction and the clean reason passes through.
     assert result.reason == clean_reason_trimmed
+
+
+# ---------------------------------------------------------------------------
+# #163: force / judges_not_passed flag tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_force_after_not_raised_creates_ticket_judges_not_passed(
+    ticket_spy: list[dict[str, Any]],
+) -> None:
+    """AC: signal after no-confirmation with force=True → ticket created, judges_not_passed=True."""
+    # Split vote → not_raised normally; force=True should override.
+    replies = [
+        "PRESENT\nFait présent.",
+        "ABSENT\nAbsent.",
+        "CONTRADICTION\nContradiction.",
+    ]
+    result = await _run(_FakeJudgeLlm(replies), force=True)
+
+    # Verdict is still the panel's aggregate verdict (unclear — no majority), unchanged.
+    assert result.verdict == "unclear"
+    # force=True → ticket created despite judges not reaching majority.
+    assert result.ticket_action in {"created", "incremented"}
+    assert len(ticket_spy) == 1
+    # #163 AC: judges_not_passed=True because judges did NOT confirm.
+    assert ticket_spy[0]["judges_not_passed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_should_raise_path_always_sets_judges_not_passed_false(
+    ticket_spy: list[dict[str, Any]],
+) -> None:
+    """AC: should_raise path → judges_not_passed=False even if force=True."""
+    # >=2 contradiction → should_raise is True; force is True but irrelevant.
+    replies = [
+        "CONTRADICTION\nSources en désaccord.",
+        "CONTRADICTION\nSources en désaccord.",
+        "UNCLEAR\n",
+    ]
+    result = await _run(_FakeJudgeLlm(replies), force=True)
+
+    assert result.verdict == "contradiction"
+    assert result.ticket_action in {"created", "incremented"}
+    assert len(ticket_spy) == 1
+    # #163 AC: judge-confirmed path → judges_not_passed=False regardless of force.
+    assert ticket_spy[0]["judges_not_passed"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_not_raised_without_force_no_ticket(
+    ticket_spy: list[dict[str, Any]],
+) -> None:
+    """AC: not_raised + force=False → no ticket at all."""
+    replies = [
+        "PRESENT\nFait présent.",
+        "ABSENT\nAbsent.",
+        "CONTRADICTION\nContradiction.",
+    ]
+    result = await _run(_FakeJudgeLlm(replies), force=False)
+
+    assert result.ticket_action == "not_raised"
+    assert ticket_spy == []
 
 
 # ---------------------------------------------------------------------------

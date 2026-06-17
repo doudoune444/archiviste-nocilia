@@ -37,6 +37,8 @@ class VerifyContradictionRequest(BaseModel):
     # citations is now optional (design decision #5 — no-citation retrieval path).
     citations: Annotated[list[Citation], Field(default_factory=list, max_length=MAX_CITATIONS)]
     request_id: str
+    # force=True allows a human to raise a ticket even when judges did not confirm (#163).
+    force: bool = False
 
 
 class VerifyContradictionResponse(BaseModel):

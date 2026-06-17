@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **#176** (gateway/frontend): board badge neutral default + colSpan fix. `judges_not_passed=true` tickets show the "non confirmé par les juges" badge; all other tickets (judge-confirmed, legacy, auto-created with `false`) render neutrally with no badge. Empty-board placeholder cell now spans all 5 columns (was 4, stale after the "Confirmation" column was added in #163).
+
 ### Added
 
 - **#163-review** (gateway/frontend): review fixes on top of the #163 slice. (1) **A01 IDOR** (MED): `POST /v1/report-contradiction` now verifies conversation ownership in the gateway handler before forwarding — `SELECT user_id FROM conversations WHERE id = $1`; non-owner or absent id → uniform 404 `conversation_not_found`, not forwarded to workers (mirrors HIST-001 pattern in `conversations.rs`). (2) **Frontend orphan guard** (LOW): submit and send-anyway handlers no longer mint a fresh `conversation_id` via `ensureConversationId()`; if `loadConversationId()` returns null they show "Aucune conversation à signaler — posez d'abord une question." and stop; a 404 response from the gateway shows the same message. (3) **Stuck submit button** (LOW): after a successful first submit the submit button is re-enabled and the claim textarea is cleared; send-anyway success also re-enables all buttons; no path leaves the panel open and stuck. (4) **WHY-comments restored** (LOW): three security-rationale comments deleted by the #163 commit are restored in `app.js` (sources list `textContent` injection guard, history render `textContent` guard, reopen cross-owner 404 note, `loadConversationId()` null guard). New DB-backed tests: `idor_foreign_conversation_returns_404_workers_not_called`, `idor_nonexistent_conversation_returns_404`, `idor_owned_conversation_is_forwarded`.

@@ -319,3 +319,48 @@ async fn hist001_signed_url_author_reads_any(pool: sqlx::PgPool) {
         "author must read any conversation (200 signed or 503 IAM-unreachable), got {status}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #161 — reload regression: backend contract the JS reload path relies on
+// ---------------------------------------------------------------------------
+
+/// #161 AC: on page reload, `reopenConversation(activeId)` in app.js calls
+/// GET /v1/conversations/{id}/messages as the owner and expects 200 + ordered turns.
+/// This test documents the server contract that makes the reload flow safe:
+///   - owner reload → 200 with turns in ordinal order (JS renders them)
+///   - non-owner id in localStorage → 404 (server enforces; JS no-ops on !response.ok)
+///
+/// Both assertions already exist individually above; this test pins them together
+/// as an explicit reload-contract regression guard so future refactors cannot
+/// accidentally break one without the other.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist161_reload_contract_owner_200_nonowner_404(pool: sqlx::PgPool) {
+    let (owner_id, owner_token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let (_other_id, other_token) = seed_user_with_session(&pool, UserTier::Member).await;
+
+    let conv = seed_conversation(&pool, owner_id, 2, ts(60)).await;
+    seed_message(&pool, conv, "user", 0, "reload question").await;
+    seed_message(&pool, conv, "assistant", 1, "reload answer").await;
+
+    let app = router(make_state_with_pool(pool));
+    let uri = format!("/v1/conversations/{conv}/messages");
+
+    // AC: owner reload → 200 with turns in ordinal order.
+    let resp = get_with_token(app.clone(), &uri, Some(&owner_token)).await;
+    assert_eq!(resp.status(), StatusCode::OK, "owner reload must be 200");
+    let body = body_json(resp).await;
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2, "owner reload must return both turns");
+    assert_eq!(messages[0]["ordinal"], 0);
+    assert_eq!(messages[0]["content"], "reload question");
+    assert_eq!(messages[1]["ordinal"], 1);
+    assert_eq!(messages[1]["content"], "reload answer");
+
+    // AC: non-owner id in localStorage → 404; JS `reopenConversation` no-ops on !response.ok.
+    let resp = get_with_token(app, &uri, Some(&other_token)).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "non-owner reload must be 404 so JS no-ops gracefully"
+    );
+}

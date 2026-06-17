@@ -439,4 +439,10 @@
     .getElementById("history-list")
     .addEventListener("click", handleHistoryClick);
   loadHistory();
+  // #161: on reload, restore the previously open conversation from localStorage.
+  // loadConversationId() returns null when nothing was persisted — no fetch, no error.
+  const activeId = loadConversationId();
+  if (activeId) {
+    reopenConversation(activeId);
+  }
 })();

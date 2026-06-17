@@ -6,18 +6,25 @@
 //! - AC-2: passthrough of the 200 verdict body.
 //! - AC-3: invalid body (empty claim / bad uuid / empty citations / too many) → 400 `invalid_request`.
 //! - AC-4: upstream 4xx/5xx → 502 `upstream_error`; connect failure → 503.
+//! - A01/IDOR: `conversation_id` not owned by caller → 404 `conversation_not_found`, workers not called.
 
 #![allow(clippy::unwrap_used)]
 
 mod common;
-use common::jwt_helpers::{make_app_state, make_test_config};
+use common::jwt_helpers::{make_app_state, test_private_key_pem, test_public_key_pem, TEST_KEY_ID};
 
-use archiviste_gateway::{auth_metadata::IdTokenProvider, router};
+use archiviste_gateway::{
+    auth::fingerprint::{cookie_uuid_to_user_id, ANON_COOKIE_NAME},
+    router,
+    state::AppState,
+};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use secrecy::SecretString;
 use std::sync::Arc;
 use tower::ServiceExt;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,20 +34,20 @@ fn make_state(workers_url: &str) -> Arc<archiviste_gateway::state::AppState> {
     make_app_state(workers_url)
 }
 
-/// Build a state with a tight `request_timeout_ms` for timeout tests.
+/// Build a state with a tight `request_timeout_ms` and an attached pool for timeout tests.
 ///
 /// `connect_timeout_ms` is short (50 ms) so that a loopback-connect never
 /// races with the read-side timeout. `request_timeout_ms` (500 ms) is the
 /// timeout the test actually exercises.
-fn make_state_with_short_timeout(workers_url: &str) -> Arc<archiviste_gateway::state::AppState> {
-    let mut config = make_test_config(workers_url);
+fn make_state_with_short_timeout_and_pool(
+    workers_url: &str,
+    pool: sqlx::PgPool,
+) -> Arc<archiviste_gateway::state::AppState> {
+    let mut config = make_config_db();
+    config.workers_url = workers_url.to_string();
     config.connect_timeout_ms = 50;
     config.request_timeout_ms = 500;
-    let id_token_provider = Arc::new(IdTokenProvider::new_stub_always_valid().unwrap());
-    Arc::new(
-        archiviste_gateway::state::AppState::new_with_id_token_provider(config, id_token_provider)
-            .unwrap(),
-    )
+    Arc::new(AppState::new_with_pool(config, pool).unwrap())
 }
 
 async fn post_report(app: axum::Router, body: &str) -> axum::response::Response {
@@ -71,16 +78,6 @@ fn assert_error_envelope(body: &serde_json::Value, expected_code: &str) {
 
 const VALID_UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
 
-fn valid_payload() -> String {
-    format!(
-        r#"{{
-            "claim": "Nocilia was founded in year 0.",
-            "conversation_id": "{VALID_UUID}",
-            "citations": [{{"source_path": "lore/chapter1.md", "chunk_ords": [0, 1]}}]
-        }}"#
-    )
-}
-
 // ---------------------------------------------------------------------------
 // AC-1 / AC-2: happy path — forwards to workers, passthrough body, headers propagated
 // ---------------------------------------------------------------------------
@@ -89,8 +86,11 @@ fn valid_payload() -> String {
 /// `x-user-id` and `x-user-tier` headers, and the gateway-generated `request_id`
 /// (never the client-supplied one).
 /// AC-2: workers 200 → passthrough verdict body.
-#[tokio::test]
-async fn ac1_ac2_valid_report_forwarded_to_workers() {
+///
+/// DB-backed: ownership check is fail-closed (pool None → 503), so we seed an
+/// anon user + owned conversation and request as that owner.
+#[sqlx::test(migrations = "../migrations")]
+async fn ac1_ac2_valid_report_forwarded_to_workers(pool: sqlx::PgPool) {
     use std::sync::{Arc as StdArc, Mutex};
 
     let captured_tier: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
@@ -123,8 +123,11 @@ async fn ac1_ac2_valid_report_forwarded_to_workers() {
         .create_async()
         .await;
 
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &valid_payload()).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
 
     // AC-2: passthrough 200 body (new clean-break shape: verdict + reason, #162)
     assert_eq!(resp.status(), StatusCode::OK);
@@ -192,8 +195,10 @@ async fn ac3_bad_conversation_id_returns_400() {
 
 /// No-citation path (#162): empty citations array → forwarded to workers with
 /// `citations: []` in the body (not omitted).
-#[tokio::test]
-async fn no_citation_path_empty_citations_accepted() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn no_citation_path_empty_citations_accepted(pool: sqlx::PgPool) {
     use std::sync::{Arc as StdArc, Mutex};
 
     let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
@@ -216,9 +221,24 @@ async fn no_citation_path_empty_citations_accepted() {
         .create_async()
         .await;
 
-    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}","citations":[]}}"#);
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &payload).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    // Manually build payload with empty citations to test that specific path.
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{conv_id}","citations":[]}}"#);
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/report-contradiction")
+                .header("content-type", "application/json")
+                .header("cookie", format!("{ANON_COOKIE_NAME}={caller_cookie}"))
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     // Gateway must accept empty citations and forward (not 400).
     assert_ne!(resp.status(), StatusCode::BAD_REQUEST);
@@ -235,8 +255,10 @@ async fn no_citation_path_empty_citations_accepted() {
 
 /// No-citation path (#162): absent citations field → forwarded to workers
 /// without the `citations` key (omitted, not null), triggering retrieval path in workers.
-#[tokio::test]
-async fn no_citation_path_absent_citations_accepted() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn no_citation_path_absent_citations_accepted(pool: sqlx::PgPool) {
     use std::sync::{Arc as StdArc, Mutex};
 
     let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
@@ -259,9 +281,24 @@ async fn no_citation_path_absent_citations_accepted() {
         .create_async()
         .await;
 
-    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}"}}"#);
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &payload).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    // Absent citations: payload has no citations field at all.
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{conv_id}"}}"#);
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/report-contradiction")
+                .header("content-type", "application/json")
+                .header("cookie", format!("{ANON_COOKIE_NAME}={caller_cookie}"))
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     // Gateway must accept absent citations and forward (not 400).
     assert_ne!(resp.status(), StatusCode::BAD_REQUEST);
@@ -335,18 +372,26 @@ async fn ac3_missing_claim_returns_400() {
 // ---------------------------------------------------------------------------
 
 /// AC-4: workers connection refused → 503 `upstream_unavailable`.
-#[tokio::test]
-async fn ac4_connect_failure_returns_503() {
-    let app = router(make_state("http://127.0.0.1:1"));
-    let resp = post_report(app, &valid_payload()).await;
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request
+/// so the gateway reaches the workers call and then gets connection-refused.
+#[sqlx::test(migrations = "../migrations")]
+async fn ac4_connect_failure_returns_503(pool: sqlx::PgPool) {
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let app = router(make_state_with_db_pool("http://127.0.0.1:1", pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(resp).await;
     assert_error_envelope(&body, "upstream_unavailable");
 }
 
 /// AC-4: workers 500 → 502 `upstream_error`.
-#[tokio::test]
-async fn ac4_workers_500_returns_502() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn ac4_workers_500_returns_502(pool: sqlx::PgPool) {
     let mut server = mockito::Server::new_async().await;
     let _mock = server
         .mock("POST", "/v1/verify-contradiction")
@@ -355,16 +400,21 @@ async fn ac4_workers_500_returns_502() {
         .create_async()
         .await;
 
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &valid_payload()).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     let body = body_json(resp).await;
     assert_error_envelope(&body, "upstream_error");
 }
 
 /// AC-4: workers 400 → 502 (not passthrough).
-#[tokio::test]
-async fn ac4_workers_400_returns_502() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn ac4_workers_400_returns_502(pool: sqlx::PgPool) {
     let mut server = mockito::Server::new_async().await;
     let _mock = server
         .mock("POST", "/v1/verify-contradiction")
@@ -373,8 +423,11 @@ async fn ac4_workers_400_returns_502() {
         .create_async()
         .await;
 
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &valid_payload()).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     let body = body_json(resp).await;
     assert_error_envelope(&body, "upstream_error");
@@ -409,8 +462,10 @@ async fn ac3_too_many_chunk_ords_returns_400() {
 // ---------------------------------------------------------------------------
 
 /// #163 AC: force=true is forwarded in the body to workers.
-#[tokio::test]
-async fn force_true_forwarded_to_workers() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn force_true_forwarded_to_workers(pool: sqlx::PgPool) {
     use std::sync::{Arc as StdArc, Mutex};
 
     let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
@@ -433,9 +488,23 @@ async fn force_true_forwarded_to_workers() {
         .create_async()
         .await;
 
-    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}","force":true}}"#);
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &payload).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{conv_id}","force":true}}"#);
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/report-contradiction")
+                .header("content-type", "application/json")
+                .header("cookie", format!("{ANON_COOKIE_NAME}={caller_cookie}"))
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let forwarded = captured_body.lock().unwrap().clone().unwrap();
@@ -447,8 +516,10 @@ async fn force_true_forwarded_to_workers() {
 }
 
 /// #163 AC: force omitted → defaults false, forwarded as false.
-#[tokio::test]
-async fn force_omitted_defaults_false_forwarded() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn force_omitted_defaults_false_forwarded(pool: sqlx::PgPool) {
     use std::sync::{Arc as StdArc, Mutex};
 
     let captured_body: StdArc<Mutex<Option<serde_json::Value>>> = StdArc::new(Mutex::new(None));
@@ -471,9 +542,24 @@ async fn force_omitted_defaults_false_forwarded() {
         .create_async()
         .await;
 
-    let payload = format!(r#"{{"claim":"x","conversation_id":"{VALID_UUID}"}}"#);
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &payload).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    // Absent force: payload has no force field at all.
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{conv_id}"}}"#);
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/report-contradiction")
+                .header("content-type", "application/json")
+                .header("cookie", format!("{ANON_COOKIE_NAME}={caller_cookie}"))
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let forwarded = captured_body.lock().unwrap().clone().unwrap();
@@ -529,8 +615,11 @@ async fn low_body_too_large_returns_400_envelope() {
 
 /// A04: workers never responds within the configured timeout → 504 `upstream_timeout`.
 /// Uses a TCP listener that accepts but never sends, with a 500ms request timeout.
-#[tokio::test]
-async fn low_upstream_timeout_returns_504() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request so
+/// the gateway reaches the workers call and then hits the timeout.
+#[sqlx::test(migrations = "../migrations")]
+async fn low_upstream_timeout_returns_504(pool: sqlx::PgPool) {
     use tokio::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -543,9 +632,12 @@ async fn low_upstream_timeout_returns_504() {
         }
     });
 
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
     let workers_url = format!("http://{addr}");
-    let app = router(make_state_with_short_timeout(&workers_url));
-    let resp = post_report(app, &valid_payload()).await;
+    let app = router(make_state_with_short_timeout_and_pool(&workers_url, pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
 
     assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
     let body = body_json(resp).await;
@@ -558,8 +650,10 @@ async fn low_upstream_timeout_returns_504() {
 
 /// OPS-001 AC-4: `X-Gateway-Overhead-Ms` is present on 200 responses from
 /// `POST /v1/report-contradiction` (`overhead_header` middleware parity with chat).
-#[tokio::test]
-async fn low_overhead_header_present_on_200() {
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn low_overhead_header_present_on_200(pool: sqlx::PgPool) {
     let mut server = mockito::Server::new_async().await;
     let _mock = server
         .mock("POST", "/v1/verify-contradiction")
@@ -571,8 +665,11 @@ async fn low_overhead_header_present_on_200() {
         .create_async()
         .await;
 
-    let app = router(make_state(&server.url()));
-    let resp = post_report(app, &valid_payload()).await;
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
 
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(
@@ -595,5 +692,153 @@ async fn low_overhead_header_present_on_400() {
     assert!(
         resp.headers().contains_key("x-gateway-overhead-ms"),
         "X-Gateway-Overhead-Ms must be present even on 400 (no workers call)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A01/IDOR: DB-backed ownership tests (#163 review fix)
+// ---------------------------------------------------------------------------
+
+fn make_config_db() -> archiviste_gateway::config::Config {
+    archiviste_gateway::config::Config {
+        bind_addr: "127.0.0.1:0".to_string(),
+        workers_url: "http://127.0.0.1:1".to_string(),
+        database_url: "postgres://test".to_string(),
+        jwt_ed25519_public_key_pem: test_public_key_pem().to_string(),
+        jwt_ed25519_private_key_pem: SecretString::from(test_private_key_pem().to_string()),
+        jwt_kid: TEST_KEY_ID.to_string(),
+        version: "0.1.0".to_string(),
+        connect_timeout_ms: 500,
+        request_timeout_ms: 5_000,
+        gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
+        gcs_bucket: "archiviste-conversations".to_string(),
+    }
+}
+
+fn make_state_with_db_pool(workers_url: &str, pool: sqlx::PgPool) -> Arc<AppState> {
+    let mut config = make_config_db();
+    config.workers_url = workers_url.to_string();
+    Arc::new(AppState::new_with_pool(config, pool).unwrap())
+}
+
+/// Seed a bare anonymous user row and return their `user_id` (derived via `UUIDv5`).
+async fn seed_anon_user(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
+    let cookie_uuid = Uuid::new_v4();
+    let user_id = cookie_uuid_to_user_id(&cookie_uuid);
+    sqlx::query("INSERT INTO users (id, tier) VALUES ($1, 'anonymous')")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    (cookie_uuid, user_id)
+}
+
+/// Seed a conversation owned by `owner_id` and return its UUID.
+async fn seed_owned_conversation(pool: &sqlx::PgPool, owner_id: Uuid) -> Uuid {
+    let conv_id = Uuid::new_v4();
+    let gcs_uri = format!("gs://archiviste-conversations/conv/{conv_id}.md");
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) \
+         VALUES ($1, $2, $3, 1)",
+    )
+    .bind(conv_id)
+    .bind(owner_id)
+    .bind(&gcs_uri)
+    .execute(pool)
+    .await
+    .unwrap();
+    conv_id
+}
+
+/// Post a report as a specific anonymous caller identified by `cookie_uuid`.
+async fn post_report_as_anon(
+    app: axum::Router,
+    cookie_uuid: Uuid,
+    conversation_id: Uuid,
+) -> axum::response::Response {
+    let payload = format!(
+        r#"{{"claim":"Nocilia was founded in year 0.","conversation_id":"{conversation_id}"}}"#
+    );
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/report-contradiction")
+            .header("content-type", "application/json")
+            .header("cookie", format!("{ANON_COOKIE_NAME}={cookie_uuid}"))
+            .body(Body::from(payload))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+/// A01 IDOR: signal against a `conversation_id` owned by a *different* caller → 404,
+/// workers NOT called (port 1 = loopback refused; any forwarding attempt would error
+/// differently — but the check fires before the workers call, so the response is 404).
+///
+/// AC reference: security.md A01 — IDOR check in the handler, uniform 404.
+#[sqlx::test(migrations = "../migrations")]
+async fn idor_foreign_conversation_returns_404_workers_not_called(pool: sqlx::PgPool) {
+    // Seed the real owner and their conversation.
+    let (_real_owner_cookie, real_owner_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, real_owner_id).await;
+
+    // A different caller (different cookie → different user_id).
+    let (attacker_cookie, _attacker_id) = seed_anon_user(&pool).await;
+
+    // Port 1 = loopback refuse: if workers were ever called the response would be 503,
+    // not 404 — this makes the "workers not called" assertion implicit in the status check.
+    let app = router(make_state_with_db_pool("http://127.0.0.1:1", pool));
+    let resp = post_report_as_anon(app, attacker_cookie, conv_id).await;
+
+    // A01: foreign conversation → uniform 404 (not 403, not 502).
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "non-owner must get 404, not be forwarded to workers"
+    );
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "conversation_not_found");
+}
+
+/// A01 IDOR: signal against a `conversation_id` that does not exist at all → 404,
+/// workers NOT called (mirrors the non-existent case in HIST-001).
+///
+/// AC reference: security.md A01 — absent conversation treated identically to foreign.
+#[sqlx::test(migrations = "../migrations")]
+async fn idor_nonexistent_conversation_returns_404(pool: sqlx::PgPool) {
+    let (caller_cookie, _caller_id) = seed_anon_user(&pool).await;
+    let nonexistent_id = Uuid::new_v4();
+
+    let app = router(make_state_with_db_pool("http://127.0.0.1:1", pool));
+    let resp = post_report_as_anon(app, caller_cookie, nonexistent_id).await;
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "absent conversation must get 404"
+    );
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "conversation_not_found");
+}
+
+/// A01 IDOR (happy path): signal against an owned conversation → forwarded to workers.
+///
+/// Without a real workers endpoint the gateway gets a connection-refused (503), but
+/// the ownership check passed (no 404 returned by the gateway itself).
+#[sqlx::test(migrations = "../migrations")]
+async fn idor_owned_conversation_is_forwarded(pool: sqlx::PgPool) {
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    // Port 1 = loopback refuse → 503 after ownership passes, proving we got past the check.
+    let app = router(make_state_with_db_pool("http://127.0.0.1:1", pool));
+    let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
+
+    // 503 means ownership check passed and gateway attempted the workers call.
+    assert_eq!(
+        resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "owned conversation must be forwarded (503 = workers refused, not 404)"
     );
 }

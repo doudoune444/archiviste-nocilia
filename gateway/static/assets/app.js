@@ -46,6 +46,11 @@
   }
 
   // CIT-001: render a "Sources" list under a canon answer.
+  // `citations` is the response payload: [{ source_path, chunk_ords }].
+  // Off-topic / lore-gap / mystery answers carry no citations, so an empty or
+  // absent list renders nothing — no misleading empty "Sources" block.
+  // Each source_path is written via textContent (never innerHTML) so a poisoned
+  // source path cannot inject markup (security.md output sanitization).
   function appendSources(citations) {
     if (!Array.isArray(citations) || citations.length === 0) {
       return;
@@ -155,7 +160,8 @@
     } catch (_) {
       // ignore parse error
     }
-    return { ok: resp.ok, body: body };
+    // Return status so callers can distinguish 404 (ownership check) from other failures.
+    return { ok: resp.ok, status: resp.status, body: body };
   }
 
   if (signalerToggle) {
@@ -177,22 +183,33 @@
       if (!claim) {
         return;
       }
-      // conversation_id from localStorage at submit time — already persisted via ensureConversationId
-      // before any chat message (or may be null if user never chatted).
+      // conversation_id from localStorage — set by ensureConversationId() during the first
+      // chat POST. Never mint a fresh id for the signal path: a freshly-minted id has no
+      // row in the conversations table and the gateway ownership check (A01 IDOR fix) would
+      // return 404. The visitor must have an active conversation to file a signal.
       const conversationId = loadConversationId();
-
-      // conversation_id is required by the gateway contract (UUID validation).
-      // If none yet: mint one now so the signal can be filed under a conversation.
-      const effectiveId = conversationId || ensureConversationId();
+      if (!conversationId) {
+        showSignalerFeedback(
+          "Aucune conversation à signaler — posez d'abord une question."
+        );
+        return;
+      }
 
       signalerSubmitBtn.disabled = true;
       signalerFeedback.hidden = true;
       signalerSecondRow.hidden = true;
 
       try {
-        const { ok, body } = await postReport(claim, effectiveId, false);
+        const { ok, status, body } = await postReport(claim, conversationId, false);
         if (!ok) {
-          showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          if (status === 404) {
+            // Ownership check failed: the conversation id no longer resolves to this caller.
+            showSignalerFeedback(
+              "Aucune conversation à signaler — posez d'abord une question."
+            );
+          } else {
+            showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          }
           signalerSubmitBtn.disabled = false;
           return;
         }
@@ -206,7 +223,9 @@
               ". " +
               reason
           );
-          signalerSubmitBtn.disabled = true;
+          // FIX 3: re-enable + clear so the panel is not stuck after a successful first submit.
+          signalerSubmitBtn.disabled = false;
+          signalerClaim.value = "";
         } else if (action === "not_raised") {
           showSecondStep(body && body.verdict, body && body.reason);
         } else {
@@ -227,16 +246,32 @@
       if (!claim) {
         return;
       }
-      const effectiveId = loadConversationId() || ensureConversationId();
+      // Same guard as the submit handler: never mint a fresh id for the signal path.
+      const conversationId = loadConversationId();
+      if (!conversationId) {
+        showSignalerFeedback(
+          "Aucune conversation à signaler — posez d'abord une question."
+        );
+        return;
+      }
 
       signalerSendAnywayBtn.disabled = true;
       signalerCancelBtn.disabled = true;
 
       try {
-        const { ok, body } = await postReport(claim, effectiveId, true);
+        const { ok, status, body } = await postReport(claim, conversationId, true);
         signalerSecondRow.hidden = true;
         if (!ok) {
-          showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          if (status === 404) {
+            showSignalerFeedback(
+              "Aucune conversation à signaler — posez d'abord une question."
+            );
+          } else {
+            showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          }
+          // FIX 3: re-enable both buttons so the panel is not stuck after a send-anyway failure.
+          signalerSendAnywayBtn.disabled = false;
+          signalerCancelBtn.disabled = false;
           return;
         }
         const action = body && body.ticket_action;
@@ -244,11 +279,18 @@
           showSignalerFeedback(
             "Signalement envoyé malgré l'absence de confirmation par les juges."
           );
+          // FIX 3: clear + re-enable so the visitor is not left with a stuck second-step.
+          signalerClaim.value = "";
+          signalerSubmitBtn.disabled = false;
         } else {
           showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          signalerSendAnywayBtn.disabled = false;
+          signalerCancelBtn.disabled = false;
         }
       } catch (_) {
         showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+        signalerSendAnywayBtn.disabled = false;
+        signalerCancelBtn.disabled = false;
       }
     });
   }
@@ -355,7 +397,8 @@
     return formatTimestamp(conversation.updated_at) + " · " + count + " " + noun;
   }
 
-  // HIST-001: render the owner-scoped conversation list.
+  // HIST-001: render the owner-scoped conversation list. Each entry is a button
+  // labelled via textContent (never innerHTML) so server data cannot inject markup.
   function renderHistory(conversations) {
     const section = document.getElementById("history");
     const list = document.getElementById("history-list");
@@ -400,7 +443,8 @@
     renderHistory(body.conversations);
   }
 
-  // HIST-001: reopen a past conversation.
+  // HIST-001: reopen a past conversation — load its turns and continue it. A
+  // cross-owner id returns 404 server-side, so this no-ops on anything not owned.
   async function reopenConversation(conversationId) {
     let response;
     try {
@@ -475,6 +519,7 @@
     .addEventListener("click", handleHistoryClick);
   loadHistory();
   // #161: on reload, restore the previously open conversation from localStorage.
+  // loadConversationId() returns null when nothing was persisted — no fetch, no error.
   const activeId = loadConversationId();
   if (activeId) {
     reopenConversation(activeId);

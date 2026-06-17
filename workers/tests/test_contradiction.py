@@ -110,7 +110,7 @@ def test_parse_verdict(reply: str, expected_verdict: str, has_reason: bool) -> N
     if has_reason:
         assert len(reason) > 0
     else:
-        assert reason == "" or reason is not None  # empty reason allowed
+        assert reason == ""
 
 
 # ---------------------------------------------------------------------------
@@ -313,24 +313,69 @@ async def test_no_citation_retrieval_path(
 # Redaction assertion (design decision #7)
 # ---------------------------------------------------------------------------
 
+# A chunk body long enough to exceed _MIN_LEAK_SUBSTR_CHARS (24).
+_LONG_CHUNK_BODY = "L'Archiviste est mort en l'an zéro selon les archives."
+
+
+@pytest.fixture
+def _stub_sources_with_long_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub resolve_cited_sources to return a chunk whose body is >= MIN_LEAK_SUBSTR_CHARS."""
+
+    async def _fake_resolve(
+        pool: Any, citations: Any, user_tier: str
+    ) -> list[tuple[str, int, str]]:
+        return [("lore/a.md", 0, _LONG_CHUNK_BODY)]
+
+    monkeypatch.setattr(service_module, "resolve_cited_sources", _fake_resolve)
+
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_stub_sources")
-async def test_reason_does_not_contain_chunk_body(ticket_spy: list[dict[str, str]]) -> None:
-    """AC: emitted reason must not contain raw retrieved chunk body text."""
-    # Judge returns a reason that does NOT copy the chunk body — only references path.
+@pytest.mark.usefixtures("_stub_sources_with_long_body")
+async def test_reason_containing_chunk_body_is_redacted(ticket_spy: list[dict[str, str]]) -> None:
+    """AC: structural redaction (#162) — if LLM embeds chunk body in reason, it is replaced.
+
+    This test FAILS against pre-fix code (no _redact_reason call) because the verbatim
+    chunk body leaks through.  It PASSES after the fix because _redact_reason substitutes
+    the safe generic reason.
+    """
+    # Judge deliberately copies a substring of _LONG_CHUNK_BODY into its reason.
+    leak_fragment = _LONG_CHUNK_BODY  # full body — well above MIN_LEAK_SUBSTR_CHARS
     llm = _FakeJudgeLlm(
         [
-            "CONTRADICTION\nSource lore/a.md en désaccord avec lore/b.md.",
-            "CONTRADICTION\nSource lore/a.md en désaccord avec lore/b.md.",
+            f"CONTRADICTION\n{leak_fragment}",
+            f"CONTRADICTION\n{leak_fragment}",
             "UNCLEAR\n",
         ]
     )
     result = await _run(llm)
 
     assert result.verdict == "contradiction"
-    # The raw chunk body text must not appear in the emitted reason.
-    assert _CHUNK_BODY not in result.reason
+    # Structural guarantee: chunk body must NOT appear in emitted reason.
+    assert _LONG_CHUNK_BODY not in result.reason
+    # The replacement is the safe generic (not an empty string).
+    assert len(result.reason) > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_clean_reason_passes_through_unchanged(ticket_spy: list[dict[str, str]]) -> None:
+    """AC: a judge reason that does not copy any chunk body is returned verbatim."""
+    # parse_verdict strips leading/trailing " .:-\n" so we compare the trimmed form.
+    clean_reason_raw = "Source lore/a.md en désaccord avec lore/b.md."
+    clean_reason_trimmed = clean_reason_raw.strip(" .:-\n")
+    llm = _FakeJudgeLlm(
+        [
+            f"CONTRADICTION\n{clean_reason_raw}",
+            f"CONTRADICTION\n{clean_reason_raw}",
+            "UNCLEAR\n",
+        ]
+    )
+    result = await _run(llm)
+
+    assert result.verdict == "contradiction"
+    # _CHUNK_BODY ("L'Archiviste est mort.") is only 22 chars — below MIN_LEAK_SUBSTR_CHARS (24),
+    # so the short stub sources do not trigger redaction and the clean reason passes through.
+    assert result.reason == clean_reason_trimmed
 
 
 # ---------------------------------------------------------------------------

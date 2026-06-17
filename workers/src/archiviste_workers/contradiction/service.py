@@ -49,6 +49,18 @@ MAJORITY_THRESHOLD: Final = 2
 _REASON_UNCLEAR: Final = "Les juges n'ont pas pu trancher l'affirmation."
 # Synthesized reason when no sources are available.
 _REASON_NO_SOURCES: Final = "Aucune source disponible pour évaluer l'affirmation."
+# Safe generic reasons per verdict — used when structural redaction detects a chunk-body leak.
+# Structural guarantee (#162): the emitted reason never contains retrieved chunk body text,
+# regardless of LLM behavior.  Prompt-level instruction is defense-in-depth only.
+_SAFE_REASON_BY_VERDICT: Final[dict[str, str]] = {
+    "present": "L'affirmation est soutenue par les sources.",
+    "absent": "L'information est absente des sources.",
+    "contradiction": "Les sources se contredisent.",
+    "unclear": _REASON_UNCLEAR,
+}
+# Minimum substring length that triggers redaction.  Short substrings (< this many chars)
+# are too common to be reliable leak signals (e.g. single words).
+_MIN_LEAK_SUBSTR_CHARS: Final = 24
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,37 @@ def _aggregate_verdicts(
     return "unclear", _REASON_UNCLEAR, False
 
 
+def _redact_reason(
+    reason: str,
+    verdict: str,
+    sources: list[tuple[str, int, str]],
+) -> str:
+    """Return reason unchanged, or a safe generic if it contains any source body text.
+
+    Structural guarantee (#162): emitted reason never leaks raw chunk body text regardless
+    of LLM behavior — the prompt instruction is defense-in-depth only.
+    Check: for each source body, if a normalized substring of length >= _MIN_LEAK_SUBSTR_CHARS
+    appears in the reason, treat as leak and substitute the per-verdict safe generic.
+    """
+    reason_lower = reason.lower()
+    for _path, _ord, body in sources:
+        if len(body) < _MIN_LEAK_SUBSTR_CHARS:
+            continue
+        body_lower = body.lower()
+        # Slide over the body in steps of _MIN_LEAK_SUBSTR_CHARS.
+        step = _MIN_LEAK_SUBSTR_CHARS
+        for start in range(0, len(body_lower) - step + 1, step):
+            substr = body_lower[start : start + step]
+            if substr in reason_lower:
+                logger.warning(
+                    "contradiction_reason_redacted",
+                    verdict=verdict,
+                    leak_substr_start=start,
+                )
+                return _SAFE_REASON_BY_VERDICT.get(verdict, _REASON_UNCLEAR)
+    return reason
+
+
 async def _resolve_sources(
     pool: asyncpg.Pool,
     embedder: Any,
@@ -132,7 +175,8 @@ async def _resolve_sources(
             return None
 
     # No-citation retrieval path (design decision #5).
-    allowed_tiers = list(ALLOWED_ACCESS_TIERS_BY_USER_TIER.get(user_tier, frozenset()))
+    # Bind once — reused for both the search call and the post-retrieval ACL filter.
+    allowed_tiers_set = ALLOWED_ACCESS_TIERS_BY_USER_TIER.get(user_tier, frozenset())
     try:
         embedding = embedder.encode_batch([claim], batch_size=1)[0]
     except (RuntimeError, ValueError) as exc:
@@ -144,7 +188,7 @@ async def _resolve_sources(
         return None
 
     try:
-        chunks = await search(pool, embedding, allowed_tiers, RETRIEVAL_TOP_K)
+        chunks = await search(pool, embedding, list(allowed_tiers_set), RETRIEVAL_TOP_K)
     except DatabaseUnavailableError as exc:
         logger.warning(
             "contradiction_retrieval_failed",
@@ -154,11 +198,15 @@ async def _resolve_sources(
         return None
 
     # ACL-filter retrieved chunks by user tier (design decision #5).
-    return [
-        (chunk.source_path, chunk.ord, chunk.text)
-        for chunk in chunks
-        if chunk.access_tier in ALLOWED_ACCESS_TIERS_BY_USER_TIER.get(user_tier, frozenset())
-    ]
+    # Unknown chunk tier is fail-closed (security.md A01): chunk is silently dropped with telemetry.
+    result = []
+    for chunk in chunks:
+        if chunk.access_tier not in {"public", "members", "author_only"}:
+            logger.error("acl_unknown_tier", chunk_id=chunk.source_path, request_id=request_id)
+            continue
+        if chunk.access_tier in allowed_tiers_set:
+            result.append((chunk.source_path, chunk.ord, chunk.text))
+    return result
 
 
 async def verify_contradiction(
@@ -204,6 +252,9 @@ async def verify_contradiction(
 
     winning_verdict, synthesized_reason, has_majority = _aggregate_verdicts(raw_outcomes)
 
+    # Structural guarantee (#162): redact any chunk body text from the reason before emitting.
+    safe_reason = _redact_reason(synthesized_reason, winning_verdict, sources)
+
     should_raise = has_majority and winning_verdict in TICKET_TRIGGERING_VERDICTS
     if not should_raise:
         logger.info(
@@ -213,7 +264,7 @@ async def verify_contradiction(
             verdict=winning_verdict,
             has_majority=has_majority,
         )
-        return VerificationResult(winning_verdict, synthesized_reason, "not_raised", None)
+        return VerificationResult(winning_verdict, safe_reason, "not_raised", None)
 
     ticket: TicketResult = await create_or_increment(
         pool,
@@ -229,4 +280,4 @@ async def verify_contradiction(
         verdict=winning_verdict,
         ticket_action=ticket.action,
     )
-    return VerificationResult(winning_verdict, synthesized_reason, ticket.action, ticket.ticket_id)
+    return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)

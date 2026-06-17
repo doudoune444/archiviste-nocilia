@@ -65,7 +65,14 @@ def _error_response(status: int, code: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code})
 
 
-_VALID_TIERS = {"anonymous", "members", "author_only"}
+# Contract vocabulary (specs/openapi/gateway-to-workers.yml X-User-Tier enum) mapped to the
+# internal ACL tier names used by retrieve/schemas.py and services/acl.py.
+# Translation happens at this boundary only — internal code keeps its own vocabulary.
+_CONTRACT_TIER_TO_INTERNAL: dict[str, str] = {
+    "anonymous": "anonymous",
+    "member": "members",
+    "author": "author_only",
+}
 
 
 def _parse_request(payload: dict[str, Any], headers: Any) -> GenerateRequest:
@@ -74,11 +81,11 @@ def _parse_request(payload: dict[str, Any], headers: Any) -> GenerateRequest:
         raise _GenerateError(400, "invalid_user_id")
 
     raw_user_tier = headers.get("x-user-tier")
-    if not raw_user_tier or raw_user_tier not in _VALID_TIERS:
+    if not raw_user_tier or raw_user_tier not in _CONTRACT_TIER_TO_INTERNAL:
         raise _GenerateError(422, "invalid_user_tier")
 
     payload["user_id"] = raw_user_id
-    payload["user_tier"] = raw_user_tier
+    payload["user_tier"] = _CONTRACT_TIER_TO_INTERNAL[raw_user_tier]
 
     if "request_id" not in payload or not isinstance(payload.get("request_id"), str):
         raise _GenerateError(400, "invalid_request_id")

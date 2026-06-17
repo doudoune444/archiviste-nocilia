@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **#168** (infra): wire local workers to fake-gcs emulator on `docker compose up`. The `gcs` service is no longer behind the `tools` profile — it now starts by default. `GCS_EMULATOR_HOST` now defaults to the bundled `gcs` emulator endpoint in docker-compose (single-dash syntax so an explicit empty override disables it for ADC/real-GCS). Workers `depends_on` the `gcs` healthcheck so persistence is ready on first boot. Prod Cloud Run is unaffected (its env block is injected by Terraform, never from this file).
+
 ### Added
 
 - **#163-review** (gateway/frontend): review fixes on top of the #163 slice. (1) **A01 IDOR** (MED): `POST /v1/report-contradiction` now verifies conversation ownership in the gateway handler before forwarding — `SELECT user_id FROM conversations WHERE id = $1`; non-owner or absent id → uniform 404 `conversation_not_found`, not forwarded to workers (mirrors HIST-001 pattern in `conversations.rs`). (2) **Frontend orphan guard** (LOW): submit and send-anyway handlers no longer mint a fresh `conversation_id` via `ensureConversationId()`; if `loadConversationId()` returns null they show "Aucune conversation à signaler — posez d'abord une question." and stop; a 404 response from the gateway shows the same message. (3) **Stuck submit button** (LOW): after a successful first submit the submit button is re-enabled and the claim textarea is cleared; send-anyway success also re-enables all buttons; no path leaves the panel open and stuck. (4) **WHY-comments restored** (LOW): three security-rationale comments deleted by the #163 commit are restored in `app.js` (sources list `textContent` injection guard, history render `textContent` guard, reopen cross-owner 404 note, `loadConversationId()` null guard). New DB-backed tests: `idor_foreign_conversation_returns_404_workers_not_called`, `idor_nonexistent_conversation_returns_404`, `idor_owned_conversation_is_forwarded`.

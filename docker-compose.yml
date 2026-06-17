@@ -39,8 +39,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/archiviste
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD required}@redis:6379/0
       GCS_BUCKET: ${GCS_BUCKET:-archiviste-conversations-dev}
-      # GCS_EMULATOR_HOST set by integration tests only (e.g. http://gcs:4443).
-      GCS_EMULATOR_HOST: ${GCS_EMULATOR_HOST:-}
+      # Local-dev default points at the bundled fake-gcs emulator. Override to empty
+      # (GCS_EMULATOR_HOST=) in prod/CI where ADC / real GCS is used instead.
+      GCS_EMULATOR_HOST: ${GCS_EMULATOR_HOST-http://gcs:4443}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
@@ -56,6 +57,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      gcs:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
@@ -89,11 +92,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Tools profile: not started by `docker compose up -d`.
-  # ING-003: fake-gcs-server for local + integration tests. Pin matches R3 (cf plan).
+  # ING-003 / #168: fake-gcs-server started by default so `docker compose up` works
+  # without ADC. Local-dev only — prod Cloud Run never runs this container.
   gcs:
     image: fsouza/fake-gcs-server:1.49
-    profiles: ["tools"]
     command: ["-scheme", "http", "-public-host", "gcs:4443", "-port", "4443"]
     ports:
       - "4443:4443"

@@ -9,6 +9,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **#176** (gateway/frontend): board badge neutral default + colSpan fix. `judges_not_passed=true` tickets show the "non confirmé par les juges" badge; all other tickets (judge-confirmed, legacy, auto-created with `false`) render neutrally with no badge. Empty-board placeholder cell now spans all 5 columns (was 4, stale after the "Confirmation" column was added in #163).
 - **#175** (workers): force signal ("Envoyer quand même") now always inserts a new ticket with `judges_not_passed=True`, bypassing cosine dedup. Previously a forced override that matched an existing open ticket would increment it via the dedup branch, inheriting its "confirmé" badge and becoming invisible as an override on the board. Fix: `create_or_increment` gains a `force: bool = False` parameter; when `force=True` the dedup SELECT FOR UPDATE is skipped and a new row is always inserted. `verify_contradiction` threads `force=True` to the forced call. New tests: `test_force_always_inserts_new_ticket_bypassing_dedup` (unit, ticket_service), `test_non_force_cosine_match_increments_existing_ticket` (replaces old increments-flag test), `test_force_always_creates_new_ticket_even_when_similar_open_exists` (integration, contradiction service), and `force` assertions on the existing spy-based tests.
 
 ### Added

@@ -1,0 +1,26 @@
+# Local conversation persistence — opt-in (ING-003 AC-12 / AC-13)
+#
+# Copy this file to docker-compose.override.yml (gitignored) to start the
+# fake-gcs emulator alongside the default stack and wire the workers service
+# to it automatically.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up -d
+#
+# Docker Compose auto-merges docker-compose.override.yml when it exists.
+# The `!reset []` tag on gcs.profiles overrides the `profiles: ["tools"]`
+# gate declared in docker-compose.yml so `gcs` starts with the default set.
+#
+# To revert to the default (no emulator), simply remove the override file:
+#   rm docker-compose.override.yml
+#
+# AC-13 invariant: docker-compose.yml itself is never modified by this
+# mechanism — the tools profile gate stays in place.
+
+services:
+  gcs:
+    profiles: !reset []
+
+  workers:
+    environment:
+      GCS_EMULATOR_HOST: http://gcs:4443

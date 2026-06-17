@@ -84,6 +84,41 @@ git checkout -b feat/FOUND-002-ingestion-pipeline
 # → ouvre PR
 ```
 
+## Persistance locale des conversations (optionnel, ING-003)
+
+Par défaut `docker compose up -d` ne démarre **pas** le service `gcs`
+(fake-gcs-server) — il est caché derrière le profil `tools` (AC-13).
+
+Pour activer la persistance locale des conversations contre l'émulateur bundlé :
+
+```bash
+# 1. Copier le fichier exemple (une seule fois)
+cp docker-compose.override.yml.example docker-compose.override.yml
+
+# 2. Démarrer la stack — gcs démarre automatiquement et workers pointe sur lui
+docker compose up -d
+```
+
+Docker Compose auto-fusionne `docker-compose.override.yml` s'il est présent.
+Le fichier est gitignored — seul `.example` est versionné.
+
+Pour revenir à la configuration par défaut (sans émulateur) :
+
+```bash
+rm docker-compose.override.yml
+docker compose up -d
+```
+
+Pour démarrer l'émulateur sans le fichier override (tests ponctuels) :
+
+```bash
+docker compose --profile tools up -d gcs
+GCS_EMULATOR_HOST=<emulator-endpoint> docker compose up -d workers
+```
+
+Note : en prod (Cloud Run), `GCS_EMULATOR_HOST` est absent → le worker
+utilise les Application Default Credentials (AC-12).
+
 ## Incidents fréquents
 
 ### Gateway healthcheck fails

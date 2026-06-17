@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from google.api_core.exceptions import (
     GoogleAPICallError,
+    NotFound,
     PreconditionFailed,
     RetryError,
     ServiceUnavailable,
@@ -19,6 +20,7 @@ from google.cloud import storage
 from archiviste_workers.conversation.models import (
     ConcurrentWriteError,
     ConversationAlreadyExistsError,
+    ConversationObjectMissingError,
     Role,
     StorageUnavailableError,
 )
@@ -104,6 +106,11 @@ class GcsConversationStorage:
         for attempt in range(len(_RETRY_BACKOFF_SECONDS) + 1):
             try:
                 current = blob.download_as_bytes()
+            except NotFound as exc:
+                # Object row exists but the GCS object is absent (orphaned
+                # conversation). Raise so the router can self-heal by
+                # recreating it before retrying the append (Part B fix).
+                raise ConversationObjectMissingError from exc
             except (ServiceUnavailable, RetryError, GoogleAPICallError, OSError) as exc:
                 raise StorageUnavailableError from exc
             generation = int(blob.generation or 0)

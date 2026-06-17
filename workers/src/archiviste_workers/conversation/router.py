@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -15,6 +16,7 @@ from archiviste_workers.conversation.models import (
     ConcurrentWriteError,
     ContentTooLargeError,
     ConversationAlreadyExistsError,
+    ConversationObjectMissingError,
     MessageIn,
     MessageOut,
     StorageUnavailableError,
@@ -91,6 +93,55 @@ async def _insert_message_best_effort(
         )
 
 
+async def _append_block(
+    storage: GcsConversationStorage,
+    *,
+    conversation_id: str,
+    message: MessageIn,
+    created_at: datetime,
+) -> int:
+    """Append block to GCS with self-heal on missing object.
+
+    On ConversationObjectMissingError (orphaned conversation), recreates the
+    object header and retries the append exactly once. Caller receives the
+    new GCS generation on success; raises HTTPException on unrecoverable error.
+    """
+    try:
+        generation, _ = await storage.append_block(
+            conversation_id=conversation_id,
+            role=message.role,
+            content=message.content,
+            timestamp=message.timestamp,
+        )
+        return generation
+    except ConversationObjectMissingError:
+        pass
+
+    # Self-heal: GCS object absent despite DB row existing (orphaned conversation).
+    logger.warning("self_heal_missing_object", conversation_id=conversation_id)
+    with contextlib.suppress(ConversationAlreadyExistsError):
+        # ConversationAlreadyExistsError: object appeared concurrently — safe to ignore.
+        await storage.create_conversation_object(
+            conversation_id=conversation_id,
+            user_id=message.user_id,
+            created_at=created_at,
+        )
+
+    try:
+        generation, _ = await storage.append_block(
+            conversation_id=conversation_id,
+            role=message.role,
+            content=message.content,
+            timestamp=message.timestamp,
+        )
+        return generation
+    except ConcurrentWriteError as exc:
+        logger.warning("concurrent_write_exhausted", conversation_id=conversation_id)
+        raise _error(409, "concurrent_write") from exc
+    except StorageUnavailableError as exc:
+        raise _error(503, "storage_unavailable") from exc
+
+
 @router.post(
     "/{conversation_id}/messages",
     response_model=MessageOut,
@@ -112,7 +163,10 @@ async def post_message(
 
     try:
         is_new, created_at = await repository.create_if_absent(
-            conversation_id=conversation_id, user_id=message.user_id, gcs_uri=gcs_uri
+            conversation_id=conversation_id,
+            user_id=message.user_id,
+            gcs_uri=gcs_uri,
+            created_at=message.timestamp,
         )
     except UnknownUserError as exc:
         raise _error(422, "unknown_user") from exc
@@ -137,11 +191,11 @@ async def post_message(
             raise _error(503, "storage_unavailable") from exc
 
     try:
-        generation, _ = await storage.append_block(
+        generation = await _append_block(
+            storage,
             conversation_id=conversation_id,
-            role=message.role,
-            content=message.content,
-            timestamp=message.timestamp,
+            message=message,
+            created_at=created_at,
         )
     except ConcurrentWriteError as exc:
         logger.warning("concurrent_write_exhausted", conversation_id=conversation_id)

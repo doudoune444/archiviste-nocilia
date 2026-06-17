@@ -42,18 +42,14 @@ function renderRow(ticket) {
   tdDate.textContent = ticket.created_at;
   tr.appendChild(tdDate);
 
-  // #163: surface the judges_not_passed flag so visitors can distinguish
-  // judge-confirmed tickets from human-override tickets.
+  // #163: only tickets force-raised by a visitor (judges_not_passed===true) carry
+  // a badge; judge-confirmed, legacy and auto-created tickets (false) render
+  // neutrally — no green "confirmé" claim they may not have earned.
   const tdConfirmation = document.createElement('td');
   if (ticket.judges_not_passed === true) {
     const badge = document.createElement('span');
     badge.className = 'badge-unconfirmed';
     badge.textContent = 'non confirmé par les juges';
-    tdConfirmation.appendChild(badge);
-  } else {
-    const badge = document.createElement('span');
-    badge.className = 'badge-confirmed';
-    badge.textContent = 'confirmé';
     tdConfirmation.appendChild(badge);
   }
   tr.appendChild(tdConfirmation);
@@ -87,7 +83,7 @@ async function loadTickets(offset) {
     if (offset === 0 && body.items.length === 0) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 4;
+      td.colSpan = 5;
       td.textContent = 'Aucun ticket ouvert.';
       tr.appendChild(td);
       tbody.appendChild(tr);

@@ -225,7 +225,8 @@ async def verify_contradiction(
 
     When force=True and the judges did NOT confirm (should_raise is False), a ticket is
     still raised — tagged judges_not_passed=True so the board can distinguish it (#163).
-    Cosine dedup applies in both paths (anti-spam).
+    Cosine dedup applies on the judge-confirmed path; force=True bypasses dedup and always
+    inserts a new ticket so an unconfirmed override is never hidden behind a confirmed one.
     """
     sources = await _resolve_sources(pool, embedder, citations, user_tier, claim, request_id)
 
@@ -281,8 +282,9 @@ async def verify_contradiction(
         return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)
 
     if force:
-        # Human override: judges did not confirm, but the visitor insists (#163).
-        # Cosine dedup still applies — no bypass (anti-spam).
+        # Human override: judges did not confirm, but the visitor insists (#163/#175).
+        # Dedup is bypassed — force always inserts a new ticket so the override
+        # appears on the board with its own "non confirmé par les juges" badge (#175).
         ticket = await create_or_increment(
             pool,
             embedder,
@@ -290,6 +292,7 @@ async def verify_contradiction(
             question=claim,
             request_id=request_id,
             judges_not_passed=True,
+            force=True,
         )
         logger.info(
             "contradiction_ticket_forced",

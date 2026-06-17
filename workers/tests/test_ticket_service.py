@@ -278,8 +278,8 @@ async def test_judges_not_passed_set_on_insert(db_pool: asyncpg.Pool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_force_cosine_match_increments_flag_not_flipped(db_pool: asyncpg.Pool) -> None:
-    # #163 AC: force + cosine match → increments, judges_not_passed NOT changed on increment.
+async def test_non_force_cosine_match_increments_existing_ticket(db_pool: asyncpg.Pool) -> None:
+    # #175 AC (non-force path unchanged): cosine match without force=True → increment, 1 row.
     question = "Quel est le nom du gardien des archives de nuit?"
     async with db_pool.acquire() as conn:
         await _ensure_conversation(conn, CONV_ID)
@@ -296,7 +296,7 @@ async def test_force_cosine_match_increments_flag_not_flipped(db_pool: asyncpg.P
     )
     assert first.action == "created"
 
-    # Second: force=True (judges_not_passed=True) but same question → cosine match → increment.
+    # Second: non-force with same question → cosine match → increment.
     second = await create_or_increment(
         db_pool,
         _embedder,
@@ -308,14 +308,75 @@ async def test_force_cosine_match_increments_flag_not_flipped(db_pool: asyncpg.P
     assert second.action == "incremented"
     assert second.ticket_id == first.ticket_id
 
-    # Flag must NOT be flipped to True — original False is preserved.
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM tickets")
+        assert count == 1
+
+    async with db_pool.acquire() as conn:
+        await _clean_tickets(conn)
+
+
+@pytest.mark.asyncio
+async def test_force_always_inserts_new_ticket_bypassing_dedup(db_pool: asyncpg.Pool) -> None:
+    # #175 AC: force=True → always INSERT new row with judges_not_passed=True, never increment.
+    # AC-1: a force signal always inserts a new ticket with judges_not_passed=True.
+    # AC-2: a force signal does not merge into / increment an existing ticket.
+    question = "Quel est le nom du gardien des archives de nuit?"
+    async with db_pool.acquire() as conn:
+        await _ensure_conversation(conn, CONV_ID)
+        await _clean_tickets(conn)
+
+    # First: judge-confirmed insert (judges_not_passed=False), open status.
+    first = await create_or_increment(
+        db_pool,
+        _embedder,
+        conversation_id=CONV_ID,
+        question=question,
+        request_id=str(uuid.uuid4()),
+        judges_not_passed=False,
+    )
+    assert first.action == "created"
+
+    # Second: force=True + same question + similar open ticket exists → must INSERT new row.
+    second = await create_or_increment(
+        db_pool,
+        _embedder,
+        conversation_id=CONV_ID,
+        question=question,
+        request_id=str(uuid.uuid4()),
+        judges_not_passed=True,
+        force=True,
+    )
+
+    # AC-1: new ticket created, not incremented.
+    assert second.action == "created"
+    # AC-2: separate ticket (different id from the first one).
+    assert second.ticket_id != first.ticket_id
+    assert second.priority_score == 1
+
+    # Two rows in DB — one per signal.
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM tickets")
+        assert count == 2
+
+    # New ticket carries judges_not_passed=True.
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT judges_not_passed FROM tickets WHERE id=$1",
-            first.ticket_id,
+            second.ticket_id,
         )
     assert row is not None
-    assert row["judges_not_passed"] is False
+    assert row["judges_not_passed"] is True
+
+    # Original ticket is untouched (judges_not_passed still False, priority_score still 1).
+    async with db_pool.acquire() as conn:
+        orig = await conn.fetchrow(
+            "SELECT judges_not_passed, priority_score FROM tickets WHERE id=$1",
+            first.ticket_id,
+        )
+    assert orig is not None
+    assert orig["judges_not_passed"] is False
+    assert orig["priority_score"] == 1
 
     async with db_pool.acquire() as conn:
         await _clean_tickets(conn)

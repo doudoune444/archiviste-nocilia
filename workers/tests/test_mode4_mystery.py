@@ -170,7 +170,7 @@ async def test_all_blocked_triggers_mystery() -> None:
         app, clients = _build_app(retrieve_handler=_retrieve_handler(chunks), llm_client=llm)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             r = await client.post(
-                "/v1/generate", json=_payload(), headers=_headers(user_tier="members")
+                "/v1/generate", json=_payload(), headers=_headers(user_tier="member")
             )
     assert r.status_code == 200
     body = r.json()
@@ -348,7 +348,7 @@ async def test_mystery_query_log_inserted(db_pool: asyncpg.Pool) -> None:
         resp = await client.post(
             "/v1/generate",
             json=_payload(request_id=req_id),
-            headers=_headers(user_tier="members"),
+            headers=_headers(user_tier="member"),
         )
     assert resp.status_code == 200
     _sql = (

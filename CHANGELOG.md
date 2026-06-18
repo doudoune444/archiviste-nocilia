@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **BOARD-001 AFK** (gateway): `GET /v1/board` accepts optional `?category=<text>` filter (exact match, bound param — no SQL interpolation) and `?sort=priority|date` ordering. `sort` is modelled as a `SortOrder` enum deserialized from the query param with a `Priority` default; four separate `sqlx::query_as` literal SQL calls express the four (category × sort) combinations — no `format!` macro is ever used. Omitting both params preserves today's exact behaviour (backward-compatible).
+
 ### Fixed
 
 - **#173** (frontend): distinct non-recoverable message for `skipped_error` on the send-anyway path. When workers returns `ticket_action="skipped_error"` (HTTP 200, server-side write failure) after a force=true submission, the UI now shows "Le serveur n'a pas pu enregistrer le signalement. Réessayez plus tard." and leaves "Envoyer quand même" disabled (non-recoverable) while re-enabling "Annuler" only — instead of the generic recoverable retry copy that wrongly re-offered a retry the user could never resolve.

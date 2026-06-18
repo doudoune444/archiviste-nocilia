@@ -273,6 +273,11 @@ jobs:
       - name: vitest (unit)
         run: npm run test:unit
 
+      # Next.js production build — type-checks page files (tsc --noEmit does NOT
+      # catch Next's page-export constraints) and is the artifact Cloud Run runs.
+      - name: build
+        run: npm run build
+
       - name: install playwright browsers
         run: npx playwright install --with-deps chromium
 

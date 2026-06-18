@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-06-18 — PLATFORM-004 — `npm run build` fails with pre-existing observability/page.tsx named-export type error
+
+- File: `frontend/src/app/observability/page.tsx` (not a PLATFORM-004 file)
+- Symptom: `npm run build` exits 1 with `Type error: Type 'OmitWithTag<...>' does not satisfy the constraint '{ [x: string]: never; }'. Property 'fetchStats' is incompatible with index signature.` — Next.js 15 type-checks named exports from page files and flags any export that is not one of the reserved Next.js names (default, metadata, config, etc.). `fetchStats`/`fetchQuality` were exported from `observability/page.tsx`.
+- Why blocked: Pre-existing failure in `main` (verified: byte-identical in the main tree before PLATFORM-004 changes). Not introduced by this ticket. PLATFORM-004 adds `output: "standalone"` and `middleware.ts` — neither touches `observability/page.tsx`.
+- Resolution: RESOLVED by PR #218 (`fix/frontend-build-page-exports`, merged to main 2026-06-18) — moved `fetchStats`/`fetchQuality` + validators to a co-located `observability/fetch.ts`; `page.tsx` exports only the component. Added a `build` step to the frontend CI job so the gap can't recur. PLATFORM-004 picks this up by merging main.
+- Status: resolved (#218)
+
 ## 2026-06-17 — #163 — `cargo sqlx prepare` not run (no live DB available on Windows dev machine)
 
 - File : `gateway/src/handlers/board.rs` + `gateway/src/handlers/tickets.rs` (SQL queries extended with `judges_not_passed`)

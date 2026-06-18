@@ -16,6 +16,7 @@ jobs:
       REGION: europe-west9
       GATEWAY_SERVICE: archiviste-gateway
       WORKERS_SERVICE: archiviste-workers
+      FRONTEND_SERVICE: archiviste-frontend
 
     steps:
       - name: checkout
@@ -79,6 +80,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # PLATFORM-004: build and push frontend image on every merge to main.
+      # context=frontend, file=infra/docker/frontend.Dockerfile, tag=:sha only
+      # (:latest is not pinned by any Cloud Run Job, unlike workers/eval).
+      - name: build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: infra/docker/frontend.Dockerfile
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       # AC-12 step 3: deploy canary revisions with --no-traffic.
       - name: deploy gateway canary (no traffic)
         id: deploy_gateway
@@ -109,6 +123,20 @@ jobs:
             --region=${{ env.REGION }} \
             --format='value(status.latestCreatedRevisionName)')" >> "$GITHUB_OUTPUT"
 
+      # PLATFORM-004: deploy frontend canary with --no-traffic.
+      - name: deploy frontend canary (no traffic)
+        id: deploy_frontend
+        run: |
+          gcloud run deploy ${{ env.FRONTEND_SERVICE }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/frontend:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --no-traffic \
+            --tag canary \
+            --quiet
+          echo "revision=$(gcloud run services describe ${{ env.FRONTEND_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.latestCreatedRevisionName)')" >> "$GITHUB_OUTPUT"
+
       # OPS-003: apply pending migrations to Cloud SQL via cloud-sql-proxy v2.
       # Runs after both canary revisions are deployed (schema ready before traffic),
       # before promote (migration failure → rollback, never promote broken schema).
@@ -135,13 +163,16 @@ jobs:
           kill $PROXY_PID || true
           exit $STATUS
 
-      # OPS-003: assert both canary revisions reached Ready=True before promote.
+      # OPS-003: assert all canary revisions reached Ready=True before promote.
       # Uses gcloud JSON output + jq for robust condition parsing (avoids fragile
       # --format filter expression). Fail here → rollback, never promote broken revision.
       - name: assert canary revisions are Ready
         id: canary_ready
         run: |
-          for pair in "${{ env.GATEWAY_SERVICE }}=${{ steps.deploy_gateway.outputs.revision }}" "${{ env.WORKERS_SERVICE }}=${{ steps.deploy_workers.outputs.revision }}"; do
+          for pair in \
+            "${{ env.GATEWAY_SERVICE }}=${{ steps.deploy_gateway.outputs.revision }}" \
+            "${{ env.WORKERS_SERVICE }}=${{ steps.deploy_workers.outputs.revision }}" \
+            "${{ env.FRONTEND_SERVICE }}=${{ steps.deploy_frontend.outputs.revision }}"; do
             svc="${pair%%=*}"; rev="${pair##*=}"
             ready=$(gcloud run revisions describe "$rev" --region="${{ env.REGION }}" \
               --format=json \
@@ -192,8 +223,16 @@ jobs:
           # route, and the no-traffic revision cold-starts on first hit (gateway boot +
           # internal workers call). Capture HTTP code + body explicitly — no `-f`, so a
           # non-2xx surfaces its status instead of collapsing to an opaque empty-body exit.
+          # PLATFORM-004: gateway_runtime_invoker limits invoker to the runtime SA.
+          # The GHA runner authenticates as gha-deploy SA (via WIF); to reach the
+          # SA-gated canary URL it must present an identity token whose audience is
+          # the canary URL.  gcloud auth print-identity-token issues a token for the
+          # currently-authenticated principal (gha-deploy SA, granted run.invoker on
+          # the gateway in iam.tf gateway_deploy_invoker binding).
+          ID_TOKEN=$(gcloud auth print-identity-token --audiences="${CANARY_URL}")
           for attempt in $(seq 1 6); do
             HTTP_CODE=$(curl -s -o /tmp/health.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${ID_TOKEN}" \
               --max-time 30 "${CANARY_URL}/health" || echo "000")
             echo "Attempt ${attempt}/6: HTTP ${HTTP_CODE}"
             if [ "${HTTP_CODE}" = "200" ] && jq -e '.status == "ok"' /tmp/health.json; then
@@ -207,12 +246,22 @@ jobs:
           exit 1
 
       # AC-12 step 5: promote gateway 100% on smoke success. Workers was already
-      # promoted before the smoke (see above); only the gateway remains.
+      # promoted before the smoke (see above); only the gateway and frontend remain.
       - name: promote gateway to 100%
         if: success()
         run: |
           gcloud run services update-traffic ${{ env.GATEWAY_SERVICE }} \
             --to-revisions=${{ steps.deploy_gateway.outputs.revision }}=100 \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      # PLATFORM-004: promote frontend after the gateway smoke passes.
+      # Frontend canary is promoted last — it depends on the gateway being healthy.
+      - name: promote frontend to 100%
+        if: success()
+        run: |
+          gcloud run services update-traffic ${{ env.FRONTEND_SERVICE }} \
+            --to-revisions=${{ steps.deploy_frontend.outputs.revision }}=100 \
             --region ${{ env.REGION }} \
             --quiet
 
@@ -246,6 +295,23 @@ jobs:
             --format='value(metadata.name)' | tail -1)
           echo "Rolling back workers to revision: ${PREVIOUS}"
           gcloud run services update-traffic ${{ env.WORKERS_SERVICE }} \
+            --to-revisions="${PREVIOUS}=100" \
+            --region ${{ env.REGION }} \
+            --quiet
+          exit 1
+
+      # PLATFORM-004: rollback frontend in lock-step with gateway/workers.
+      - name: rollback frontend on smoke failure
+        if: failure() && (steps.smoke.conclusion == 'failure' || steps.migrate.conclusion == 'failure' || steps.canary_ready.conclusion == 'failure')
+        run: |
+          PREVIOUS=$(gcloud run revisions list \
+            --service=${{ env.FRONTEND_SERVICE }} \
+            --region=${{ env.REGION }} \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=2 \
+            --format='value(metadata.name)' | tail -1)
+          echo "Rolling back frontend to revision: ${PREVIOUS}"
+          gcloud run services update-traffic ${{ env.FRONTEND_SERVICE }} \
             --to-revisions="${PREVIOUS}=100" \
             --region ${{ env.REGION }} \
             --quiet

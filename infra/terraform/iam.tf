@@ -68,6 +68,18 @@ resource "google_service_account_iam_member" "runtime_token_creator_self" {
   member             = "serviceAccount:${google_service_account.archiviste_runtime.email}"
 }
 
+# PLATFORM-004: gha-deploy needs run.invoker on the gateway so the canary smoke
+# step can attach an identity token (audience=canary URL) without restoring
+# allUsers invoker.  The deploy SA is bound here; the runtime SA binding lives in
+# cloud_run.tf (gateway_runtime_invoker).
+resource "google_cloud_run_v2_service_iam_member" "gateway_deploy_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.gateway.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.gha_deploy.email}"
+}
+
 # OPS-003: CI migrate step impersonates runtime SA which owns the schema.
 # gha-deploy needs serviceAccountTokenCreator on runtime SA to obtain short-lived
 # credentials for cloud-sql-proxy --impersonate-service-account --auto-iam-authn.

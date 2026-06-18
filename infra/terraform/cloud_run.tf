@@ -272,14 +272,87 @@ resource "google_cloud_run_v2_service" "workers" {
   }
 }
 
-# HIGH-3: gateway ingress=all requires explicit allUsers run.invoker binding for public access.
-# Without this, Cloud Run v2 returns 403 to all unauthenticated requests (AC-14).
-resource "google_cloud_run_v2_service_iam_member" "gateway_public_invoker" {
+# PLATFORM-004: Next.js frontend as a second Cloud Run service.
+# This is the new sole public web origin; the gateway is demoted to SA-gated.
+# No Cloud SQL volume — frontend has no direct DB access.
+resource "google_cloud_run_v2_service" "frontend" {
+  name     = "archiviste-frontend"
+  location = var.region
+  # Frontend is the new public browser-facing origin. INGRESS_TRAFFIC_ALL +
+  # allUsers invoker (below) makes it publicly reachable via the Cloudflare CNAME.
+  ingress = "INGRESS_TRAFFIC_ALL"
+
+  # MED-5: same image drift prevention as gateway and workers.
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
+
+  template {
+    service_account = google_service_account.archiviste_runtime.email
+
+    scaling {
+      min_instance_count = 0
+      # AC-4: scale-to-zero satisfies near-zero idle cost requirement.
+      # Cost guard: cap at 20 to match gateway/workers budget ceiling.
+      max_instance_count = 20
+    }
+
+    containers {
+      name  = "frontend"
+      image = "${local.ar_base}/frontend:latest"
+
+      # Cloud Run sets PORT=8080; next start (standalone server.js) reads it.
+      # No ports{} override needed — unlike workers:8000, Next.js defaults to $PORT.
+
+      resources {
+        limits = {
+          cpu    = "1000m"
+          memory = "512Mi"
+        }
+      }
+
+      # PLATFORM-004 AC-2: bff-proxy attaches an ID token (audience=gateway URI)
+      # on outbound gateway calls so the SA-gated gateway accepts the request.
+      env {
+        name  = "GATEWAY_URL"
+        value = google_cloud_run_v2_service.gateway.uri
+      }
+
+      # PLATFORM-004 AC-2: bff-proxy reads this URL to reach the Cloud Run metadata
+      # server and fetch a Google-signed ID token.  The audience query-param is set
+      # to GATEWAY_URL so Cloud Run IAM (gateway_runtime_invoker binding) accepts the
+      # token.  Without this env the SA-gated gateway returns 403 on every call from
+      # the frontend because fetchIdToken() returns "" when the var is absent.
+      env {
+        name  = "CLOUD_RUN_SA_IDENTITY_URL"
+        value = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+      }
+    }
+  }
+}
+
+# PLATFORM-004 AC-2: frontend is the new public origin — allUsers invoker.
+# IAM is the ONLY trust boundary for the gateway (gateway_runtime_invoker below).
+resource "google_cloud_run_v2_service_iam_member" "frontend_public_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.frontend.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# PLATFORM-004 AC-2: flip gateway invoker from allUsers → runtime SA only.
+# The gateway run.app URL is no longer DNS-routable from browsers (Cloudflare
+# CNAME now points at frontend.uri). IAM ensures direct run.app access returns 403.
+# WHY rename: the old resource "gateway_public_invoker" with member="allUsers"
+# is destroyed; this new resource carries the SA binding. Terraform will DELETE
+# the allUsers binding and CREATE the SA binding in the same plan.
+resource "google_cloud_run_v2_service_iam_member" "gateway_runtime_invoker" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.gateway.name
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = "serviceAccount:${google_service_account.archiviste_runtime.email}"
 }
 
 # HIGH-2: workers ingress=internal — gateway runtime SA needs run.invoker to call workers.

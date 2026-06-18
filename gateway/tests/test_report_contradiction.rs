@@ -529,6 +529,48 @@ async fn force_true_forwarded_to_workers(pool: sqlx::PgPool) {
     );
 }
 
+/// #173 AC: force=true + workers returns `skipped_error` → body survives gateway passthrough
+/// byte-for-byte (`ticket_action` == `skipped_error` is preserved).
+///
+/// DB-backed: ownership check is fail-closed; seeded owner posts the request.
+#[sqlx::test(migrations = "../migrations")]
+async fn force_true_skipped_error_passthrough(pool: sqlx::PgPool) {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/verify-contradiction")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"verdict":"absent","reason":"write failed","ticket_action":"skipped_error","ticket_id":null,"outcome":"indecisive"}"#,
+        )
+        .create_async()
+        .await;
+
+    let (caller_cookie, caller_id) = seed_anon_user(&pool).await;
+    let conv_id = seed_owned_conversation(&pool, caller_id).await;
+
+    let payload = format!(r#"{{"claim":"x","conversation_id":"{conv_id}","force":true}}"#);
+    let app = router(make_state_with_db_pool(&server.url(), pool));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/report-contradiction")
+                .header("content-type", "application/json")
+                .header("cookie", format!("{ANON_COOKIE_NAME}={caller_cookie}"))
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(
+        body["ticket_action"], "skipped_error",
+        "skipped_error must survive gateway passthrough byte-for-byte (#173)"
+    );
+}
+
 /// #163 AC: force omitted → defaults false, forwarded as false.
 ///
 /// DB-backed: ownership check is fail-closed; seeded owner posts the request.

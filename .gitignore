@@ -104,3 +104,15 @@ scripts/.gdrive_state.json.bak
 
 # Golden Q/A set — contient des spoilers narratifs (repo public à venir)
 specs/golden_qa.jsonl
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+*.tsbuildinfo
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/

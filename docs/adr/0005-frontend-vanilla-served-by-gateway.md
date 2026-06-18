@@ -1,6 +1,6 @@
 # ADR 0005 — Frontend MVP : vanilla HTML+JS servi par la gateway
 
-- Status: accepted
+- Status: superseded by ADR-0012
 - Date: 2026-05-08
 - Decider: Doudoune
 

@@ -1,0 +1,15 @@
+/* Design tokens — reprises exactes de gateway/static/assets/styles.css */
+:root {
+  --color-bg: #0f0f0f;
+  --color-surface: #1a1a1a;
+  --color-border: #2e2e2e;
+  --color-text: #e8e8e8;
+  --color-text-muted: #888;
+  --color-accent: #8b7355;
+  --color-user-bg: #1e1e2e;
+  --color-assistant-bg: #1a1a1a;
+  --color-error-bg: #2e1a1a;
+  --color-error-text: #e07070;
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, monospace;
+}

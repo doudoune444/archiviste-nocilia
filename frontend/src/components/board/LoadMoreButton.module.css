@@ -1,0 +1,35 @@
+.loadMoreRow {
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem 0;
+}
+
+.loadMoreBtn {
+  background: var(--color-surface);
+  color: var(--color-accent);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.5rem 1.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.loadMoreBtn:hover:not(:disabled) {
+  filter: brightness(1.2);
+}
+
+.loadMoreBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+  border-radius: 4px;
+  padding: 0.6rem 1rem;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}

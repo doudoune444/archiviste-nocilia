@@ -11,7 +11,7 @@
 
 use archiviste_gateway::auth::{
     sessions::{SessionCreator, SessionError, SessionRevoker},
-    user_lookup::{UserLookup, UserLookupError},
+    user_lookup::{EmailFuture, UserLookup, UserLookupError},
 };
 use std::{collections::HashMap, pin::Pin, sync::Mutex};
 use uuid::Uuid;
@@ -23,6 +23,8 @@ use uuid::Uuid;
 /// Stored user row for test fixtures.
 pub struct MockUser {
     pub id: Uuid,
+    /// Email stored in lowercase (matches the map key for reverse lookup).
+    pub email: String,
     /// Argon2id PHC string (pre-hashed by caller).
     pub password_hash: String,
     pub tier: String,
@@ -55,6 +57,7 @@ impl InMemoryUserLookup {
             email.to_string(),
             MockUser {
                 id,
+                email: email.to_string(),
                 password_hash,
                 tier: tier.to_string(),
             },
@@ -111,14 +114,27 @@ impl UserLookup for InMemoryUserLookup {
         let id = Uuid::new_v4();
         #[allow(clippy::expect_used)]
         self.users.lock().expect("mutex poisoned").insert(
-            lower,
+            lower.clone(),
             MockUser {
                 id,
+                email: lower,
                 password_hash: password_hash.to_string(),
                 tier: "member".to_string(),
             },
         );
         Box::pin(std::future::ready(Ok(id)))
+    }
+
+    fn find_email_by_id(&self, user_id: Uuid) -> EmailFuture<'_> {
+        #[allow(clippy::expect_used)]
+        let email = self
+            .users
+            .lock()
+            .expect("mutex poisoned")
+            .values()
+            .find(|u| u.id == user_id)
+            .map(|u| u.email.clone());
+        Box::pin(std::future::ready(Ok(email)))
     }
 }
 

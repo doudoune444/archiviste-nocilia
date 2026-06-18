@@ -1,0 +1,104 @@
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-wrap: wrap;
+}
+
+.navBrand {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--color-accent);
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.navBrand:hover,
+.navBrand:focus {
+  text-decoration: underline;
+}
+
+.navLinks {
+  display: flex;
+  gap: 1.5rem;
+  list-style: none;
+  flex: 1;
+}
+
+.navLink {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.navLink:hover,
+.navLink:focus {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+/* Right-hand auth cluster */
+.authCluster {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.authLink {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.authLink:hover,
+.authLink:focus {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.authLinkPrimary {
+  color: var(--color-accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.authLinkPrimary:hover,
+.authLinkPrimary:focus {
+  text-decoration: underline;
+}
+
+.userEmail {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .nav {
+    gap: 0.75rem;
+  }
+
+  .navLinks {
+    gap: 1rem;
+    width: 100%;
+  }
+
+  .authCluster {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .userEmail {
+    max-width: 140px;
+  }
+}

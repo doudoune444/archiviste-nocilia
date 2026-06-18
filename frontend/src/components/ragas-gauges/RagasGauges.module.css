@@ -1,0 +1,102 @@
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 1.25rem 1.5rem;
+}
+
+.title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin-bottom: 1.25rem;
+  font-family: var(--font-mono);
+}
+
+.separator {
+  color: var(--color-border);
+}
+
+.version,
+.finishedAt {
+  color: var(--color-text-muted);
+}
+
+.gauges {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.gauge {
+  display: grid;
+  grid-template-columns: 10rem 1fr 3.5rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.gaugeLabel {
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+
+.gaugeBar {
+  height: 0.5rem;
+  background: var(--color-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.gaugeFill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.gaugeValue {
+  font-size: 0.875rem;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+  text-align: right;
+}
+
+.emptyState {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  font-style: italic;
+}
+
+.errorText {
+  color: var(--color-error-text);
+  font-size: 0.9rem;
+}
+
+.requestId {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 600px) {
+  .gauge {
+    grid-template-columns: 1fr 3rem;
+    grid-template-rows: auto auto;
+  }
+
+  .gaugeLabel {
+    grid-column: 1 / -1;
+  }
+}

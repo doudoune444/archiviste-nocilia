@@ -623,3 +623,278 @@ fn board_js_renders_confirmation_badge() {
         "board.js must render 'non confirmé par les juges' badge text"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BOARD-001 AFK: category filter + sort=priority|date
+// ---------------------------------------------------------------------------
+
+/// Seed helper: insert one conversation + one ticket into the pool.
+async fn insert_ticket(
+    pool: &sqlx::PgPool,
+    conv_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+    question: &str,
+    category: &str,
+    priority_score: i32,
+) {
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(conv_id)
+    .bind(user_id)
+    .bind(format!("gs://archiviste-conversations/conv/{conv_id}.md"))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status) \
+         VALUES ($1, $2, $3, $4, 'open')",
+    )
+    .bind(conv_id)
+    .bind(question)
+    .bind(category)
+    .bind(priority_score)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// BOARD-001 AFK AC: ?category=lore returns only tickets in category "lore".
+#[sqlx::test(migrations = "../migrations")]
+async fn board_category_filter_narrows_results(pool: sqlx::PgPool) {
+    // BOARD-001 AFK AC: category filter returns only matching tickets
+    let user_id = Uuid::nil();
+
+    insert_ticket(&pool, Uuid::from_u128(200), user_id, "Lore Q1", "lore", 5).await;
+    insert_ticket(&pool, Uuid::from_u128(201), user_id, "Lore Q2", "lore", 3).await;
+    insert_ticket(
+        &pool,
+        Uuid::from_u128(202),
+        user_id,
+        "Chrono Q1",
+        "chronologie",
+        4,
+    )
+    .await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board?category=lore").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+
+    assert_eq!(items.len(), 2, "category=lore must return exactly 2 items");
+    assert_eq!(body["total"], 2, "total reflects filtered count");
+    for item in items {
+        assert_eq!(
+            item["category"], "lore",
+            "all returned tickets must have category=lore"
+        );
+    }
+}
+
+/// BOARD-001 AFK AC: unknown category returns empty list, not an error.
+#[sqlx::test(migrations = "../migrations")]
+async fn board_category_filter_unknown_returns_empty(pool: sqlx::PgPool) {
+    // BOARD-001 AFK AC: unknown category → empty items, total=0, HTTP 200
+    let user_id = Uuid::nil();
+    insert_ticket(&pool, Uuid::from_u128(210), user_id, "Lore Q", "lore", 5).await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board?category=unknown_category").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 0, "unknown category must return empty items");
+    assert_eq!(body["total"], 0);
+}
+
+/// BOARD-001 AFK AC: ?sort=priority orders by priority_score DESC.
+#[sqlx::test(migrations = "../migrations")]
+async fn board_sort_priority_orders_by_score_desc(pool: sqlx::PgPool) {
+    // BOARD-001 AFK AC: sort=priority → items ordered by priority_score DESC
+    let user_id = Uuid::nil();
+    insert_ticket(&pool, Uuid::from_u128(220), user_id, "Low prio", "lore", 1).await;
+    insert_ticket(&pool, Uuid::from_u128(221), user_id, "High prio", "lore", 9).await;
+    insert_ticket(&pool, Uuid::from_u128(222), user_id, "Mid prio", "lore", 5).await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board?sort=priority").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 3);
+
+    // sort=priority → priority_score DESC: 9, 5, 1
+    assert_eq!(items[0]["priority_score"], 9);
+    assert_eq!(items[1]["priority_score"], 5);
+    assert_eq!(items[2]["priority_score"], 1);
+}
+
+/// BOARD-001 AFK AC: ?sort=date orders by created_at DESC (most recent first).
+#[sqlx::test(migrations = "../migrations")]
+async fn board_sort_date_orders_by_created_at_desc(pool: sqlx::PgPool) {
+    // BOARD-001 AFK AC: sort=date → items ordered by created_at DESC
+    let user_id = Uuid::nil();
+
+    // Insert with explicit sleeps not possible; use RETURNING created_at and verify
+    // the ordering is consistent with DB order. We insert three tickets and set
+    // a pg_sleep to force distinct timestamps.
+    // Strategy: insert sequentially and verify the last-inserted appears first.
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(Uuid::from_u128(230))
+    .bind(user_id)
+    .bind("gs://archiviste-conversations/conv/230.md")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, created_at) \
+         VALUES ($1, $2, $3, $4, 'open', '2024-01-01T00:00:00Z')",
+    )
+    .bind(Uuid::from_u128(230))
+    .bind("Oldest ticket")
+    .bind("lore")
+    .bind(5_i32)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(Uuid::from_u128(231))
+    .bind(user_id)
+    .bind("gs://archiviste-conversations/conv/231.md")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, created_at) \
+         VALUES ($1, $2, $3, $4, 'open', '2024-06-15T12:00:00Z')",
+    )
+    .bind(Uuid::from_u128(231))
+    .bind("Middle ticket")
+    .bind("lore")
+    .bind(1_i32)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(Uuid::from_u128(232))
+    .bind(user_id)
+    .bind("gs://archiviste-conversations/conv/232.md")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, created_at) \
+         VALUES ($1, $2, $3, $4, 'open', '2025-03-20T08:00:00Z')",
+    )
+    .bind(Uuid::from_u128(232))
+    .bind("Newest ticket")
+    .bind("lore")
+    .bind(3_i32)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board?sort=date").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 3);
+
+    // sort=date → created_at DESC: newest (2025) first, then 2024-06, then 2024-01
+    let first_q = items[0]["question"].as_str().unwrap();
+    let last_q = items[2]["question"].as_str().unwrap();
+    assert_eq!(
+        first_q, "Newest ticket",
+        "sort=date: newest ticket must be first"
+    );
+    assert_eq!(
+        last_q, "Oldest ticket",
+        "sort=date: oldest ticket must be last"
+    );
+}
+
+/// BOARD-001 AFK AC: no params → same behaviour as before (backward-compatible).
+#[sqlx::test(migrations = "../migrations")]
+async fn board_no_params_backward_compatible(pool: sqlx::PgPool) {
+    // BOARD-001 AFK AC: omitting category + sort preserves default ordering (priority DESC)
+    let user_id = Uuid::nil();
+    insert_ticket(&pool, Uuid::from_u128(240), user_id, "Low prio", "lore", 2).await;
+    insert_ticket(&pool, Uuid::from_u128(241), user_id, "High prio", "lore", 8).await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 2);
+
+    // Default (no params) → priority_score DESC: 8 first
+    assert_eq!(
+        items[0]["priority_score"], 8,
+        "default ordering must be priority_score DESC"
+    );
+    assert_eq!(items[1]["priority_score"], 2);
+}
+
+/// BOARD-001 AFK AC: ?sort=priority + ?category=lore filters and sorts correctly.
+#[sqlx::test(migrations = "../migrations")]
+async fn board_category_and_sort_combined(pool: sqlx::PgPool) {
+    // BOARD-001 AFK AC: category filter + sort=priority combined
+    let user_id = Uuid::nil();
+    insert_ticket(&pool, Uuid::from_u128(250), user_id, "Lore low", "lore", 2).await;
+    insert_ticket(&pool, Uuid::from_u128(251), user_id, "Lore high", "lore", 7).await;
+    insert_ticket(
+        &pool,
+        Uuid::from_u128(252),
+        user_id,
+        "Chrono Q",
+        "chronologie",
+        9,
+    )
+    .await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board?category=lore&sort=priority").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+
+    // Only lore tickets, sorted by priority DESC: 7 first
+    assert_eq!(items.len(), 2, "must return only lore tickets");
+    assert_eq!(body["total"], 2);
+    assert_eq!(items[0]["priority_score"], 7);
+    assert_eq!(items[1]["priority_score"], 2);
+    for item in items {
+        assert_eq!(item["category"], "lore");
+    }
+}

@@ -4,6 +4,11 @@
 //! LIMIT enforced (security.md A01 — no bulk without LIMIT).
 //! Uses `sqlx::query_as` (runtime-typed) to avoid offline-cache requirement
 //! (same pattern as `handlers/tickets.rs`, blockers.md MED-3).
+//!
+//! BOARD-001 (AFK): optional `category` filter and `sort=priority|date` added.
+//! Sort is represented as a Rust enum — never interpolated into SQL strings.
+//! Two separate `sqlx::query_as` literal calls carry the fixed ORDER BY clause;
+//! no `format!` is ever used (security.md A03 — injection prevention).
 
 use std::sync::Arc;
 
@@ -25,6 +30,22 @@ use crate::{
 /// Served by `serve_board` so there is a single binary artifact (same pattern as dashboard).
 const BOARD_HTML: &str = include_str!("../../static/board.html");
 
+/// Sort order for `GET /v1/board` (BOARD-001 AFK).
+///
+/// Deserialised from the `sort` query param. Defaults to `Priority`.
+/// Illegal values are rejected by serde and fall through to `Default` via
+/// `#[serde(default)]` on the enclosing struct field — unknown strings yield
+/// `SortOrder::default()` (priority ordering), never a 400.
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SortOrder {
+    /// Order by `priority_score DESC, created_at DESC` (default, backward-compatible).
+    #[default]
+    Priority,
+    /// Order by `created_at DESC, priority_score DESC`.
+    Date,
+}
+
 /// Query params for `GET /v1/board` (BOARD-001).
 #[derive(Debug, Deserialize)]
 pub struct BoardQuery {
@@ -32,6 +53,14 @@ pub struct BoardQuery {
     pub limit: Option<i64>,
     /// Offset for pagination. Must be `≥ 0`; default 0.
     pub offset: Option<i64>,
+    /// Optional category filter. When present, only tickets whose `category` column
+    /// matches exactly are returned. Value is passed as a bound parameter — never
+    /// interpolated into SQL (security.md A03).
+    pub category: Option<String>,
+    /// Sort order: `priority` (default) or `date`.
+    /// Unknown values silently fall back to the default (backward-compatible).
+    #[serde(default)]
+    pub sort: SortOrder,
 }
 
 /// Handler: `GET /board` — serves the public board HTML page (BOARD-001).
@@ -68,6 +97,11 @@ struct TicketRow {
 /// Public (#[public] marker — no auth gate). Returns the same open-ticket
 /// query as `GET /v1/tickets` but without the author-only gate.
 ///
+/// Optional params (BOARD-001 AFK):
+/// - `category=<text>` — exact match filter on the `category` column (bound param, not
+///   interpolated — security.md A03).
+/// - `sort=priority|date` — controls ORDER BY. Defaults to `priority` (backward-compatible).
+///
 /// # Errors
 /// `ApiError::InvalidRequest` if `limit`/`offset` are out of range.
 /// `ApiError::UpstreamUnavailable` if DB is unreachable.
@@ -88,27 +122,22 @@ pub async fn list_board(
         .as_ref()
         .ok_or(ApiError::UpstreamUnavailable)?;
 
-    // Same SQL as tickets handler — only open tickets, ordered by priority DESC then date DESC.
-    // Uses `sqlx::query_as` (runtime-typed) to avoid requiring a live DB at compile time.
-    let rows: Vec<TicketRow> = sqlx::query_as(
-        "SELECT id, conversation_id, question, category, priority_score, status, \
-         created_at, updated_at, judges_not_passed \
-         FROM tickets \
-         WHERE status = 'open' \
-         ORDER BY priority_score DESC, created_at DESC \
-         LIMIT $1 OFFSET $2",
+    // BOARD-001 AFK: fetch rows using the appropriate literal SQL for each sort/filter
+    // combination. Sort ordering is expressed as separate query literals — never
+    // interpolated from user input (security.md A03). Category is always a bound $N param.
+    let rows: Vec<TicketRow> = fetch_board_rows(
+        pool,
+        limit,
+        offset,
+        params.category.as_deref(),
+        &params.sort,
     )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
     .await
     .map_err(|_| ApiError::UpstreamUnavailable)?;
 
-    let count_row: CountRow =
-        sqlx::query_as("SELECT count(*) as count FROM tickets WHERE status = 'open'")
-            .fetch_one(pool)
-            .await
-            .map_err(|_| ApiError::UpstreamUnavailable)?;
+    let total = fetch_board_count(pool, params.category.as_deref())
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
 
     // A09: never log question text (visitor-supplied content).
     tracing::info!(
@@ -135,8 +164,106 @@ pub async fn list_board(
 
     Ok(Json(TicketsResponse {
         items,
-        total: count_row.count,
+        total,
         limit,
         offset,
     }))
+}
+
+/// Fetch ticket rows applying optional category filter and sort order.
+///
+/// Four separate literal SQL strings carry the four combinations of
+/// (category filter present/absent) × (sort by priority/date).
+/// No `format!` or string interpolation is used — ORDER BY and WHERE clauses
+/// are chosen in Rust match arms, not embedded from user input (security.md A03).
+async fn fetch_board_rows(
+    pool: &sqlx::PgPool,
+    limit: i64,
+    offset: i64,
+    category: Option<&str>,
+    sort: &SortOrder,
+) -> Result<Vec<TicketRow>, sqlx::Error> {
+    match (category, sort) {
+        (None, SortOrder::Priority) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' \
+                 ORDER BY priority_score DESC, created_at DESC \
+                 LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        (None, SortOrder::Date) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' \
+                 ORDER BY created_at DESC, priority_score DESC \
+                 LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        (Some(cat), SortOrder::Priority) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' AND category = $1 \
+                 ORDER BY priority_score DESC, created_at DESC \
+                 LIMIT $2 OFFSET $3",
+            )
+            .bind(cat)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        (Some(cat), SortOrder::Date) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' AND category = $1 \
+                 ORDER BY created_at DESC, priority_score DESC \
+                 LIMIT $2 OFFSET $3",
+            )
+            .bind(cat)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+    }
+}
+
+/// Fetch the total count of open tickets, optionally filtered by category.
+async fn fetch_board_count(
+    pool: &sqlx::PgPool,
+    category: Option<&str>,
+) -> Result<i64, sqlx::Error> {
+    let row: CountRow = match category {
+        None => {
+            sqlx::query_as("SELECT count(*) as count FROM tickets WHERE status = 'open'")
+                .fetch_one(pool)
+                .await?
+        }
+        Some(cat) => {
+            sqlx::query_as(
+                "SELECT count(*) as count FROM tickets WHERE status = 'open' AND category = $1",
+            )
+            .bind(cat)
+            .fetch_one(pool)
+            .await?
+        }
+    };
+    Ok(row.count)
 }

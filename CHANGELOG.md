@@ -9,6 +9,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **BOARD-001 AFK** (gateway): `GET /v1/board` accepts optional `?category=<text>` filter (exact match, bound param — no SQL interpolation) and `?sort=priority|date` ordering. `sort` is modelled as a `SortOrder` enum deserialized from the query param with a `Priority` default; four separate `sqlx::query_as` literal SQL calls express the four (category × sort) combinations — no `format!` macro is ever used. Omitting both params preserves today's exact behaviour (backward-compatible).
 - **#191 PLATFORM-001** (frontend): Next.js 15 App Router bootstrap. `frontend/` scaffold with App Router + React Server Components + TypeScript strict. Global layout shell (`RootLayout`) with warm-brown / near-black / off-white design tokens matching `gateway/static/assets/styles.css` exactly (CSS Modules, no Tailwind). Responsive nav + main + footer. Home page route. Vitest unit tests + Playwright smoke test. CI `frontend` job (typecheck + lint + vitest + playwright). ADR-0012 authored; ADR-0005 marked superseded.
 
 ### Fixed

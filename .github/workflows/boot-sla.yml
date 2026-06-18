@@ -4,13 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - ".claude/**"
-      - "CHANGELOG.md"
-      - ".gitignore"
-      - "LICENSE"
+    # This workflow rebuilds and boots the gateway/workers images and the compose
+    # stack — a frontend- or docs-only change cannot affect boot. Run only when the
+    # images, the stack, or the boot/integration tooling can actually change, so
+    # most PRs skip the ~5 min image rebuild.
+    paths:
+      - "gateway/**"
+      - "workers/**"
+      - "infra/docker/**"
+      - "migrations/**"
+      - "docker-compose.yml"
+      - "scripts/measure-boot.sh"
+      - "tests/integration/test_stack.sh"
+      - "tests/migrations/**"
+      - ".github/workflows/boot-sla.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

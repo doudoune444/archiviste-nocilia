@@ -5,9 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY src/ src/
-RUN uv sync --frozen --no-dev || uv sync --no-dev
+RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 CMD ["uv", "run", "uvicorn", "archiviste_workers.main:app", "--host", "0.0.0.0", "--port", "8000"]

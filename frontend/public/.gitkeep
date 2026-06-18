@@ -1,0 +1,4 @@
+# Keeps frontend/public/ present so infra/docker/frontend.Dockerfile's
+# `COPY --from=builder /app/public ./public` resolves. Next.js standalone
+# output does not bundle public/, so the runtime stage copies it explicitly;
+# without this directory the Docker build fails (`/app/public: not found`).

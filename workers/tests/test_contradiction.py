@@ -1,15 +1,18 @@
 """#162 — 4-way verdict judging: vote threshold, ticket policy, retrieval fallback, redaction.
+#172 — typed signal outcome (refused/confirmed/indecisive) + robust parse_verdict.
 
 AC references:
   - present verdict (>=2 votes) → no ticket raised
   - absent verdict (>=2 votes) → ticket raised
   - contradiction verdict (>=2 votes) → ticket raised
-  - unclear >=2 → ticket raised
+  - unclear >=2 → indecisive, NO ticket (#172: removed from TICKET_TRIGGERING_VERDICTS)
   - no-citation retrieval path → judges run against retrieved chunks
   - judge failure → unclear (fail-safe)
   - redaction: emitted reason must not contain chunk body text
   - ACL: re-resolution drops chunks above caller tier
   - request validation maps to contract error enum
+  - #172 outcome: present x2 -> refused; absent x2 -> confirmed; unclear x2 -> indecisive
+  - #172 parse_verdict: accented-lead replies correctly extract known keyword
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
 
 from archiviste_workers.contradiction import service as service_module
-from archiviste_workers.contradiction.models import Citation, VerifyContradictionRequest
+from archiviste_workers.contradiction.models import Citation, Outcome, VerifyContradictionRequest
 from archiviste_workers.contradiction.prompt import parse_verdict
 from archiviste_workers.contradiction.repository import resolve_cited_sources
 from archiviste_workers.contradiction.router import router as contradiction_router
@@ -99,18 +102,41 @@ class _FakeJudgeLlm:
         ("Je ne sais pas", "unclear", True),
         # Old CONTRADICTION-only token still maps correctly.
         ("CONTRADICTION", "contradiction", False),
-        # NO_CONTRADICTION (old token): full token → unknown → unclear; no remainder → no reason.
-        ("NO_CONTRADICTION", "unclear", False),
+        # NO_CONTRADICTION (old token): no known keyword at a word boundary → unclear.
+        # #172: reason = stripped reply (not empty), since no keyword was consumed.
+        ("NO_CONTRADICTION", "unclear", True),
+        # #172: accented-lead reply — "Évaluation: PRESENT ..." must yield present, not unclear.
+        ("Évaluation: PRESENT — le fait est confirmé.", "present", True),
+        # #172: lowercase leading word before keyword mid-sentence.
+        ("À mon avis, ABSENT des sources.", "absent", True),
+        # #172: garbage text with no known keyword → unclear.
+        ("Je ne sais vraiment pas quoi répondre.", "unclear", True),
+        # #172: keyword appears after a long preamble (mid-sentence).
+        (
+            "Après analyse approfondie, je conclus : CONTRADICTION entre les sources.",
+            "contradiction",
+            True,
+        ),
     ],
 )
 def test_parse_verdict(reply: str, expected_verdict: str, has_reason: bool) -> None:
-    # AC: parse_verdict returns (Verdict, reason); unknown/empty → unclear fail-safe.
+    # AC #172: first known keyword found; accented/non-ASCII lead -> correct verdict.
+    # AC: unknown/empty -> unclear fail-safe.
     verdict, reason = parse_verdict(reply)
     assert verdict == expected_verdict
     if has_reason:
         assert len(reason) > 0
     else:
         assert reason == ""
+
+
+def test_parse_verdict_length_changing_char_preserves_reason() -> None:
+    # #172 regression: a length-changing uppercase char before the keyword (ß→SS) must
+    # not desync the reason slice. Searching the original (IGNORECASE) keeps the span 1:1;
+    # uppercasing first would drop the leading char(s) of the reason.
+    verdict, reason = parse_verdict("daß groß ABSENT totalement absent des sources.")
+    assert verdict == "absent"
+    assert reason == "totalement absent des sources"
 
 
 # ---------------------------------------------------------------------------
@@ -177,21 +203,26 @@ async def _run(llm: Any, *, tier: str = "anonymous", force: bool = False) -> Any
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("replies", "expected_verdict", "should_raise_ticket"),
+    ("replies", "expected_verdict", "should_raise_ticket", "expected_outcome"),
     [
         # >=2 present → no ticket (AC: present >=2 → not_raised).
+        # #172: outcome = refused.
         (
             ["PRESENT\nFait confirmé.", "PRESENT\nFait confirmé.", "UNCLEAR\n"],
             "present",
             False,
+            "refused",
         ),
         # >=2 absent → ticket (AC: absent >=2 → ticket raised).
+        # #172: outcome = confirmed.
         (
             ["ABSENT\nBlowen absent.", "ABSENT\nBlowen absent.", "UNCLEAR\n"],
             "absent",
             True,
+            "confirmed",
         ),
         # >=2 contradiction → ticket (AC: contradiction >=2 → ticket raised).
+        # #172: outcome = confirmed.
         (
             [
                 "CONTRADICTION\nSources en désaccord.",
@@ -200,10 +231,13 @@ async def _run(llm: Any, *, tier: str = "anonymous", force: bool = False) -> Any
             ],
             "contradiction",
             True,
+            "confirmed",
         ),
-        # >=2 unclear → ticket (AC: unclear >=2 → ticket raised).
-        (["UNCLEAR\n", "UNCLEAR\n", "PRESENT\nFait présent."], "unclear", True),
+        # >=2 unclear → NO ticket (#172: unclear removed from TICKET_TRIGGERING_VERDICTS).
+        # #172: outcome = indecisive. REPAIRED from old "unclear >=2 → ticket" behavior.
+        (["UNCLEAR\n", "UNCLEAR\n", "PRESENT\nFait présent."], "unclear", False, "indecisive"),
         # Split vote (1 each for 3 different verdicts) → unclear, no ticket.
+        # #172: outcome = indecisive.
         (
             [
                 "PRESENT\nFait présent.",
@@ -212,6 +246,7 @@ async def _run(llm: Any, *, tier: str = "anonymous", force: bool = False) -> Any
             ],
             "unclear",
             False,
+            "indecisive",
         ),
     ],
 )
@@ -221,11 +256,14 @@ async def test_verdict_vote_threshold(
     replies: list[str],
     expected_verdict: str,
     should_raise_ticket: bool,
+    expected_outcome: Outcome,
 ) -> None:
-    # AC: winning verdict = plurality >=2; any non-present >=2 raises ticket.
+    # AC: winning verdict = plurality >=2; absent/contradiction >=2 raises ticket; unclear does NOT.
+    # AC #172: outcome classification is explicit on VerificationResult.
     result = await _run(_FakeJudgeLlm(replies))
 
     assert result.verdict == expected_verdict
+    assert result.outcome == expected_outcome  # #172
     if should_raise_ticket:
         assert len(ticket_spy) == 1
         assert ticket_spy[0]["question"] == CLAIM
@@ -241,12 +279,16 @@ async def test_verdict_vote_threshold(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_stub_sources")
 async def test_judge_failure_counts_as_unclear(ticket_spy: list[dict[str, str]]) -> None:
-    # AC: failed judge → unclear (fail-safe); 3 unclear >=2 → ticket raised.
+    # AC: failed judge → unclear (fail-safe).
+    # #172 REPAIRED: 3 unclear votes → >=2 majority BUT unclear no longer triggers ticket.
+    # outcome = indecisive, no ticket raised.
     result = await _run(_FakeJudgeLlm([], raise_all=True))
 
     assert result.verdict == "unclear"
-    # 3 unclear votes → >=2 → ticket raised.
-    assert len(ticket_spy) == 1
+    assert result.outcome == "indecisive"  # #172
+    # #172: unclear no longer in TICKET_TRIGGERING_VERDICTS → no ticket.
+    assert ticket_spy == []
+    assert result.ticket_action == "not_raised"
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +698,44 @@ async def test_force_always_creates_new_ticket_even_when_similar_open_exists(
 
     async with clean_db.acquire() as conn:
         await conn.execute("DELETE FROM tickets")
+
+
+# ---------------------------------------------------------------------------
+# #172: force path outcome classification
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_force_after_present_outcome_is_refused(
+    ticket_spy: list[dict[str, Any]],
+) -> None:
+    """#172 AC: force=True after present majority -> outcome=refused + ticket created."""
+    # present >=2 -> should_raise=False; force=True -> ticket created, outcome=refused.
+    replies = ["PRESENT\nFait présent.", "PRESENT\nFait présent.", "UNCLEAR\n"]
+    result = await _run(_FakeJudgeLlm(replies), force=True)
+
+    assert result.verdict == "present"
+    assert result.outcome == "refused"  # #172: forced ticket never masquerades as confirmed
+    assert result.ticket_action in {"created", "incremented"}
+    assert len(ticket_spy) == 1
+    assert ticket_spy[0]["judges_not_passed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_sources")
+async def test_force_after_unclear_outcome_is_indecisive(
+    ticket_spy: list[dict[str, Any]],
+) -> None:
+    """#172 AC: force=True after no-majority (unclear) → outcome=indecisive + ticket created."""
+    replies = ["PRESENT\nFait présent.", "ABSENT\nAbsent.", "CONTRADICTION\nContradiction."]
+    result = await _run(_FakeJudgeLlm(replies), force=True)
+
+    assert result.verdict == "unclear"
+    assert result.outcome == "indecisive"  # #172: forced ticket, underlying unclear → indecisive
+    assert result.ticket_action in {"created", "incremented"}
+    assert len(ticket_spy) == 1
+    assert ticket_spy[0]["judges_not_passed"] is True
 
 
 # ---------------------------------------------------------------------------

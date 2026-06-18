@@ -18,6 +18,7 @@ from archiviste_workers.contradiction.models import (
     RETRIEVAL_TOP_K,
     TICKET_TRIGGERING_VERDICTS,
     Citation,
+    Outcome,
     TicketAction,
     Verdict,
 )
@@ -69,6 +70,22 @@ class VerificationResult:
     reason: str
     ticket_action: TicketAction
     ticket_id: str | None
+    outcome: Outcome
+
+
+def _derive_outcome(verdict: Verdict, should_raise: bool) -> Outcome:
+    """Pure function: map judge result to typed outcome (#172).
+
+    confirmed iff should_raise (judge-confirmed absent/contradiction majority).
+    refused iff verdict == present (lore is consistent).
+    indecisive otherwise (unclear, no-majority, no-sources, or force path).
+    A force=True ticket is the untrusted judges_not_passed path — never confirmed.
+    """
+    if should_raise:
+        return "confirmed"
+    if verdict == "present":
+        return "refused"
+    return "indecisive"
 
 
 async def _run_judge(
@@ -231,7 +248,7 @@ async def verify_contradiction(
     sources = await _resolve_sources(pool, embedder, citations, user_tier, claim, request_id)
 
     if sources is None:
-        return VerificationResult("unclear", _REASON_NO_SOURCES, "not_raised", None)
+        return VerificationResult("unclear", _REASON_NO_SOURCES, "not_raised", None, "indecisive")
 
     if not sources:
         logger.info(
@@ -239,7 +256,7 @@ async def verify_contradiction(
             request_id=request_id,
             conversation_id=conversation_id,
         )
-        return VerificationResult("unclear", _REASON_NO_SOURCES, "not_raised", None)
+        return VerificationResult("unclear", _REASON_NO_SOURCES, "not_raised", None, "indecisive")
 
     raw_outcomes: list[tuple[Verdict, str]] = list(
         await asyncio.gather(
@@ -272,19 +289,24 @@ async def verify_contradiction(
             request_id=request_id,
             judges_not_passed=False,
         )
+        outcome = _derive_outcome(winning_verdict, should_raise=True)
         logger.info(
             "contradiction_ticket_raised",
             request_id=request_id,
             conversation_id=conversation_id,
             verdict=winning_verdict,
             ticket_action=ticket.action,
+            outcome=outcome,
         )
-        return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)
+        return VerificationResult(
+            winning_verdict, safe_reason, ticket.action, ticket.ticket_id, outcome
+        )
 
     if force:
         # Human override: judges did not confirm, but the visitor insists (#163/#175).
         # Dedup is bypassed — force always inserts a new ticket so the override
         # appears on the board with its own "non confirmé par les juges" badge (#175).
+        # outcome is derived from the underlying verdict, never "confirmed" (#172).
         ticket = await create_or_increment(
             pool,
             embedder,
@@ -294,20 +316,26 @@ async def verify_contradiction(
             judges_not_passed=True,
             force=True,
         )
+        outcome = _derive_outcome(winning_verdict, should_raise=False)
         logger.info(
             "contradiction_ticket_forced",
             request_id=request_id,
             conversation_id=conversation_id,
             verdict=winning_verdict,
             ticket_action=ticket.action,
+            outcome=outcome,
         )
-        return VerificationResult(winning_verdict, safe_reason, ticket.action, ticket.ticket_id)
+        return VerificationResult(
+            winning_verdict, safe_reason, ticket.action, ticket.ticket_id, outcome
+        )
 
+    outcome = _derive_outcome(winning_verdict, should_raise=False)
     logger.info(
         "contradiction_no_ticket",
         request_id=request_id,
         conversation_id=conversation_id,
         verdict=winning_verdict,
         has_majority=has_majority,
+        outcome=outcome,
     )
-    return VerificationResult(winning_verdict, safe_reason, "not_raised", None)
+    return VerificationResult(winning_verdict, safe_reason, "not_raised", None, outcome)

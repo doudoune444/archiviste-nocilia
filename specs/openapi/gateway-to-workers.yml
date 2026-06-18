@@ -334,7 +334,7 @@ components:
 
     VerifyContradictionResponse:
       type: object
-      required: [verdict, reason, ticket_action]
+      required: [verdict, reason, ticket_action, outcome]
       properties:
         verdict:
           type: string
@@ -350,11 +350,22 @@ components:
             Synthesized single-sentence reason for the visitor/board.
             References only verdict and source_path identifiers — never raw chunk body text.
             Per-judge reasons are logged server-side only.
+        outcome:
+          type: string
+          enum: [confirmed, refused, indecisive]
+          description: |
+            Typed signal outcome (#172), derived from the judge majority and orthogonal
+            to ticketing:
+            confirmed = absent/contradiction majority → lore-gap ticket raised;
+            refused = present majority → lore is consistent, no gap;
+            indecisive = unclear majority, no majority, or no sources → judges could not decide.
+            A force-raised ticket (judges_not_passed) NEVER reports confirmed.
         ticket_action:
           type: string
           enum: [created, incremented, skipped_error, not_raised]
           description: |
-            not_raised when verdict is present or no verdict reaches >=2 votes;
+            not_raised when no ticket is raised (refused / indecisive / non-triggering verdict);
+            created or incremented on a confirmed lore-gap or a forced override;
             skipped_error when a ticket should be raised but the write failed (fail-soft).
         ticket_id:
           type: string

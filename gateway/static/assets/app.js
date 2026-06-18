@@ -130,14 +130,11 @@
     signalerFeedback.hidden = false;
   }
 
-  function showSecondStep(verdict, reason) {
-    // verdict + reason shown so the visitor understands the judges' position.
-    const verdictLine = verdict ? "Verdict : " + verdict + "." : "";
+  function showSecondStep(outcomeMsg, reason) {
+    // outcome-specific message + reason shown; raw verdict token never shown to user (#172).
     const reasonLine = reason ? reason : "";
     signalerFeedback.textContent =
-      (verdictLine ? verdictLine + " " : "") +
-      (reasonLine || "") +
-      " Les juges n'ont pas confirmé — voulez-vous envoyer quand même ?";
+      outcomeMsg + (reasonLine ? " " + reasonLine : "");
     signalerFeedback.hidden = false;
     signalerSecondRow.hidden = false;
     signalerSubmitBtn.disabled = true;
@@ -213,23 +210,34 @@
           signalerSubmitBtn.disabled = false;
           return;
         }
+        // Branch on outcome (#172): confirmed/refused/indecisive.
+        // Raw verdict token is never shown to the user.
+        const outcome = body && body.outcome;
         const action = body && body.ticket_action;
-        if (action === "created" || action === "incremented") {
-          const verdict = (body && body.verdict) || "";
-          const reason = (body && body.reason) || "";
+        const reason = (body && body.reason) || "";
+        const ticketPersisted =
+          action === "created" || action === "incremented";
+        if (outcome === "confirmed" && ticketPersisted) {
+          // Judges confirmed absent/contradiction — ticket registered.
           showSignalerFeedback(
-            "Signalement enregistré. Verdict : " +
-              verdict +
-              ". " +
-              reason
+            "Incohérence confirmée — signalement enregistré." +
+              (reason ? " " + reason : "")
           );
           // FIX 3: re-enable + clear so the panel is not stuck after a successful first submit.
           signalerSubmitBtn.disabled = false;
           signalerClaim.value = "";
-        } else if (action === "not_raised") {
-          showSecondStep(body && body.verdict, body && body.reason);
+        } else if (outcome === "confirmed") {
+          // confirmed but the ticket write failed (skipped_error): never claim success.
+          showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
+          signalerSubmitBtn.disabled = false;
+        } else if (outcome === "refused") {
+          // Judges confirmed lore is consistent.
+          showSecondStep("Le lore est cohérent, signal refusé.", reason);
+        } else if (outcome === "indecisive") {
+          // Judges could not decide.
+          showSecondStep("Les juges n'ont pas pu trancher.", reason);
         } else {
-          // skipped_error or unexpected
+          // skipped_error or unexpected outcome value
           showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
           signalerSubmitBtn.disabled = false;
         }

@@ -17,10 +17,16 @@ TicketAction = Literal["created", "incremented", "skipped_error", "not_raised"]
 # Four-way verdict enum (design decision #1).
 Verdict = Literal["present", "absent", "contradiction", "unclear"]
 
+# Typed signal outcome (#172).
+# confirmed: judges confirmed absent/contradiction majority → ticket raised.
+# refused: judges confirmed present majority → lore is consistent, no ticket.
+# indecisive: unclear majority, no majority, or no sources → judges could not decide.
+# A force=True ticket never reports confirmed (it is the untrusted judges_not_passed path).
+Outcome = Literal["confirmed", "refused", "indecisive"]
+
 # Verdicts that trigger a ticket when they win with >=2 votes (design decision #4).
-TICKET_TRIGGERING_VERDICTS: Final[frozenset[str]] = frozenset(
-    {"absent", "contradiction", "unclear"}
-)
+# #172: "unclear" removed — unclear majority is now indecisive, no ticket raised.
+TICKET_TRIGGERING_VERDICTS: Final[frozenset[str]] = frozenset({"absent", "contradiction"})
 
 # Retrieval fallback top-k when no citations are provided (design decision #5).
 RETRIEVAL_TOP_K: Final = 5
@@ -47,3 +53,5 @@ class VerifyContradictionResponse(BaseModel):
     reason: str
     ticket_action: TicketAction
     ticket_id: str | None = None
+    # Explicit typed outcome (#172): confirmed/refused/indecisive.
+    outcome: Outcome

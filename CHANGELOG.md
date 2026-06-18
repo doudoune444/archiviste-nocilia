@@ -7,6 +7,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **#191 PLATFORM-001** (frontend): Next.js 15 App Router bootstrap. `frontend/` scaffold with App Router + React Server Components + TypeScript strict. Global layout shell (`RootLayout`) with warm-brown / near-black / off-white design tokens matching `gateway/static/assets/styles.css` exactly (CSS Modules, no Tailwind). Responsive nav + main + footer. Home page route. Vitest unit tests + Playwright smoke test. CI `frontend` job (typecheck + lint + vitest + playwright). ADR-0012 authored; ADR-0005 marked superseded.
+
 ### Fixed
 
 - **#173** (frontend): distinct non-recoverable message for `skipped_error` on the send-anyway path. When workers returns `ticket_action="skipped_error"` (HTTP 200, server-side write failure) after a force=true submission, the UI now shows "Le serveur n'a pas pu enregistrer le signalement. Réessayez plus tard." and leaves "Envoyer quand même" disabled (non-recoverable) while re-enabling "Annuler" only — instead of the generic recoverable retry copy that wrongly re-offered a retry the user could never resolve.

@@ -1,15 +1,19 @@
-//! Integration tests for `GET /v1/me` (SEC-001 PR-a, IDN-001).
+//! Integration tests for `GET /v1/me` (SEC-001 PR-a, IDN-001, PLATFORM-003).
 //!
 //! Covers AC-9 (tier/fingerprint response) and AC-10 (deterministic anonymous
 //! `user_id`).  IDN-001: `user_id` derived solely from `archiviste_anon` cookie
 //! UUID; `fingerprint` field carries the cookie UUID string (not a SHA-256 hex).
+//! PLATFORM-003: member identity returns `email`; anonymous returns `email: null`.
 
 #![allow(clippy::unwrap_used)]
 // Pedantic doc_markdown suppressed for test prose (cf. test_observability_status.rs).
 #![allow(clippy::doc_markdown)]
 
 mod common;
-use common::jwt_helpers::{make_test_config, sign_test_token};
+use common::{
+    auth_mocks::{InMemorySessionCreator, InMemoryUserLookup},
+    jwt_helpers::{make_test_config, sign_test_token},
+};
 
 use archiviste_gateway::{router, state::AppState};
 use axum::body::Body;
@@ -212,4 +216,106 @@ async fn ac9c_member_jwt_returns_tier_member_no_fingerprint() {
         resp.status().is_success() || resp.status() == StatusCode::UNAUTHORIZED,
         "GET /v1/me must not 500 when JWT present but DB unreachable"
     );
+}
+
+// ---------------------------------------------------------------------------
+// PLATFORM-003: email field
+// ---------------------------------------------------------------------------
+
+/// PLATFORM-003 AC: anonymous identity → `email` field is `null`.
+#[tokio::test]
+async fn platform003_anonymous_returns_email_null() {
+    // PLATFORM-003: anonymous callers must never receive an email field.
+    let app = router(make_state());
+    let resp = get_me(app, None, None).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["tier"], "anonymous");
+    assert!(
+        body["email"].is_null(),
+        "anonymous identity must return email=null"
+    );
+}
+
+/// PLATFORM-003 AC: member identity with a seeded email in the mock lookup →
+/// response contains the email.
+#[tokio::test]
+async fn platform003_member_identity_returns_email() {
+    // PLATFORM-003: member tier → email populated from user_lookup.find_email_by_id.
+    let user_id = uuid::Uuid::new_v4();
+    let session_id = uuid::Uuid::new_v4();
+    let expected_email = "member@example.com";
+
+    // Seed a member in the in-memory lookup (normalised email as key).
+    let lookup = Arc::new(InMemoryUserLookup::with_user(
+        expected_email,
+        user_id,
+        // password_hash not needed — only find_email_by_id is exercised here.
+        "$argon2id$v=19$m=19456,t=2,p=1$placeholder$placeholder".to_string(),
+        "member",
+    ));
+    let creator = Arc::new(InMemorySessionCreator);
+
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.request_timeout_ms = 5_000;
+    let state = Arc::new(AppState::new_with_mocks(config, lookup, creator).unwrap());
+
+    let token = sign_test_token(
+        user_id,
+        archiviste_gateway::auth::extractor::UserTier::Member,
+        session_id,
+    );
+
+    let app = router(Arc::clone(&state));
+    let resp = get_me(app, None, Some(&token)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["tier"], "member");
+    assert!(
+        body["fingerprint"].is_null(),
+        "member must have null fingerprint"
+    );
+    assert_eq!(
+        body["email"].as_str().unwrap(),
+        expected_email,
+        "member identity must return the email from user_lookup"
+    );
+}
+
+/// PLATFORM-003 AC: member identity when `user_lookup` is absent (None) →
+/// response still returns 200 with email=null (fail-soft).
+#[tokio::test]
+async fn platform003_member_without_lookup_returns_email_null_not_500() {
+    // PLATFORM-003 fail-soft: user_lookup=None → email=null, never 500.
+    let user_id = uuid::Uuid::new_v4();
+    let session_id = uuid::Uuid::new_v4();
+
+    // AppState::new has no user_lookup configured.
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.request_timeout_ms = 5_000;
+    let state = Arc::new(AppState::new(config).unwrap());
+
+    let token = sign_test_token(
+        user_id,
+        archiviste_gateway::auth::extractor::UserTier::Member,
+        session_id,
+    );
+
+    let app = router(Arc::clone(&state));
+    let resp = get_me(app, None, Some(&token)).await;
+
+    // Must not 500; may be 200 (anon fallback because no session DB) or 200 member.
+    assert!(
+        resp.status().is_success() || resp.status() == StatusCode::UNAUTHORIZED,
+        "GET /v1/me must not 500 when user_lookup is absent"
+    );
+    if resp.status() == StatusCode::OK {
+        let body = body_json(resp).await;
+        assert!(
+            body["email"].is_null(),
+            "email must be null when user_lookup is absent"
+        );
+    }
 }

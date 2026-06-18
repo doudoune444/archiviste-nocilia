@@ -37,6 +37,10 @@ type MemberFuture<'a> = Pin<
 type UuidFuture<'a> =
     Pin<Box<dyn std::future::Future<Output = Result<Uuid, UserLookupError>> + Send + 'a>>;
 
+/// Boxed future returning an optional email string.
+pub type EmailFuture<'a> =
+    Pin<Box<dyn std::future::Future<Output = Result<Option<String>, UserLookupError>> + Send + 'a>>;
+
 // ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
@@ -67,6 +71,15 @@ pub trait UserLookup: Send + Sync {
     ///
     /// Returns `UserLookupError::Unavailable` on DB failure.
     fn create_member<'a>(&'a self, email: &'a str, password_hash: &'a str) -> UuidFuture<'a>;
+
+    /// Fetch the email address for `user_id`, or `None` if the user does not exist.
+    ///
+    /// Used by `GET /v1/me` to populate the `email` field for member/author tiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UserLookupError::Unavailable` on DB failure.
+    fn find_email_by_id(&self, user_id: Uuid) -> EmailFuture<'_>;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +131,17 @@ impl UserLookup for PgUserLookup {
             .await
             .map_err(|_| UserLookupError::Unavailable)?;
             Ok(user_id)
+        })
+    }
+
+    fn find_email_by_id(&self, user_id: Uuid) -> EmailFuture<'_> {
+        Box::pin(async move {
+            let row: Option<(String,)> = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.0)
+                .await
+                .map_err(|_| UserLookupError::Unavailable)?;
+            Ok(row.map(|(email,)| email))
         })
     }
 }

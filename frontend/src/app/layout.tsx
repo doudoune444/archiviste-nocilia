@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import "@/styles/globals.css";
 import styles from "./layout.module.css";
+import AuthAwareNav from "@/components/auth-aware-nav/AuthAwareNav";
 
 export const metadata: Metadata = {
   title: "Archiviste Nocilia",
@@ -18,23 +18,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
     <html lang="fr">
       <body>
         <div className={styles.shell}>
-          <nav className={styles.nav}>
-            <Link href="/" className={styles.navBrand}>
-              Archiviste Nocilia
-            </Link>
-            <ul className={styles.navLinks}>
-              <li>
-                <Link href="/" className={styles.navLink}>
-                  Accueil
-                </Link>
-              </li>
-              <li>
-                <Link href="/board" className={styles.navLink}>
-                  Tickets
-                </Link>
-              </li>
-            </ul>
-          </nav>
+          <AuthAwareNav />
           <main className={styles.main}>{children}</main>
           <footer className={styles.footer}>
             <p>Archives de Nocilia — usage personnel</p>

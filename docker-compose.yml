@@ -59,9 +59,12 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
-      interval: 10s
+      # Poll fast so readiness is detected within ~2s, not in 10s steps.
+      # start_period covers the slow cold start; retries*interval (~30s) is the
+      # post-start unhealthy window.
+      interval: 2s
       timeout: 5s
-      retries: 5
+      retries: 15
       start_period: 90s
 
   gateway:
@@ -85,9 +88,11 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
-      interval: 10s
+      # Poll fast: gateway boots quickly and only starts after workers is healthy,
+      # so 2s polling removes ~10s of detection lag at the end of the chain.
+      interval: 2s
       timeout: 5s
-      retries: 5
+      retries: 15
 
   # Tools profile: not started by `docker compose up -d`.
   # ING-003: fake-gcs-server for local + integration tests. Pin matches R3 (cf plan).

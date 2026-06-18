@@ -290,6 +290,14 @@
           // FIX 3: clear + re-enable so the visitor is not left with a stuck second-step.
           signalerClaim.value = "";
           signalerSubmitBtn.disabled = false;
+        } else if (action === "skipped_error") {
+          // #173: non-recoverable server-side write failure — show distinct message.
+          // send-anyway stays disabled (retrying cannot succeed); cancel re-enabled so
+          // the visitor can dismiss the panel.
+          showSignalerFeedback(
+            "Le serveur n'a pas pu enregistrer le signalement. Réessayez plus tard."
+          );
+          signalerCancelBtn.disabled = false;
         } else {
           showSignalerFeedback("Impossible d'envoyer le signalement, réessayez.");
           signalerSendAnywayBtn.disabled = false;

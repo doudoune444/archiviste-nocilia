@@ -16,7 +16,7 @@ vi.mock("@/lib/bff-proxy", () => ({
   forward: vi.fn(),
 }));
 
-import { fetchStats, fetchQuality } from "@/app/observability/page";
+import { fetchStats, fetchQuality } from "@/app/observability/fetch";
 
 // We need to import the mock handle so tests can configure it.
 import { forward } from "@/lib/bff-proxy";

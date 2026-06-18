@@ -27,3 +27,9 @@ output "artifact_registry_repo" {
   description = "Artifact Registry repository URI base."
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.archiviste.repository_id}"
 }
+
+# PLATFORM-004: frontend Cloud Run service URL (new public web origin).
+output "frontend_url" {
+  description = "Cloud Run frontend service URL (new sole public web origin)."
+  value       = google_cloud_run_v2_service.frontend.uri
+}

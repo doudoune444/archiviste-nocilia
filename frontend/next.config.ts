@@ -1,32 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // CSP via headers — PLATFORM-001 AC: at least as strict as gateway.
-  // Hardened nonce-based CSP is deferred to PLATFORM-004 (#193) because
-  // Next.js inline scripts (React hydration) require a per-request nonce
-  // injected through middleware, which is out of scope for this bootstrap slice.
-  async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          {
-            key: "Content-Security-Policy",
-            value:
-              "default-src 'self'; object-src 'none'; frame-ancestors 'none'",
-          },
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-          {
-            key: "Referrer-Policy",
-            value: "strict-origin-when-cross-origin",
-          },
-        ],
-      },
-    ];
-  },
+  // PLATFORM-004: standalone output packages only the files needed to run
+  // `next start` in the Docker image. Combined with the runtime stage copying
+  // .next/standalone + .next/static + public, this produces a minimal image.
+  output: "standalone",
+
+  // CSP is now emitted per-request from middleware.ts (PLATFORM-004 AC-3) so
+  // that a nonce can be injected into script-src and style-src to satisfy the
+  // "no unsafe-inline" requirement at parity with the gateway's own CSP.
+  // The headers() block is intentionally removed — middleware takes ownership.
 };
 
 export default nextConfig;

@@ -17,3 +17,17 @@ check "workers_iam_no_public_invoker" {
     error_message = "workers run.invoker binding must not be allUsers or allAuthenticatedUsers — IAM is the trust boundary (SEC-006 AC-10)."
   }
 }
+
+# PLATFORM-004 AC-2: Guard that the gateway run.invoker binding is never
+# flipped back to allUsers or allAuthenticatedUsers. The gateway is now
+# browser-unreachable by design — IAM is the enforced trust boundary.
+# Parallel to workers_iam_no_public_invoker above (SEC-006 pattern).
+check "gateway_iam_no_public_invoker" {
+  assert {
+    condition = (
+      google_cloud_run_v2_service_iam_member.gateway_runtime_invoker.member != "allUsers" &&
+      google_cloud_run_v2_service_iam_member.gateway_runtime_invoker.member != "allAuthenticatedUsers"
+    )
+    error_message = "gateway run.invoker binding must not be allUsers or allAuthenticatedUsers — gateway is SA-gated (PLATFORM-004 AC-2)."
+  }
+}

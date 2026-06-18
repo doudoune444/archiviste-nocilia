@@ -4,18 +4,29 @@
 
 ```
 ┌─────────────┐
-│   client    │  (web app, curl, ChatGPT plugin, etc.)
+│   browser   │  (archiviste.nocilia.fr via Cloudflare)
 └──────┬──────┘
-       │ HTTPS
+       │ HTTPS (Cloudflare terminates TLS)
        ▼
 ┌──────────────────────────────────────┐
-│         Gateway (Rust, Axum)         │
+│   Frontend (Next.js, Cloud Run)      │  ← PLATFORM-004: new public origin
+│  - App Router RSC pages              │
+│  - bff-proxy: sole caller of gateway │
+│  - nonce-based CSP middleware        │
+│  - allUsers IAM invoker              │
+└──────┬───────────────────────────────┘
+       │ HTTPS + Authorization: Bearer <ID token>
+       │ (gateway IAM-gated: archiviste-runtime SA only)
+       ▼
+┌──────────────────────────────────────┐
+│         Gateway (Rust, Axum)         │  ← not browser-reachable (PLATFORM-004 AC-2)
 │  - JWT auth, tier resolution         │
 │  - Rate limit per user_tier          │
 │  - Request logging + tracing         │
 │  - Forwards to workers via reqwest   │
 └──────┬───────────────────────────────┘
-       │ HTTP (internal, via docker network)
+       │ HTTPS + Authorization: Bearer <ID token>
+       │ (workers IAM-gated: archiviste-runtime SA only)
        ▼
 ┌──────────────────────────────────────┐
 │      Workers (Python, FastAPI)       │
@@ -40,17 +51,26 @@
 
 ## Service boundaries
 
+### Frontend (PLATFORM-004)
+
+- **Owns**: public web origin, browser-facing HTML/CSS/JS, BFF proxy to gateway.
+- **Does NOT own**: auth logic, rate limiting, DB, LLM calls.
+- **Why Cloud Run**: scale-to-zero (near-zero idle cost), consistent with gateway/workers topology.
+- **IAM**: `allUsers` run.invoker (public browser traffic). Attaches SA ID token on outbound gateway calls.
+
 ### Gateway
 
-- **Owns**: HTTP entry, auth, rate limit, request shape validation, forwarding.
+- **Owns**: HTTP entry from the frontend, auth, rate limit, request shape validation, forwarding.
 - **Does NOT own**: business logic, DB schema, LLM calls, embedding logic.
 - **Why Rust**: hot path (every request), low latency target p95 < 50ms forwarding overhead, type-safe contract enforcement.
+- **IAM**: `archiviste-runtime` SA run.invoker only (PLATFORM-004 AC-2). Not directly browser-reachable.
 
 ### Workers
 
 - **Owns**: ingestion pipeline, retrieval logic, generation prompts, eval loop, conversation logging, ticket detection.
 - **Does NOT own**: HTTP entry from internet (gateway is the front), auth.
 - **Why Python**: ecosystem (LangChain, Ragas, sentence-transformers, hypothesis), iteration speed on prompts.
+- **IAM**: `archiviste-runtime` SA run.invoker only (SEC-006).
 
 ## Data model
 
@@ -67,14 +87,15 @@ Key tables:
 
 ### Conversation flow
 
-1. Client sends POST `/v1/chat` to gateway with JWT.
-2. Gateway validates JWT, derives `user_tier`, applies rate limit.
-3. Gateway forwards to worker `/v1/retrieve` then `/v1/generate`.
-4. Worker writes one append-only Markdown file per conversation to GCS at `conversations/{conversation_id}.md`.
-5. Worker indexes the conversation in `conversations` table.
-6. If generation detects lore gap, worker creates row in `tickets` with `conversation_id` FK.
-7. Worker returns answer + cost + `lore_gap_detected` flag + optional `ticket_id`.
-8. Gateway returns to client.
+1. Browser requests page from Frontend (Cloud Run, `archiviste.nocilia.fr`).
+2. Frontend RSC page calls `bff-proxy.forward()` which attaches a metadata ID token.
+3. Gateway validates ID token (IAM), validates JWT, derives `user_tier`, applies rate limit.
+4. Gateway forwards to worker `/v1/retrieve` then `/v1/generate`.
+5. Worker writes one append-only Markdown file per conversation to GCS at `conversations/{conversation_id}.md`.
+6. Worker indexes the conversation in `conversations` table.
+7. If generation detects lore gap, worker creates row in `tickets` with `conversation_id` FK.
+8. Worker returns answer + cost + `lore_gap_detected` flag + optional `ticket_id`.
+9. Gateway returns to frontend; frontend renders result to browser.
 
 ### Ingestion flow
 
@@ -91,9 +112,9 @@ Key tables:
 
 ## Deployment
 
-- **Local**: `docker compose up -d` (gateway, workers, postgres+pgvector, langfuse).
+- **Local**: `docker compose up -d` (gateway, workers, postgres+pgvector, langfuse). Frontend: `cd frontend && npm run dev`.
 - **CI**: GitHub Actions (`.github/workflows/ci.yml`).
-- **Prod**: Cloud Run (gateway and workers separately), Cloud SQL (postgres+pgvector), GCS bucket. Provisioned via Terraform in `infra/terraform/`.
+- **Prod**: Cloud Run (frontend, gateway, workers separately), Cloud SQL (postgres+pgvector), GCS bucket. Provisioned via Terraform in `infra/terraform/`.
 
 ## SLOs
 

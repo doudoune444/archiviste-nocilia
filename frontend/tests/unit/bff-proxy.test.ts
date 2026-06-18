@@ -237,4 +237,75 @@ describe("forward()", () => {
 
     expect(response.status).toBe(401);
   });
+
+  // ─── PLATFORM-004 AC-2: ID-token injection ────────────────────────────────
+  // When CLOUD_RUN_SA_IDENTITY_URL is set, forward() must fetch an ID token
+  // from the metadata server and attach it as Authorization: Bearer <token>.
+  // The metadata fetch is itself a call to global fetch — the spy intercepts both.
+
+  describe("ID-token injection (PLATFORM-004 AC-2)", () => {
+    const METADATA_URL =
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity";
+    const STUB_TOKEN = "stub-google-id-token";
+
+    beforeEach(() => {
+      // Signal that we are running inside Cloud Run (metadata server available).
+      process.env["CLOUD_RUN_SA_IDENTITY_URL"] = METADATA_URL;
+    });
+
+    afterEach(() => {
+      delete process.env["CLOUD_RUN_SA_IDENTITY_URL"];
+    });
+
+    // AC-2: when CLOUD_RUN_SA_IDENTITY_URL is set, the ID token must be attached.
+    it("attaches Authorization: Bearer from the metadata server when CLOUD_RUN_SA_IDENTITY_URL is set", async () => {
+      // fetchSpy intercepts both calls: metadata fetch and gateway fetch.
+      fetchSpy
+        // First call: metadata endpoint returns the stub token.
+        .mockResolvedValueOnce(new Response(STUB_TOKEN, { status: 200 }))
+        // Second call: gateway returns 200.
+        .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+      const incoming = makeIncomingRequest(null);
+      await forward(incoming, "/v1/me");
+
+      // The first fetch call must be to the metadata URL with the gateway audience.
+      const firstCall: Request = fetchSpy.mock.calls[0][0] as Request;
+      expect(firstCall.url).toContain(METADATA_URL);
+      expect(firstCall.url).toContain(encodeURIComponent(TEST_GATEWAY_URL));
+      expect(firstCall.headers.get("Metadata-Flavor")).toBe("Google");
+
+      // The second fetch call (to the gateway) must carry the ID token.
+      const gatewayCall: Request = fetchSpy.mock.calls[1][0] as Request;
+      expect(gatewayCall.headers.get("authorization")).toBe(
+        `Bearer ${STUB_TOKEN}`
+      );
+    });
+
+    // AC-2: when CLOUD_RUN_SA_IDENTITY_URL is NOT set (local/CI env), no
+    // Authorization header is added and only one fetch call is made.
+    it("does not add Authorization header when CLOUD_RUN_SA_IDENTITY_URL is absent", async () => {
+      delete process.env["CLOUD_RUN_SA_IDENTITY_URL"];
+
+      fetchSpy.mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+      const incoming = makeIncomingRequest(null);
+      await forward(incoming, "/v1/me");
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      const gatewayCall: Request = fetchSpy.mock.calls[0][0] as Request;
+      expect(gatewayCall.headers.get("authorization")).toBeNull();
+    });
+
+    // A09: if the metadata server fetch fails, forward() must NOT silently drop
+    // the error — it should propagate so the caller knows the gateway call failed.
+    it("propagates metadata fetch failure without swallowing it", async () => {
+      fetchSpy.mockRejectedValueOnce(new Error("metadata server unreachable"));
+
+      const incoming = makeIncomingRequest(null);
+      await expect(forward(incoming, "/v1/me")).rejects.toThrow(
+        "metadata server unreachable"
+      );
+    });
+  });
 });

@@ -25,16 +25,19 @@ data "cloudflare_zone" "nocilia_net" {
   account_id = var.cloudflare_account_id
 }
 
-# DNS: archiviste.nocilia.fr → Cloud Run gateway (proxied through Cloudflare).
+# DNS: archiviste.nocilia.fr → Cloud Run frontend (proxied through Cloudflare).
+# PLATFORM-004: CNAME target moved from gateway.uri to frontend.uri.
+# The gateway run.app URL is now IAM-gated (SA-only invoker); no public DNS
+# must point at it. The frontend is the new sole public web origin.
 #
 # Region constraint: google_cloud_run_domain_mapping is NOT available in europe-west9.
 # Supported regions are limited (us-central1, us-east1/4, us-west1, europe-west1,
 # asia-east1, asia-northeast1). Rather than relocate the whole stack to europe-west1,
 # we drop the domain mapping entirely and rely on Cloudflare as the reverse proxy:
-#  - CNAME archiviste.nocilia.fr → <gateway>.run.app, Cloudflare proxied (orange cloud)
+#  - CNAME archiviste.nocilia.fr → <frontend>.run.app, Cloudflare proxied (orange cloud)
 #  - Cloudflare terminates TLS at edge with its own cert
 #  - A Worker route on archiviste.nocilia.fr/* rewrites the request to the
-#    <gateway>.run.app origin (see cloudflare_workers_script below).
+#    <frontend>.run.app origin (see cloudflare_workers_script below).
 # Why a Worker and not an Origin Rule "Host Header Override": Cloud Run's frontend
 # routes by Host header and 404s on the unknown archiviste.nocilia.fr Host. The
 # Origin Rule that fixes this requires a PAID Cloudflare plan (Free returns
@@ -44,13 +47,15 @@ resource "cloudflare_record" "archiviste_fr" {
   zone_id = data.cloudflare_zone.nocilia_fr.id
   name    = "archiviste"
   type    = "CNAME"
-  # Strip "https://" scheme from gateway.uri to get bare hostname for CNAME content.
-  content = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
+  # Strip "https://" scheme from frontend.uri to get bare hostname for CNAME content.
+  # PLATFORM-004: was gateway.uri; now frontend.uri (new public origin).
+  content = replace(google_cloud_run_v2_service.frontend.uri, "https://", "")
   proxied = true
 }
 
 # Worker reverse-proxy: rewrites archiviste.nocilia.fr requests to the
-# <gateway>.run.app origin so Cloud Run's Host-based frontend routes to the gateway.
+# <frontend>.run.app origin so Cloud Run's Host-based routing reaches the frontend.
+# PLATFORM-004: ORIGIN_HOST moved from gateway.uri to frontend.uri.
 # Replaces the paid-plan-only Origin Rule (see comment above). ORIGIN_HOST is the
 # single source of truth for the run.app hostname, shared with the CNAME content.
 resource "cloudflare_workers_script" "host_proxy" {
@@ -61,7 +66,8 @@ resource "cloudflare_workers_script" "host_proxy" {
 
   plain_text_binding {
     name = "ORIGIN_HOST"
-    text = replace(google_cloud_run_v2_service.gateway.uri, "https://", "")
+    # PLATFORM-004: was gateway.uri; now frontend.uri (new public origin).
+    text = replace(google_cloud_run_v2_service.frontend.uri, "https://", "")
   }
 }
 

@@ -28,6 +28,11 @@ export default function RootLayout({ children }: RootLayoutProps) {
                   Accueil
                 </Link>
               </li>
+              <li>
+                <Link href="/board" className={styles.navLink}>
+                  Tickets
+                </Link>
+              </li>
             </ul>
           </nav>
           <main className={styles.main}>{children}</main>

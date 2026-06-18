@@ -110,7 +110,8 @@ async fn ac1_ac2_valid_report_forwarded_to_workers(pool: sqlx::PgPool) {
     let uid_cap = StdArc::clone(&captured_uid);
     let rid_cap = StdArc::clone(&captured_req_id);
 
-    let verdict_body = r#"{"verdict":"contradiction","reason":"Sources en désaccord.","ticket_action":"created","ticket_id":"550e8400-e29b-41d4-a716-446655440001"}"#;
+    // AC-2 (#172): outcome field added to workers response; gateway must pass it through byte-for-byte.
+    let verdict_body = r#"{"verdict":"contradiction","reason":"Sources en désaccord.","ticket_action":"created","ticket_id":"550e8400-e29b-41d4-a716-446655440001","outcome":"confirmed"}"#;
 
     let _mock = server
         .mock("POST", "/v1/verify-contradiction")
@@ -138,10 +139,15 @@ async fn ac1_ac2_valid_report_forwarded_to_workers(pool: sqlx::PgPool) {
     let resp = post_report_as_anon(app, caller_cookie, conv_id).await;
 
     // AC-2: passthrough 200 body (new clean-break shape: verdict + reason, #162)
+    // AC-2 (#172): outcome field survives gateway passthrough byte-for-byte.
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
     assert_eq!(body["verdict"], "contradiction");
     assert_eq!(body["ticket_action"], "created");
+    assert_eq!(
+        body["outcome"], "confirmed",
+        "outcome must survive gateway passthrough"
+    );
 
     // AC-1: identity headers forwarded
     let tier = captured_tier.lock().unwrap().clone().unwrap_or_default();

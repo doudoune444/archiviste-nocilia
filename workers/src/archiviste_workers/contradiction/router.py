@@ -97,10 +97,12 @@ async def post_verify_contradiction(
         conversation_id=parsed.conversation_id,
         verdict=result.verdict,
         ticket_action=result.ticket_action,
+        outcome=result.outcome,
     )
     return VerifyContradictionResponse(
         verdict=result.verdict,
         reason=result.reason,
         ticket_action=result.ticket_action,
         ticket_id=result.ticket_id,
+        outcome=result.outcome,
     )

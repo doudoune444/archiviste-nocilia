@@ -22,8 +22,14 @@ _TOKEN_TO_VERDICT: Final[dict[str, Verdict]] = {
     "UNCLEAR": "unclear",
 }
 
-# First maximal run of [A-Z_] in the uppercased reply — the judge's leading token.
-_LEADING_TOKEN_RE: Final = re.compile(r"[A-Z_]+")
+# Matches any known verdict keyword at a word boundary, case-insensitively.
+# This replaces the old leading-token regex which was ASCII-only and mis-classified
+# replies that start with an accented word (e.g. "Évaluation: PRESENT ...").
+# IGNORECASE lets us search the ORIGINAL reply so the match span maps 1:1 to it —
+# uppercasing first would desync indices for length-changing chars (ß→SS, ﬁ→FI).
+_VERDICT_KEYWORD_RE: Final = re.compile(
+    r"\b(PRESENT|ABSENT|CONTRADICTION|UNCLEAR)\b", re.IGNORECASE
+)
 
 _JUDGE_SYSTEM_PREFIX: Final = (
     "Tu analyses une affirmation sur les archives de Nocilia à la lumière de sources "
@@ -72,18 +78,26 @@ def build_judge_messages(
 def parse_verdict(reply: str) -> tuple[Verdict, str]:
     """Parse judge reply into (verdict, reason).
 
-    Leading token → verdict; unknown/empty/malformed → unclear (fail-safe, design decision #2).
-    Reason = everything after the first token, trimmed.
+    Scans (case-insensitively) for the FIRST occurrence of a known verdict keyword
+    (PRESENT/ABSENT/CONTRADICTION/UNCLEAR) in the reply.  This is robust to accented or
+    non-ASCII leading words (e.g. "Évaluation: PRESENT ...") that the old leading-token
+    regex silently mis-classified as unclear (#172).
+
+    unknown/empty/malformed → unclear (fail-safe, design decision #2).
+    Reason = original text after the matched keyword, trimmed of " .:-\\n".
     Source text is never in the reason by construction (judge prompt forbids quoting).
     """
     stripped = reply.strip()
-    match = _LEADING_TOKEN_RE.search(stripped.upper())
+    if not stripped:
+        return "unclear", ""
+
+    # Search the ORIGINAL string (IGNORECASE) so match.end() maps 1:1 — uppercasing
+    # first would desync indices for length-changing chars (ß→SS, ﬁ→FI).
+    match = _VERDICT_KEYWORD_RE.search(stripped)
     if match is None:
         return "unclear", stripped
 
-    token = match.group()
-    verdict: Verdict = _TOKEN_TO_VERDICT.get(token, "unclear")
-    # Reason is the remainder of the ORIGINAL (non-uppercased) text after the token.
-    token_end = match.start() + len(token)
-    reason = stripped[token_end:].strip(" .:-\n")
+    token = match.group().upper()
+    verdict: Verdict = _TOKEN_TO_VERDICT[token]
+    reason = stripped[match.end() :].strip(" .:-\n")
     return verdict, reason

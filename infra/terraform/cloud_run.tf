@@ -282,6 +282,11 @@ resource "google_cloud_run_v2_service" "frontend" {
   # allUsers invoker (below) makes it publicly reachable via the Cloudflare CNAME.
   ingress = "INGRESS_TRAFFIC_ALL"
 
+  # Cloud Run v2 defaults deletion_protection=true, which blocks the destroy half
+  # of a replace. The frontend is a fresh service still stabilizing through its
+  # bootstrap (image-tag + IAM-flip churn); keep it replaceable.
+  deletion_protection = false
+
   # MED-5: same image drift prevention as gateway and workers.
   lifecycle {
     ignore_changes = [template[0].containers[0].image]

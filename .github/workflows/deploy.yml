@@ -81,15 +81,20 @@ jobs:
           cache-to: type=gha,mode=max
 
       # PLATFORM-004: build and push frontend image on every merge to main.
-      # context=frontend, file=infra/docker/frontend.Dockerfile, tag=:sha only
-      # (:latest is not pinned by any Cloud Run Job, unlike workers/eval).
+      # context=frontend, file=infra/docker/frontend.Dockerfile.
+      # :sha = immutable ref the canary/promote steps deploy. :latest = the
+      # placeholder cloud_run.tf creates the archiviste-frontend service from
+      # (terraform apply needs :latest to exist to bootstrap the service before
+      # the canary step — which uses --no-traffic — can target it).
       - name: build and push frontend
         uses: docker/build-push-action@v6
         with:
           context: frontend
           file: infra/docker/frontend.Dockerfile
           push: true
-          tags: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/frontend:${{ github.sha }}
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/frontend:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/archiviste/frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

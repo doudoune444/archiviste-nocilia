@@ -105,8 +105,8 @@ function resolveRequestId(incoming: Request): string {
 
 /**
  * Builds the outbound headers for the gateway call.
- * Forwards archiviste cookies, the request id, and — when an ID token is
- * available — the Authorization: Bearer header for the SA-gated gateway.
+ * Forwards archiviste cookies, the request id, Content-Type (for POST/PUT/DELETE),
+ * and — when an ID token is available — the Authorization: Bearer header.
  * Deliberately excludes all other incoming headers to avoid header pollution.
  */
 function buildOutboundHeaders(
@@ -122,6 +122,14 @@ function buildOutboundHeaders(
     headers.set("cookie", cookie);
   }
 
+  // AUTH-001: forward Content-Type for POST/PUT/DELETE so the gateway JSON
+  // extractor can parse the request body (gateway enforces application/json).
+  // A09: Content-Type does not contain credentials; safe to forward.
+  const contentType = incoming.headers.get("content-type");
+  if (contentType !== null) {
+    headers.set("content-type", contentType);
+  }
+
   // PLATFORM-004 AC-2: attach ID token for the SA-gated gateway.
   // WHY: gateway IAM binding (gateway_runtime_invoker) restricts invoker to
   // archiviste-runtime SA. Cloud Run validates the Authorization: Bearer JWT
@@ -132,9 +140,11 @@ function buildOutboundHeaders(
   // LATENT COUPLING: the ID token is attached on ALL gateway calls forwarded
   // through this function.  For anon-tolerant routes (e.g. /v1/stats, /v1/board)
   // the gateway falls through an invalid or SA-issued JWT → anonymous tier, so
-  // the token is harmless.  However, if a route gated by AuthUser or RequireAuthor
-  // is ever proxied via forward(), the SA token will cause a spurious 401 because
-  // those extractors expect a user-session JWT, not a Cloud Run SA identity token.
+  // the token is harmless.  However, if a route that relies on the Authorization
+  // header (not cookie-first) for AuthUser is ever proxied via forward(), the SA
+  // token will cause a spurious 401 because those extractors expect a user-session
+  // JWT, not a Cloud Run SA identity token.  Cookie-first routes (e.g. logout)
+  // are unaffected — the gateway reads archiviste_session from the cookie.
   // Resolution when that case arises: add a separate forward variant that omits
   // the Authorization header, or pass the user's session JWT as a bearer token.
   if (idToken.length > 0) {
@@ -168,10 +178,18 @@ export async function forward(
 
   const outboundHeaders = buildOutboundHeaders(incoming, requestId, idToken);
 
+  // AUTH-001: forward the body for POST/PUT/DELETE requests so the gateway
+  // JSON extractor receives the request payload.  GET and HEAD must NOT have
+  // a body (fetch spec §5.3 — body with GET throws in some runtimes).
+  const hasBody = incoming.method !== "GET" && incoming.method !== "HEAD";
+
   const outboundRequest = new Request(`${gatewayUrl}${gatewayPath}`, {
     method: incoming.method,
     headers: outboundHeaders,
-    // body is not forwarded for GET — extend when needed for POST/PUT/DELETE.
+    body: hasBody ? incoming.body : undefined,
+    // duplex is required when sending a streaming body in Node.js fetch.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(hasBody && incoming.body !== null ? { duplex: "half" as any } : {}),
   });
 
   const gatewayResponse = await fetch(outboundRequest, {

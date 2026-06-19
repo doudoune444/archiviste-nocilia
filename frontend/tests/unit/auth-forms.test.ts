@@ -4,9 +4,14 @@
 // AC: 503 → upstream-unavailable French message
 // AC: sub-minimum password rejected before submit
 
+// AC: AUTH-002
+// AC: 409 → email-already-registered French message directing to login
+// AC: sub-minimum password rejected client-side before submit (inherited from AUTH-001)
+
 import { describe, it, expect } from "vitest";
 import {
   mapGatewayStatusToMessage,
+  mapSignupStatusToMessage,
   isPasswordLongEnough,
   PASSWORD_MIN_LEN,
 } from "@/lib/auth-forms";
@@ -130,5 +135,53 @@ describe("mapGatewayStatusToMessage()", () => {
       null
     );
     expect(result503.message).not.toContain("upstream_unavailable");
+  });
+});
+
+describe("mapSignupStatusToMessage()", () => {
+  // AC AUTH-002: 409 → email-already-registered French message directing to login
+  it("maps 409 to a French email-already-registered message", () => {
+    const result = mapSignupStatusToMessage(
+      409,
+      { error: "email_taken", request_id: "req-7" },
+      null
+    );
+    expect(result.message).toContain("déjà");
+    expect(result.retryAfterSeconds).toBeUndefined();
+  });
+
+  it("maps 409 and directs the user to log in", () => {
+    const result = mapSignupStatusToMessage(
+      409,
+      { error: "email_taken", request_id: "req-8" },
+      null
+    );
+    // AC AUTH-002: message must direct user to log in
+    expect(result.message.toLowerCase()).toMatch(/connect/);
+  });
+
+  it("does not expose the raw email_taken error code in the message", () => {
+    const result = mapSignupStatusToMessage(
+      409,
+      { error: "email_taken" },
+      null
+    );
+    expect(result.message).not.toContain("email_taken");
+  });
+
+  // Non-409 errors delegate to the shared mapping behavior
+  it("maps 503 via signup to a French upstream-unavailable message", () => {
+    const result = mapSignupStatusToMessage(
+      503,
+      { error: "upstream_unavailable" },
+      null
+    );
+    expect(result.message).toContain("indisponible");
+  });
+
+  it("maps an unexpected status via signup to a generic French fallback", () => {
+    const result = mapSignupStatusToMessage(500, {}, null);
+    expect(result.message).toBeTruthy();
+    expect(result.message.length).toBeGreaterThan(0);
   });
 });

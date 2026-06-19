@@ -10,6 +10,7 @@
   --color-assistant-bg: #1a1a1a;
   --color-error-bg: #2e1a1a;
   --color-error-text: #e07070;
+  --color-healthy: #4caf50;
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, monospace;
 }

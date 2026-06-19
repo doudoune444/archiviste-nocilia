@@ -1,6 +1,9 @@
 /**
  * Public lore-gap board — React Server Component (BOARD-002 AC1).
  *
+ * BOARD-003: reads searchParams (category, sort) and passes them to the gateway
+ * fetch. Active filter+sort are reflected in the URL (shareable/bookmarkable).
+ *
  * Initial render is fully server-side: fetches open tickets through the
  * bff-proxy (the SOLE gateway boundary) and renders them in TicketTable.
  * The LoadMoreButton client component handles subsequent pagination (AC4).
@@ -12,8 +15,11 @@
 import { cookies, headers } from "next/headers";
 import { forward } from "@/lib/bff-proxy";
 import { LoadMoreButton } from "@/components/board/LoadMoreButton";
+import { BoardControls } from "@/components/category-filter/BoardControls";
+import { filterFromParams, buildGatewayParams } from "@/components/category-filter/params";
 import { BOARD_PAGE_SIZE, isBoardPage } from "@/components/board/types";
 import type { BoardPage } from "@/components/board/types";
+import type { BoardFilter } from "@/components/category-filter/params";
 import styles from "./page.module.css";
 
 /** Builds a synthetic Request so forward() can extract cookies/request-id. */
@@ -37,9 +43,9 @@ type FetchResult =
   | { ok: true; page: BoardPage }
   | { ok: false; requestId: string };
 
-async function fetchInitialBoard(): Promise<FetchResult> {
+async function fetchInitialBoard(filter: BoardFilter): Promise<FetchResult> {
   const req = await buildServerRequest();
-  const params = `?sort=priority&limit=${BOARD_PAGE_SIZE}&offset=0`;
+  const params = buildGatewayParams(filter, BOARD_PAGE_SIZE);
 
   // AC1: bff-proxy is the sole gateway boundary.
   // AC5: wrap forward() + res.json() in try/catch so any throw (network error,
@@ -47,7 +53,7 @@ async function fetchInitialBoard(): Promise<FetchResult> {
   // error state rather than crashing the RSC.
   let res: Response;
   try {
-    res = await forward(req, `/v1/board${params}`);
+    res = await forward(req, `/v1/board?${params}`);
   } catch {
     // AC5: forward() threw (GATEWAY_URL unset, network failure, timeout).
     // No response is available — generate a fallback request id.
@@ -74,8 +80,33 @@ async function fetchInitialBoard(): Promise<FetchResult> {
   }
 }
 
-export default async function BoardPage() {
-  const result = await fetchInitialBoard();
+/** Derive the sorted deduplicated category list from the loaded page items. */
+function deriveCategories(page: BoardPage): string[] {
+  const seen = new Set<string>();
+  for (const ticket of page.items) {
+    seen.add(ticket.category);
+  }
+  return Array.from(seen).sort();
+}
+
+interface BoardPageProps {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+export default async function BoardPage({ searchParams }: BoardPageProps) {
+  // BOARD-003 AC: read filter+sort from URL search params.
+  const rawParams = await searchParams;
+  const urlParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(rawParams)) {
+    if (typeof value === "string") {
+      urlParams.set(key, value);
+    } else if (Array.isArray(value) && value.length > 0 && typeof value[0] === "string") {
+      urlParams.set(key, value[0]);
+    }
+  }
+  const filter = filterFromParams(urlParams);
+
+  const result = await fetchInitialBoard(filter);
 
   if (!result.ok) {
     // AC5: clear error state with request id; no gateway internals leaked.
@@ -93,10 +124,13 @@ export default async function BoardPage() {
   }
 
   const { page } = result;
+  const availableCategories = deriveCategories(page);
 
   return (
     <section className={styles.page}>
       <h1 className={styles.heading}>Tickets lore-gap</h1>
+      {/* BOARD-003 AC: filter/sort controls bound to URL search params */}
+      <BoardControls availableCategories={availableCategories} />
       <p className={styles.subtitle}>
         {page.total} ticket{page.total !== 1 ? "s" : ""} ouvert
         {page.total !== 1 ? "s" : ""}
@@ -105,6 +139,7 @@ export default async function BoardPage() {
       <LoadMoreButton
         initialTickets={page.items}
         total={page.total}
+        filter={filter}
       />
     </section>
   );

@@ -16,7 +16,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -25,6 +24,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import BaseMessage
 
+from archiviste_workers.generate._pipeline import (
+    GenerationResult,
+    PreparedMode,
+    add_decimal_optional,
+    add_optional,
+    finalize_generation,
+)
 from archiviste_workers.generate.injection_filter import detect_injection
 from archiviste_workers.generate.memory import load_memory_window
 from archiviste_workers.generate.models import (
@@ -42,8 +48,6 @@ from archiviste_workers.generate.prompt import (
     build_off_topic_messages,
 )
 from archiviste_workers.generate.router import (
-    _add_decimal_optional,
-    _add_optional,
     _error_response,
     _GenerateError,
     _parse_request,
@@ -112,8 +116,8 @@ def _sse_error(code: StreamErrorCode) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Context dataclass — carries service handles to keep _stream_* / _finalize_*
-# signatures within the 4-parameter clean-code limit (FIX 5).
+# Context dataclass — carries service handles to keep _stream_* / finalize_generation
+# signatures within the 4-parameter clean-code limit.
 # ---------------------------------------------------------------------------
 
 
@@ -127,44 +131,11 @@ class _StreamContext:
     memory_messages: list[BaseMessage]
     retrieval_query: str
     # Service handles — resolved once at request entry and threaded via context
-    # so _finalize_* functions do not need the Request object directly.
+    # so finalize_generation does not need the Request object directly.
     conversation_client: Any
     query_log_repo: Any
     db_pool: Any
     embedder: Any
-
-
-# ---------------------------------------------------------------------------
-# Result dataclasses — bundle per-mode computed values to keep _finalize_*
-# parameter counts at ≤ 4 (FIX 5: clean-code compliance).
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _CanonResult:
-    usage: Usage
-    citations: list[Citation]
-    answer: str
-    blocked_count: int
-    chunk_count: int
-    retrieve_ms: int
-    llm_ms: int
-
-
-@dataclass(frozen=True)
-class _SimpleResult:
-    """Shared result shape for mystery, lore_gap and off_topic success paths."""
-
-    usage: Usage
-    answer: str
-    retrieve_ms: int
-    llm_ms: int
-
-
-@dataclass(frozen=True)
-class _LoreGapExtra:
-    chunk_count: int
-    max_score: float
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +244,7 @@ async def _collect_llm_stream(
     return token_parts, final_message
 
 
-def _build_usage(llm_client: Any, final_message: Any, *, mode: str) -> Usage:
+def _build_stream_usage(llm_client: Any, final_message: Any) -> Usage:
     """Extract and compute cost from the aggregated LLM message."""
     raw = (
         extract_usage(final_message, llm_client.provider)
@@ -287,6 +258,23 @@ def _build_usage(llm_client: Any, final_message: Any, *, mode: str) -> Usage:
         prompt_tokens=raw.prompt_tokens,
         completion_tokens=raw.completion_tokens,
         cost_eur=cost,
+    )
+
+
+def _combine_usage(intent_result: IntentResult, raw_usage: Usage, llm_client: Any) -> Usage:
+    """Aggregate classifier + mode LLM usage for off_topic and lore_gap (AC-7/AC-10)."""
+    raw_cost = compute_cost_eur(
+        llm_client.model, raw_usage.prompt_tokens, raw_usage.completion_tokens
+    )
+    combined_prompt = add_optional(intent_result.prompt_tokens, raw_usage.prompt_tokens)
+    combined_completion = add_optional(intent_result.completion_tokens, raw_usage.completion_tokens)
+    combined_cost = add_decimal_optional(intent_result.cost_eur, raw_cost)
+    if combined_cost is None and combined_prompt is not None:
+        logger.warning("unknown_model_pricing", model=llm_client.model)
+    return Usage(
+        prompt_tokens=combined_prompt,
+        completion_tokens=combined_completion,
+        cost_eur=combined_cost,
     )
 
 
@@ -423,79 +411,21 @@ async def _stream_canon(
     if not citations and visible_chunks:
         logger.warning("llm_no_citation", request_id=parsed.request_id)
 
-    usage = _build_usage(llm_client, final_message, mode="canon")
-    result = _CanonResult(
-        usage=usage,
-        citations=citations,
-        answer=answer,
-        blocked_count=blocked_count,
-        chunk_count=len(visible_chunks),
-        retrieve_ms=retrieve_ms,
-        llm_ms=llm_ms,
-    )
-    await _finalize_canon(ctx, intent_result, result)
-    yield _sse_done(citations, usage, retrieve_ms, llm_ms)
-
-
-async def _finalize_canon(
-    ctx: _StreamContext,
-    intent_result: IntentResult,
-    result: _CanonResult,
-) -> None:
-    """Persist conversation, write query_log, and emit INFO log for canon mode."""
-    parsed = ctx.parsed
-    now = datetime.now(UTC)
-
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=result.answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="canon",
-            intent=intent_result.intent,
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=result.usage.prompt_tokens,
-            completion_tokens=result.usage.completion_tokens,
-            cost_eur=result.usage.cost_eur,
-        )
-    )
-
-    extra_log: dict[str, Any] = {}
-    if result.blocked_count > 0:
-        extra_log["blocked_count"] = result.blocked_count
-    logger.info(
-        "generate_stream",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent=intent_result.intent,
+    usage = _build_stream_usage(llm_client, final_message)
+    prepared = PreparedMode(
         mode="canon",
-        status=200,
-        retrieve_ms=result.retrieve_ms,
-        llm_ms=result.llm_ms,
-        # FIX 3: log chunk count to match blocking router.py INFO shape.
-        chunks=result.chunk_count,
-        citations=len(result.citations),
-        query_len=len(parsed.query),
-        **extra_log,
+        messages=messages,
+        visible_chunks=visible_chunks,
+        retrieve_ms=retrieve_ms,
+        max_score=max_score,
+        blocked_count=blocked_count,
+        intent_result=intent_result,
     )
+    result = GenerationResult(answer=answer, usage=usage, citations=citations, llm_ms=llm_ms)
+    await finalize_generation(
+        ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
+    )
+    yield _sse_done(citations, usage, retrieve_ms, llm_ms)
 
 
 async def _stream_mystery(
@@ -546,67 +476,21 @@ async def _stream_mystery(
 
     llm_ms = int((time.perf_counter() - llm_started) * 1000)
     answer = "".join(token_parts)
-    usage = _build_usage(llm_client, final_message, mode="mystery")
-    result = _SimpleResult(usage=usage, answer=answer, retrieve_ms=retrieve_ms, llm_ms=llm_ms)
-    await _finalize_mystery(ctx, intent_result, result, blocked_count)
-    yield _sse_done([], usage, retrieve_ms, llm_ms)
-
-
-async def _finalize_mystery(
-    ctx: _StreamContext,
-    intent_result: IntentResult,
-    result: _SimpleResult,
-    blocked_count: int,
-) -> None:
-    parsed = ctx.parsed
-    now = datetime.now(UTC)
-
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=result.answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="mystery",
-            intent=intent_result.intent,
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=result.usage.prompt_tokens,
-            completion_tokens=result.usage.completion_tokens,
-            cost_eur=result.usage.cost_eur,
-        )
-    )
-
-    logger.info(
-        "generate_stream",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent=intent_result.intent,
+    usage = _build_stream_usage(llm_client, final_message)
+    prepared = PreparedMode(
         mode="mystery",
-        status=200,
-        retrieve_ms=result.retrieve_ms,
-        llm_ms=result.llm_ms,
-        chunks=blocked_count,
-        citations=0,
+        messages=mystery_messages,
+        visible_chunks=[],
+        retrieve_ms=retrieve_ms,
+        max_score=0.0,
         blocked_count=blocked_count,
-        query_len=len(parsed.query),
+        intent_result=intent_result,
     )
+    result = GenerationResult(answer=answer, usage=usage, citations=[], llm_ms=llm_ms)
+    await finalize_generation(
+        ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
+    )
+    yield _sse_done([], usage, retrieve_ms, llm_ms)
 
 
 async def _stream_lore_gap(
@@ -665,96 +549,22 @@ async def _stream_lore_gap(
         if final_message
         else Usage(prompt_tokens=None, completion_tokens=None)
     )
-    lore_cost = compute_cost_eur(llm_client.model, raw.prompt_tokens, raw.completion_tokens)
-    combined_prompt = _add_optional(intent_result.prompt_tokens, raw.prompt_tokens)
-    combined_completion = _add_optional(intent_result.completion_tokens, raw.completion_tokens)
-    combined_cost = _add_decimal_optional(intent_result.cost_eur, lore_cost)
-    if combined_cost is None and combined_prompt is not None:
-        logger.warning("unknown_model_pricing", model=llm_client.model)
-    usage = Usage(
-        prompt_tokens=combined_prompt,
-        completion_tokens=combined_completion,
-        cost_eur=combined_cost,
-    )
-    result = _SimpleResult(usage=usage, answer=answer, retrieve_ms=retrieve_ms, llm_ms=llm_ms)
-    extra = _LoreGapExtra(chunk_count=len(chunks), max_score=max_score)
-    await _finalize_lore_gap(ctx, intent_result, result, extra)
-    yield _sse_done([], usage, retrieve_ms, llm_ms)
+    usage = _combine_usage(intent_result, raw, llm_client)
 
-
-async def _finalize_lore_gap(
-    ctx: _StreamContext,
-    intent_result: IntentResult,
-    result: _SimpleResult,
-    extra: _LoreGapExtra,
-) -> None:
-    parsed = ctx.parsed
-    now = datetime.now(UTC)
-
-    user_result = await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    asst_result = await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=result.answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-    conversation_logged = user_result.ok and asst_result.ok
-
-    ticket_action = "skipped_error"
-    if conversation_logged and ctx.db_pool is not None and ctx.embedder is not None:
-        ticket_result = await create_or_increment(
-            ctx.db_pool,
-            ctx.embedder,
-            conversation_id=ctx.conversation_id,
-            question=parsed.query,
-            request_id=parsed.request_id,
-        )
-        ticket_action = ticket_result.action
-    elif not conversation_logged:
-        logger.warning(
-            "ticket_service_skipped_after_conversation_log_failed",
-            request_id=parsed.request_id,
-        )
-
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="lore_gap",
-            intent=intent_result.intent,
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=result.usage.prompt_tokens,
-            completion_tokens=result.usage.completion_tokens,
-            cost_eur=result.usage.cost_eur,
-        )
-    )
-
-    logger.info(
-        "generate_stream",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent=intent_result.intent,
+    prepared = PreparedMode(
         mode="lore_gap",
-        status=200,
-        retrieve_ms=result.retrieve_ms,
-        llm_ms=result.llm_ms,
-        chunks=extra.chunk_count,
-        citations=0,
-        top_score=round(extra.max_score, 4),
-        ticket_action=ticket_action,
-        query_len=len(parsed.query),
+        messages=lore_gap_messages,
+        visible_chunks=chunks,
+        retrieve_ms=retrieve_ms,
+        max_score=max_score,
+        blocked_count=0,
+        intent_result=intent_result,
     )
+    result = GenerationResult(answer=answer, usage=usage, citations=[], llm_ms=llm_ms)
+    await finalize_generation(
+        ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
+    )
+    yield _sse_done([], usage, retrieve_ms, llm_ms)
 
 
 async def _stream_off_topic(
@@ -809,73 +619,20 @@ async def _stream_off_topic(
         if final_message
         else Usage(prompt_tokens=None, completion_tokens=None)
     )
-    refusal_cost = compute_cost_eur(llm_client.model, raw.prompt_tokens, raw.completion_tokens)
-    combined_prompt = _add_optional(intent_result.prompt_tokens, raw.prompt_tokens)
-    combined_completion = _add_optional(intent_result.completion_tokens, raw.completion_tokens)
-    combined_cost = _add_decimal_optional(intent_result.cost_eur, refusal_cost)
-    if combined_cost is None and combined_prompt is not None:
-        logger.warning("unknown_model_pricing", model=llm_client.model)
-    usage = Usage(
-        prompt_tokens=combined_prompt,
-        completion_tokens=combined_completion,
-        cost_eur=combined_cost,
-    )
+    usage = _combine_usage(intent_result, raw, llm_client)
     llm_ms = intent_result.latency_ms + refusal_ms
-    result = _SimpleResult(usage=usage, answer=answer, retrieve_ms=0, llm_ms=llm_ms)
-    await _finalize_off_topic(ctx, intent_result, result)
-    yield _sse_done([], usage, 0, llm_ms)
 
-
-async def _finalize_off_topic(
-    ctx: _StreamContext,
-    intent_result: IntentResult,
-    result: _SimpleResult,
-) -> None:
-    parsed = ctx.parsed
-    now = datetime.now(UTC)
-
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=result.answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="off_topic",
-            intent="off_topic",
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=result.usage.prompt_tokens,
-            completion_tokens=result.usage.completion_tokens,
-            cost_eur=result.usage.cost_eur,
-        )
-    )
-
-    logger.info(
-        "generate_stream",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent="off_topic",
+    prepared = PreparedMode(
         mode="off_topic",
-        status=200,
+        messages=refusal_messages,
+        visible_chunks=[],
         retrieve_ms=0,
-        llm_ms=result.llm_ms,
-        chunks=0,
-        citations=0,
-        query_len=len(parsed.query),
+        max_score=0.0,
+        blocked_count=0,
+        intent_result=intent_result,
     )
+    result = GenerationResult(answer=answer, usage=usage, citations=[], llm_ms=llm_ms)
+    await finalize_generation(
+        ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
+    )
+    yield _sse_done([], usage, 0, llm_ms)

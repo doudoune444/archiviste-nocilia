@@ -28,6 +28,11 @@ vi.mock("@/lib/bff-proxy", () => ({
 // Mock CSS modules.
 vi.mock("@/app/board/page.module.css", () => ({ default: {} }));
 
+// Mock the BoardControls client component (uses useRouter — unavailable in jsdom RSC tests).
+vi.mock("@/components/category-filter/BoardControls", () => ({
+  BoardControls: () => null,
+}));
+
 // Import after mocks are registered.
 import { forward } from "@/lib/bff-proxy";
 
@@ -49,7 +54,7 @@ describe("BoardPage — AC5 error state (BOARD-002)", () => {
   it("renders board error state when forward() throws", async () => {
     forwardMock.mockRejectedValue(new Error("Network failure"));
 
-    const element = await BoardPage();
+    const element = await BoardPage({ searchParams: Promise.resolve({}) });
     render(element);
 
     const errorEl = screen.getByTestId("board-error");
@@ -68,7 +73,7 @@ describe("BoardPage — AC5 error state (BOARD-002)", () => {
       })
     );
 
-    const element = await BoardPage();
+    const element = await BoardPage({ searchParams: Promise.resolve({}) });
     render(element);
 
     const errorEl = screen.getByTestId("board-error");
@@ -89,7 +94,7 @@ describe("BoardPage — AC5 error state (BOARD-002)", () => {
       })
     );
 
-    const element = await BoardPage();
+    const element = await BoardPage({ searchParams: Promise.resolve({}) });
     render(element);
 
     const errorEl = screen.getByTestId("board-error");
@@ -109,7 +114,7 @@ describe("BoardPage — AC5 error state (BOARD-002)", () => {
 
     forwardMock.mockResolvedValue(brokenBody);
 
-    const element = await BoardPage();
+    const element = await BoardPage({ searchParams: Promise.resolve({}) });
     render(element);
 
     const errorEl = screen.getByTestId("board-error");

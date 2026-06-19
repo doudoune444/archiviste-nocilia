@@ -19,6 +19,7 @@ from archiviste_workers.conversation.router import router as conversation_router
 from archiviste_workers.db import create_pool
 from archiviste_workers.embedder import build_embedder
 from archiviste_workers.generate.router import router as generate_router
+from archiviste_workers.generate.stream_router import stream_router
 from archiviste_workers.retrieve.router import router as retrieve_router
 from archiviste_workers.routers import health
 from archiviste_workers.services.conversation_client import ConversationClient
@@ -116,4 +117,5 @@ app.include_router(health.router)
 app.include_router(conversation_router)
 app.include_router(retrieve_router)
 app.include_router(generate_router)
+app.include_router(stream_router)
 app.include_router(contradiction_router)

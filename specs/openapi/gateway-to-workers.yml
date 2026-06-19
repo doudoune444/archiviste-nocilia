@@ -88,6 +88,63 @@ paths:
               schema:
                 $ref: '#/components/schemas/GenerateResponse'
 
+  /v1/generate/stream:
+    post:
+      summary: Stream a generated answer token-by-token over Server-Sent Events (CHAT-001)
+      description: |
+        Streaming variant of /v1/generate. Runs the same pre-LLM pipeline
+        (intent classification -> retrieve -> ACL filter -> mode branch); once the
+        mode is decided it emits a `meta` event, then `token` events as the LLM
+        generates, then a terminal `done` event carrying citations, usage and timings.
+        The full answer is buffered server-side; the conversation turn (user+assistant)
+        is persisted AND any lore-gap ticket raised ONLY after a clean `done`. On
+        mid-stream failure a terminal `error` event is emitted, nothing is persisted,
+        and no ticket is raised.
+
+        Transport: text/event-stream. Event grammar, in order:
+          event: meta   data: <StreamMeta>    # exactly once, first
+          event: token  data: <StreamToken>   # zero or more
+          event: done   data: <StreamDone>    # terminal on success
+          event: error  data: <StreamError>   # terminal on failure (replaces done)
+        Validation failures detected before streaming begins return a normal non-200
+        JSON error body (same envelope as /v1/generate), not an SSE error event.
+      parameters:
+        - name: X-User-Id
+          in: header
+          required: true
+          description: Caller user_id (anonymous UUIDv5 or member/author UUID). Gateway-set per SEC-001 AC-14.
+          schema:
+            type: string
+            format: uuid
+        - name: X-User-Tier
+          in: header
+          required: true
+          description: Caller tier. Gateway-set per SEC-001 AC-14.
+          schema:
+            type: string
+            enum: [anonymous, member, author]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: SSE stream of meta -> token* -> (done | error)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Server-Sent Events byte stream. See the event grammar in the
+                  operation description; payload shapes are StreamMeta / StreamToken /
+                  StreamDone / StreamError.
+        '400':
+          description: Invalid request body (detected pre-stream; JSON error envelope, not SSE)
+        '422':
+          description: Invalid user tier (detected pre-stream; JSON error envelope, not SSE)
+
   /v1/verify-contradiction:
     post:
       summary: Verify a visitor's contradiction report via a multi-judge vote (CTR-001)
@@ -283,6 +340,56 @@ components:
           type: number
           minimum: 0
           nullable: true
+
+    StreamMeta:
+      type: object
+      required: [mode, conversation_id, request_id]
+      description: First SSE event; announces the decided mode before any token.
+      properties:
+        mode:
+          type: string
+          enum: [canon, off_topic, lore_gap, mystery]
+        conversation_id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+
+    StreamToken:
+      type: object
+      required: [text]
+      description: Incremental answer fragment; emitted zero or more times after meta.
+      properties:
+        text:
+          type: string
+
+    StreamDone:
+      type: object
+      required: [citations, usage, retrieve_ms, llm_ms]
+      description: Terminal success event; carries the post-answer metadata.
+      properties:
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+        usage:
+          $ref: '#/components/schemas/Usage'
+        retrieve_ms:
+          type: integer
+          minimum: 0
+        llm_ms:
+          type: integer
+          minimum: 0
+
+    StreamError:
+      type: object
+      required: [error]
+      description: Terminal failure event; replaces done when generation fails mid-stream.
+      properties:
+        error:
+          type: string
+          enum: [llm_timeout, llm_upstream, retrieve_failed, internal]
 
     VerifyContradictionRequest:
       type: object

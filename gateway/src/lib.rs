@@ -485,60 +485,51 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
 const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains; preload";
 
 /// Build the gateway router with all routes wired and shared state attached.
-pub fn router(state: Arc<AppState>) -> Router {
-    // `/v1/chat` sub-router with body limit + error-handler + overhead timing middleware.
-    let chat_router = Router::new()
+/// Build the merged API sub-routers (chat, contradiction, auth, public, dashboard, conversations).
+///
+/// Extracted to keep `router()` under the 100-line clippy limit while keeping each
+/// sub-router's layer stack co-located with its route declaration.
+fn build_api_router() -> Router<Arc<AppState>> {
+    // `/v1/chat` — 1 MiB body cap + overhead timing.
+    let chat = Router::new()
         .route("/v1/chat", axum::routing::post(handlers::chat::chat))
-        .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB (AC-7)
+        .layer(RequestBodyLimitLayer::new(1_048_576))
         .layer(axum::middleware::from_fn(handle_body_limit_error))
-        // OPS-001a: inserts `X-Gateway-Overhead-Ms` on every response (AC-4).
         .layer(axum::middleware::from_fn(
             crate::middleware::overhead_header,
         ));
 
-    // CTR-002: public `POST /v1/report-contradiction` — accepts anonymous callers.
-    // Body limit 1 MiB (claim ≤ 4 KiB + citations overhead stays well under cap).
-    // OPS-001a: `overhead_header` layer added — this 3-LLM path is more expensive
-    // than chat, so X-Gateway-Overhead-Ms attribution is equally valuable here.
-    let report_contradiction_router = Router::new()
+    // CHAT-001: `/v1/chat/stream` — SSE streaming. No overhead_header (would buffer stream).
+    // Request body cap (1 MiB) still applied; response stream is unbounded.
+    let chat_stream = Router::new()
+        .route(
+            "/v1/chat/stream",
+            axum::routing::post(handlers::chat_stream::chat_stream),
+        )
+        .layer(RequestBodyLimitLayer::new(1_048_576))
+        .layer(axum::middleware::from_fn(handle_body_limit_error));
+
+    // CTR-002: report-contradiction with overhead timing.
+    let contradiction = Router::new()
         .route(
             "/v1/report-contradiction",
             axum::routing::post(handlers::report_contradiction::report_contradiction),
         )
-        .layer(RequestBodyLimitLayer::new(1_048_576)) // 1 MiB
+        .layer(RequestBodyLimitLayer::new(1_048_576))
         .layer(axum::middleware::from_fn(handle_body_limit_error))
         .layer(axum::middleware::from_fn(
             crate::middleware::overhead_header,
         ));
 
-    // Static file routes: index.html at /, observability page, assets under /assets/*.
-    // ServeDir handles path-traversal rejection natively (AC-5).
-    // OBS-001: /observability mounted here — public, no auth (AC-2).
-    let static_router = Router::new()
-        .route_service("/", ServeFile::new("static/index.html"))
-        .route_service(
-            "/observability",
-            ServeFile::new("static/observability.html"),
-        )
-        .nest_service("/assets", ServeDir::new("static/assets"));
-
-    // Auth sub-router: body limit 4 KiB + Content-Type: application/json enforcement (AC-17).
-    let auth_router = Router::new()
+    // Auth sub-router: 4 KiB body cap + JSON content-type enforcement (AC-17).
+    let auth = Router::new()
         .route("/v1/auth/signup", post(routes::auth::signup))
         .route("/v1/auth/login", post(routes::auth::login))
         .route("/v1/auth/logout", post(routes::auth::logout))
-        // AC-17: 4 KiB body limit, stricter than the general 1 MiB chat limit.
         .layer(RequestBodyLimitLayer::new(4_096))
         .layer(axum::middleware::from_fn(handle_auth_body_limit_error))
-        // AC-17: require Content-Type: application/json.
         .layer(axum::middleware::from_fn(require_json_content_type));
 
-    // Public API routes (AC-11: marker #[public] — all handlers accept anonymous).
-    // OBS-001: /v1/stats mounted here — no auth gate (AC-6).
-    // OBS-002: /v1/status mounted here — anonymous, no auth guard (AC-7).
-    // OBS-004: /v1/quality mounted here — anonymous, no auth guard (AC-5).
-    // BOARD-001: /v1/board — public read-only lore-gap board, no auth gate.
-    // BOARD-001: /board — public HTML page served without auth.
     let public_api = Router::new()
         .route("/v1/me", get(routes::me::me))
         .route("/v1/stats", get(handlers::stats::stats))
@@ -547,18 +538,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/board", get(handlers::board::list_board))
         .route("/board", get(handlers::board::serve_board));
 
-    // Author-gated dashboard API routes (UI-002 PR1 — AC-5..AC-12, AC-19..AC-23).
-    // `RequireAuthor` extractor gates each handler — no `#[public]` marker (AC-11).
-    // UI-002b PR2: GET /dashboard (AC-1, AC-11) added — custom handler so RequireAuthor
-    // extractor can gate it (a bare ServeFile carries no extractor, plan R3).
     let dashboard_api = Router::new()
         .route("/dashboard", get(handlers::dashboard::serve_dashboard))
         .route("/v1/tickets", get(handlers::tickets::list_tickets));
 
-    // HIST-001: owner-scoped conversation history. Each handler resolves the caller
-    // via the `AnonIdentity` extension and enforces ownership in SQL, so anonymous
-    // visitors reach these routes but only ever see their own data. `signed-url` is
-    // owner-or-author (authors moderate any conversation; other tiers only their own).
     let conversations_api = Router::new()
         .route(
             "/v1/conversations",
@@ -573,26 +556,38 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(handlers::conversations::signed_url),
         );
 
-    // Author-gated test route (AC-16 contract test).
-    // Debug builds only — never compiled into release binaries. `security.md` §A05.
+    Router::new()
+        .merge(chat)
+        .merge(chat_stream)
+        .merge(contradiction)
+        .merge(auth)
+        .merge(public_api)
+        .merge(dashboard_api)
+        .merge(conversations_api)
+}
+
+/// Build the gateway router with all routes wired and shared state attached.
+pub fn router(state: Arc<AppState>) -> Router {
+    // Static files: index.html, observability page, /assets/*.
+    // ServeDir handles path-traversal rejection natively (AC-5).
+    let static_router = Router::new()
+        .route_service("/", ServeFile::new("static/index.html"))
+        .route_service(
+            "/observability",
+            ServeFile::new("static/observability.html"),
+        )
+        .nest_service("/assets", ServeDir::new("static/assets"));
+
+    // Author-gated test route (AC-16). Debug builds only — never in release (security.md §A05).
     #[cfg(debug_assertions)]
     let test_routes = Router::new().route("/v1/author-test", get(author_test_handler));
     #[cfg(not(debug_assertions))]
     let test_routes = Router::<Arc<AppState>>::new();
 
-    // Root router: merge API + static, then apply global security headers (AC-6).
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
-        // `/health` aliases `/healthz`: Cloud Run's public frontend reserves the
-        // literal `/healthz` path and 404s it before it reaches the container, so
-        // the Deploy smoke test probes `/health`. Same handler for both.
         .route("/health", get(handlers::health::healthz))
-        .merge(chat_router)
-        .merge(report_contradiction_router)
-        .merge(auth_router)
-        .merge(public_api)
-        .merge(dashboard_api)
-        .merge(conversations_api)
+        .merge(build_api_router())
         .merge(test_routes)
         .merge(static_router)
         .layer(axum::middleware::from_fn_with_state(

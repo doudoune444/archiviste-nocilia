@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import structlog
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_deepseek import ChatDeepSeek
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mistralai import ChatMistralAI
@@ -19,7 +21,6 @@ from archiviste_workers.generate.models import Usage
 
 if TYPE_CHECKING:  # pragma: no cover
     from langchain_core.language_models.chat_models import BaseChatModel
-    from langchain_core.messages import AIMessage, BaseMessage
 
 logger = structlog.get_logger()
 
@@ -44,6 +45,15 @@ class LlmClientProtocol(Protocol):
         timeout_s: float | None = None,
     ) -> AIMessage:
         """Invoke the LLM with optional timeout override."""
+        ...
+
+    def astream(
+        self,
+        messages: list[BaseMessage],
+        *,
+        timeout_s: float | None = None,
+    ) -> AsyncIterator[tuple[str, AIMessage | None]]:
+        """Stream text deltas; yields (delta_text, None) per chunk, then ("", final_message)."""
         ...
 
 
@@ -131,6 +141,54 @@ class LlmClient:
         except Exception as exc:
             status = _extract_status(exc)
             raise LlmUpstreamError(str(exc), status_code=status) from exc
+
+    async def astream(
+        self,
+        messages: list[BaseMessage],
+        *,
+        timeout_s: float | None = None,
+    ) -> AsyncIterator[tuple[str, AIMessage | None]]:
+        """Stream text deltas from the LLM.
+
+        Yields (delta_text, None) for each token chunk, then ("", aggregated_message) once as
+        the terminal sentinel so callers can extract usage and citations from the full response.
+        Wraps timeout/upstream errors as LlmTimeoutError/LlmUpstreamError per the invoke() contract.
+        If the provider yields no usage on stream, usage stays null (contract fields are nullable).
+        """
+        effective_timeout = timeout_s if timeout_s is not None else LLM_TIMEOUT_S
+        aggregate: AIMessageChunk | None = None
+        aiter = self._chat.astream(messages).__aiter__()
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(aiter.__anext__(), timeout=effective_timeout)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    raise LlmTimeoutError("llm timeout") from exc
+                except (LlmTimeoutError, LlmUpstreamError):
+                    raise
+                except Exception as exc:
+                    status = _extract_status(exc)
+                    raise LlmUpstreamError(str(exc), status_code=status) from exc
+                delta = chunk.content if isinstance(chunk.content, str) else ""
+                if delta:
+                    yield (delta, None)
+                aggregate = chunk if aggregate is None else aggregate + chunk
+        except (LlmTimeoutError, LlmUpstreamError):
+            raise
+
+        # Terminal sentinel: emit the aggregated message for usage/citation extraction.
+        final: AIMessage
+        if aggregate is None:
+            final = AIMessage(content="")
+        else:
+            final = AIMessage(
+                content=aggregate.content if isinstance(aggregate.content, str) else "",
+                usage_metadata=getattr(aggregate, "usage_metadata", None),
+                response_metadata=getattr(aggregate, "response_metadata", {}),
+            )
+        yield ("", final)
 
 
 def _extract_status(exc: BaseException) -> int:

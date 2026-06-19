@@ -6,6 +6,7 @@
 
 pub mod board;
 pub mod chat;
+pub mod chat_stream;
 pub mod conversations;
 pub mod dashboard;
 pub mod health;

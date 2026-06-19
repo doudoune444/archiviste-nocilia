@@ -1,12 +1,9 @@
-// AC BOARD-003: applying a category filter narrows the visible list;
-// filter + sort are reflected in URL search params.
+// AC BOARD-003: filter + sort controls are reflected in URL search params.
 //
-// NOTE: this spec requires a live Next.js server (npm run build && npm run start)
-// connected to a gateway. The playwright.config.ts webServer block spins up the
-// production build automatically when running locally (reuseExistingServer=true).
-// In CI the build is blocked by a pre-existing observability/page.tsx issue (see
-// playwright.config.ts comment); the spec is wired correctly and will pass once
-// that build fix lands.
+// These tests exercise only the controls and the URL — not ticket data — so they
+// run without a gateway: the board page renders BoardControls even in its empty /
+// error state (the controls are a primary affordance that drives a URL re-fetch).
+// The playwright.config.ts webServer builds + starts the production server.
 import { test, expect } from "@playwright/test";
 
 test.describe("board category filter (BOARD-003)", () => {

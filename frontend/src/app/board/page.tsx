@@ -108,39 +108,37 @@ export default async function BoardPage({ searchParams }: BoardPageProps) {
 
   const result = await fetchInitialBoard(filter);
 
-  if (!result.ok) {
-    // AC5: clear error state with request id; no gateway internals leaked.
-    return (
-      <section className={styles.page}>
-        <h1 className={styles.heading}>Tickets lore-gap</h1>
-        <p className={styles.error} role="alert" data-testid="board-error">
-          Impossible de charger les tickets.{" "}
-          <span className={styles.requestId}>
-            (id : {result.requestId})
-          </span>
-        </p>
-      </section>
-    );
-  }
-
-  const { page } = result;
-  const availableCategories = deriveCategories(page);
+  // BOARD-003 AC: the filter/sort controls are a primary affordance and stay
+  // present even when the board is empty or failed to load — the controls drive
+  // a URL-param re-fetch, so they must not vanish on the error path. Categories
+  // can only be derived from a successful page; empty otherwise.
+  const availableCategories = result.ok ? deriveCategories(result.page) : [];
 
   return (
     <section className={styles.page}>
       <h1 className={styles.heading}>Tickets lore-gap</h1>
       {/* BOARD-003 AC: filter/sort controls bound to URL search params */}
       <BoardControls availableCategories={availableCategories} />
-      <p className={styles.subtitle}>
-        {page.total} ticket{page.total !== 1 ? "s" : ""} ouvert
-        {page.total !== 1 ? "s" : ""}
-      </p>
-      {/* AC4: LoadMoreButton is 'use client' and handles pagination */}
-      <LoadMoreButton
-        initialTickets={page.items}
-        total={page.total}
-        filter={filter}
-      />
+      {result.ok ? (
+        <>
+          <p className={styles.subtitle}>
+            {result.page.total} ticket{result.page.total !== 1 ? "s" : ""} ouvert
+            {result.page.total !== 1 ? "s" : ""}
+          </p>
+          {/* AC4: LoadMoreButton is 'use client' and handles pagination */}
+          <LoadMoreButton
+            initialTickets={result.page.items}
+            total={result.page.total}
+            filter={filter}
+          />
+        </>
+      ) : (
+        // AC5: clear error state with request id; no gateway internals leaked.
+        <p className={styles.error} role="alert" data-testid="board-error">
+          Impossible de charger les tickets.{" "}
+          <span className={styles.requestId}>(id : {result.requestId})</span>
+        </p>
+      )}
     </section>
   );
 }

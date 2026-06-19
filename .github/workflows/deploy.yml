@@ -214,15 +214,19 @@ jobs:
       - name: smoke test canary gateway
         id: smoke
         run: |
-          # Canary URL is the tag-routed URL on the service (status.traffic[].url where
-          # tag==canary). Revisions expose no status.url — querying it returns empty,
-          # which silently breaks the smoke curl. Resolve via service JSON + jq.
-          CANARY_URL=$(gcloud run services describe ${{ env.GATEWAY_SERVICE }} \
+          # One describe yields both URLs we need:
+          #  - CANARY_URL: the tag-routed URL we actually curl (status.traffic[] where
+          #    tag==canary). Revisions expose no status.url, so resolve via the tag.
+          #  - BASE_URL: the service's canonical *.run.app URL (status.url), used as the
+          #    token audience below.
+          SERVICE_JSON=$(gcloud run services describe ${{ env.GATEWAY_SERVICE }} \
             --region=${{ env.REGION }} \
-            --format=json \
-            | jq -r '.status.traffic[]? | select(.tag=="canary") | .url')
-          echo "Smoke URL: ${CANARY_URL}"
+            --format=json)
+          CANARY_URL=$(echo "${SERVICE_JSON}" | jq -r '.status.traffic[]? | select(.tag=="canary") | .url')
+          BASE_URL=$(echo "${SERVICE_JSON}" | jq -r '.status.url')
+          echo "Smoke URL: ${CANARY_URL} (audience: ${BASE_URL})"
           [ -n "${CANARY_URL}" ] || { echo "::error::canary tag URL not found on ${{ env.GATEWAY_SERVICE }}"; exit 1; }
+          [ -n "${BASE_URL}" ] || { echo "::error::base service URL not found on ${{ env.GATEWAY_SERVICE }}"; exit 1; }
 
           # Retry with backoff: the freshly-minted canary tag URL needs a few seconds to
           # route, and the no-traffic revision cold-starts on first hit (gateway boot +
@@ -230,15 +234,17 @@ jobs:
           # non-2xx surfaces its status instead of collapsing to an opaque empty-body exit.
           # PLATFORM-004: gateway_runtime_invoker limits invoker to the runtime SA.
           # The GHA runner authenticates as gha-deploy SA (via WIF); to reach the
-          # SA-gated canary URL it must present an identity token whose audience is
-          # the canary URL.  Under WIF the active principal is a federated identity,
-          # not a key-based service account, so `print-identity-token --audiences`
-          # rejects it ("Invalid account type for --audiences"). Mint the token by
-          # impersonating the deploy SA instead; --include-email adds the email claim
-          # Cloud Run's invoker check requires.
+          # SA-gated canary URL it must present an identity token Cloud Run accepts:
+          #  - Under WIF the active principal is a federated identity, not a key-based
+          #    service account, so `print-identity-token --audiences` rejects it
+          #    ("Invalid account type"). Mint by impersonating the deploy SA instead.
+          #  - --include-email adds the email claim Cloud Run's invoker check requires.
+          #  - The aud claim MUST be the base service URL, NOT the canary tag URL. Cloud
+          #    Run validates aud against the canonical service URL even when the request
+          #    targets a tag-routed hostname; using the tag URL as audience returns 401.
           ID_TOKEN=$(gcloud auth print-identity-token \
             --impersonate-service-account="${{ secrets.GCP_SA_EMAIL }}" \
-            --audiences="${CANARY_URL}" \
+            --audiences="${BASE_URL}" \
             --include-email)
           for attempt in $(seq 1 6); do
             HTTP_CODE=$(curl -s -o /tmp/health.json -w '%{http_code}' \

@@ -231,10 +231,15 @@ jobs:
           # PLATFORM-004: gateway_runtime_invoker limits invoker to the runtime SA.
           # The GHA runner authenticates as gha-deploy SA (via WIF); to reach the
           # SA-gated canary URL it must present an identity token whose audience is
-          # the canary URL.  gcloud auth print-identity-token issues a token for the
-          # currently-authenticated principal (gha-deploy SA, granted run.invoker on
-          # the gateway in iam.tf gateway_deploy_invoker binding).
-          ID_TOKEN=$(gcloud auth print-identity-token --audiences="${CANARY_URL}")
+          # the canary URL.  Under WIF the active principal is a federated identity,
+          # not a key-based service account, so `print-identity-token --audiences`
+          # rejects it ("Invalid account type for --audiences"). Mint the token by
+          # impersonating the deploy SA instead; --include-email adds the email claim
+          # Cloud Run's invoker check requires.
+          ID_TOKEN=$(gcloud auth print-identity-token \
+            --impersonate-service-account="${{ secrets.GCP_SA_EMAIL }}" \
+            --audiences="${CANARY_URL}" \
+            --include-email)
           for attempt in $(seq 1 6); do
             HTTP_CODE=$(curl -s -o /tmp/health.json -w '%{http_code}' \
               -H "Authorization: Bearer ${ID_TOKEN}" \

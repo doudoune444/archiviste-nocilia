@@ -80,6 +80,17 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_deploy_invoker" {
   member   = "serviceAccount:${google_service_account.gha_deploy.email}"
 }
 
+# PLATFORM-004: the canary smoke step mints an ID token via
+# `print-identity-token --impersonate-service-account=gha-deploy`. Under WIF the
+# active credential already impersonates gha-deploy, so the generateIdToken call
+# is gha-deploy impersonating itself — that requires serviceAccountTokenCreator on
+# itself (workloadIdentityUser alone does not cover the layered impersonation).
+resource "google_service_account_iam_member" "gha_deploy_token_creator_self" {
+  service_account_id = google_service_account.gha_deploy.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.gha_deploy.email}"
+}
+
 # OPS-003: CI migrate step impersonates runtime SA which owns the schema.
 # gha-deploy needs serviceAccountTokenCreator on runtime SA to obtain short-lived
 # credentials for cloud-sql-proxy --impersonate-service-account --auto-iam-authn.

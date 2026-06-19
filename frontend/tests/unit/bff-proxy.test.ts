@@ -308,4 +308,84 @@ describe("forward()", () => {
       );
     });
   });
+
+  // ─── AUTH-001: POST body forwarding ──────────────────────────────────────
+  // When forward() is called with a POST request that has a body,
+  // the outbound gateway call must carry the same method, body, and Content-Type.
+
+  describe("POST body forwarding (AUTH-001)", () => {
+    // AC: POST body and Content-Type are forwarded to the gateway
+    it("forwards POST method and JSON body to the gateway", async () => {
+      fetchSpy.mockResolvedValue(new Response(null, { status: 200 }));
+
+      const payload = JSON.stringify({ email: "user@example.com", password: "correct-horse-battery" });
+      const incoming = new Request("http://next.test/api/v1/auth/login", {
+        method: "POST",
+        headers: new Headers({ "content-type": "application/json" }),
+        body: payload,
+      });
+
+      await forward(incoming, "/v1/auth/login");
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      const outboundReq: Request = fetchSpy.mock.calls[0][0] as Request;
+
+      expect(outboundReq.method).toBe("POST");
+      expect(outboundReq.headers.get("content-type")).toBe("application/json");
+
+      const sentBody = await outboundReq.text();
+      expect(sentBody).toBe(payload);
+    });
+
+    // AC: GET requests still work with no body (existing invariant preserved)
+    it("uses GET method and sends no body for GET requests", async () => {
+      fetchSpy.mockResolvedValue(new Response(null, { status: 200 }));
+
+      const incoming = makeIncomingRequest(null);
+      await forward(incoming, "/v1/me");
+
+      const outboundReq: Request = fetchSpy.mock.calls[0][0] as Request;
+      expect(outboundReq.method).toBe("GET");
+    });
+
+    // AC: cookies are still forwarded on POST requests (existing invariant)
+    it("still forwards archiviste cookies on POST requests", async () => {
+      fetchSpy.mockResolvedValue(new Response(null, { status: 200 }));
+
+      const incoming = new Request("http://next.test/api/v1/auth/login", {
+        method: "POST",
+        headers: new Headers({
+          "content-type": "application/json",
+          cookie: "archiviste_session=sess123",
+        }),
+        body: "{}",
+      });
+
+      await forward(incoming, "/v1/auth/login");
+
+      const outboundReq: Request = fetchSpy.mock.calls[0][0] as Request;
+      expect(outboundReq.headers.get("cookie")).toContain("archiviste_session=sess123");
+    });
+
+    // AC: Set-Cookie is still relayed on POST responses (existing invariant)
+    it("relays Set-Cookie from gateway on POST response", async () => {
+      const setCookieValue = "archiviste_session=newsess; Path=/; HttpOnly; SameSite=Lax";
+      fetchSpy.mockResolvedValue(
+        new Response(null, {
+          status: 200,
+          headers: { "set-cookie": setCookieValue },
+        })
+      );
+
+      const incoming = new Request("http://next.test/api/v1/auth/login", {
+        method: "POST",
+        headers: new Headers({ "content-type": "application/json" }),
+        body: "{}",
+      });
+
+      const response = await forward(incoming, "/v1/auth/login");
+
+      expect(response.headers.get("set-cookie")).toBe(setCookieValue);
+    });
+  });
 });

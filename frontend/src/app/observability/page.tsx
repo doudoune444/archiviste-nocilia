@@ -11,6 +11,7 @@ import { headers } from "next/headers";
 import { fetchStats, fetchQuality } from "./fetch";
 import { StatsCard } from "@/components/stats-card/StatsCard";
 import { RagasGauges } from "@/components/ragas-gauges/RagasGauges";
+import { DepHealth } from "@/components/dep-health/DepHealth";
 import styles from "./page.module.css";
 
 export default async function ObservabilityPage() {
@@ -28,6 +29,7 @@ export default async function ObservabilityPage() {
       <div className={styles.grid}>
         <StatsCard stats={stats} />
         <RagasGauges quality={quality} />
+        <DepHealth />
       </div>
     </section>
   );

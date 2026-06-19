@@ -2,6 +2,10 @@
 /**
  * LoadMoreButton — client component for paginating the board (BOARD-002 AC4).
  *
+ * BOARD-003: accepts `filter` prop so paginated calls preserve the active
+ * category filter and sort order. The filter+sort are forwarded to the
+ * internal API route (which passes them verbatim to the gateway).
+ *
  * Fetches additional tickets from the internal route handler and appends them
  * to the list. Rendered only when there are more items to load.
  */
@@ -10,14 +14,18 @@ import { useState } from "react";
 import { TicketTable } from "./TicketTable";
 import { BOARD_PAGE_SIZE, isBoardPage } from "./types";
 import type { BoardTicket } from "./types";
+import { buildPaginationParams } from "@/components/category-filter/params";
+import type { BoardFilter } from "@/components/category-filter/params";
 import styles from "./LoadMoreButton.module.css";
 
 interface LoadMoreButtonProps {
   initialTickets: BoardTicket[];
   total: number;
+  /** BOARD-003: active filter+sort so pagination stays within the filtered set. */
+  filter: BoardFilter;
 }
 
-export function LoadMoreButton({ initialTickets, total }: LoadMoreButtonProps) {
+export function LoadMoreButton({ initialTickets, total, filter }: LoadMoreButtonProps) {
   const [tickets, setTickets] = useState<BoardTicket[]>(initialTickets);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,14 +36,12 @@ export function LoadMoreButton({ initialTickets, total }: LoadMoreButtonProps) {
     setIsLoading(true);
     setError(null);
 
-    const params = new URLSearchParams({
-      sort: "priority",
-      limit: String(BOARD_PAGE_SIZE),
-      offset: String(tickets.length),
-    });
+    // BOARD-003: preserve active filter+sort in pagination so the gateway
+    // returns only the filtered+sorted subset (AC: filter/sort drive gateway params).
+    const params = buildPaginationParams(filter, BOARD_PAGE_SIZE, tickets.length);
 
     try {
-      const response = await fetch(`/api/v1/board?${params.toString()}`);
+      const response = await fetch(`/api/v1/board?${params}`);
       if (!response.ok) {
         const requestId = response.headers.get("x-request-id") ?? "inconnu";
         setError(`Échec du chargement (id: ${requestId})`);

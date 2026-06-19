@@ -54,20 +54,21 @@ test.describe("auth flow (AUTH-001)", () => {
     await page.fill('input[type="password"]', "short");
     await page.click('button[type="submit"]');
 
-    // Client-side validation fires: error message visible, no network call made
-    await expect(page.locator('[role="alert"]')).toBeVisible();
-    await expect(page.locator('[role="alert"]')).toContainText("12");
+    // Client-side validation fires before any network call. Scope to the
+    // password field-error text (the page can carry a second role="alert" for
+    // form-level errors, so a bare [role="alert"] selector is ambiguous).
+    await expect(
+      page.getByText(/au moins 12 caractères/i)
+    ).toBeVisible();
   });
-
-  test.skip(
-    !hasLiveGateway,
-    "skipped: GATEWAY_URL not set — requires live gateway"
-  );
 
   // AC: valid login → logged-in header (email + "Se déconnecter")
   test("valid login redirects to / and shows authenticated header", async ({
     page,
   }) => {
+    // Live-only: needs a gateway that authenticates. The offline tests above run
+    // unconditionally; only this and the logout test below require a backend.
+    test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
     const testEmail = process.env["TEST_LOGIN_EMAIL"] ?? "member@example.com";
     const testPassword =
       process.env["TEST_LOGIN_PASSWORD"] ?? "correct-horse-battery";
@@ -89,6 +90,7 @@ test.describe("auth flow (AUTH-001)", () => {
   test("logout ends the session and header returns to anonymous state", async ({
     page,
   }) => {
+    test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
     // Navigate to /logout which calls the gateway logout endpoint server-side.
     await page.goto("/logout");
 

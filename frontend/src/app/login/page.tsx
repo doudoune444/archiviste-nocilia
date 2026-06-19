@@ -13,7 +13,7 @@
  * A09: credentials are never logged or echoed.
  */
 
-import { useState, useCallback } from "react";
+import { Suspense, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { isPasswordLongEnough, mapGatewayStatusToMessage, safeRedirectTarget } from "@/lib/auth-forms";
 import styles from "./login.module.css";
@@ -21,7 +21,7 @@ import styles from "./login.module.css";
 /** Minimum characters the UI validates locally (mirrors gateway PASSWORD_MIN_LEN). */
 const PASSWORD_MIN_LEN = 12;
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -147,5 +147,24 @@ export default function LoginPage() {
         </button>
       </form>
     </section>
+  );
+}
+
+/**
+ * Next.js requires components calling useSearchParams() to sit under a Suspense
+ * boundary, otherwise the static prerender of this client page bails the build.
+ * The fallback renders the static shell so layout stays stable until hydration.
+ */
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <section className={styles.container}>
+          <h1 className={styles.heading}>Se connecter</h1>
+        </section>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

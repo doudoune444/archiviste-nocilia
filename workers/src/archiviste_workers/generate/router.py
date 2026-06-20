@@ -5,8 +5,6 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -15,6 +13,13 @@ from fastapi.responses import JSONResponse
 from langchain_core.messages import BaseMessage
 from pydantic import ValidationError
 
+from archiviste_workers.generate._pipeline import (
+    GenerationResult,
+    PreparedMode,
+    add_decimal_optional,
+    add_optional,
+    finalize_generation,
+)
 from archiviste_workers.generate.injection_filter import detect_injection
 from archiviste_workers.generate.memory import load_memory_window
 from archiviste_workers.generate.models import (
@@ -34,7 +39,7 @@ from archiviste_workers.generate.prompt import (
 )
 from archiviste_workers.services.acl import filter_chunks_by_tier
 from archiviste_workers.services.conversation_client import ConversationClient
-from archiviste_workers.services.intent import IntentResult, classify_intent
+from archiviste_workers.services.intent import classify_intent
 from archiviste_workers.services.llm import (
     LlmClient,
     LlmTimeoutError,
@@ -43,7 +48,6 @@ from archiviste_workers.services.llm import (
 )
 from archiviste_workers.services.query_log import QueryLogRepository, QueryLogRow
 from archiviste_workers.services.retrieve_client import RetrieveClient, RetrieveError
-from archiviste_workers.services.ticket_service import TicketResult, create_or_increment
 
 router = APIRouter(prefix="/v1", tags=["generate"])
 logger = structlog.get_logger()
@@ -196,14 +200,33 @@ async def _handle_generate(request: Request, payload: dict[str, Any]) -> Generat
         request_id=parsed.request_id,
     )
 
-    if intent_result.intent == "off_topic":
-        return await _run_off_topic(ctx, intent_result)
-    return await _run_canon(ctx, intent_result)
+    prepared = await _decide_mode(ctx, intent_result)
+    return await _invoke_and_finalize(ctx, prepared)
 
 
-async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> GenerateResponse:
-    """Pipeline canon/lore_gap (Mode 1 or 3 — retrieve → score branch → LLM → log)."""
+async def _decide_mode(ctx: _RequestContext, intent_result: Any) -> PreparedMode:
+    """Retrieve → ACL → score check → build mode messages. Returns PreparedMode.
+
+    Message-building functions are called from this module's namespace so that
+    tests can patch them via patch.object(router_module, "build_messages", …).
+    """
     parsed = ctx.parsed
+
+    if intent_result.intent == "off_topic":
+        messages = build_off_topic_messages(
+            parsed.query,
+            suspected_injection=bool(ctx.suspected),
+            history=ctx.memory_messages,
+        )
+        return PreparedMode(
+            mode="off_topic",
+            messages=messages,
+            visible_chunks=[],
+            retrieve_ms=0,
+            max_score=0.0,
+            blocked_count=0,
+            intent_result=intent_result,
+        )
 
     retrieve_started = time.perf_counter()
     try:
@@ -218,593 +241,149 @@ async def _run_canon(ctx: _RequestContext, intent_result: IntentResult) -> Gener
         raise _GenerateError(502, "retrieve_failed") from exc
     retrieve_ms = int((time.perf_counter() - retrieve_started) * 1000)
 
-    # GEN-005 AC-3/AC-4: ACL post-retrieve filter — must run BEFORE max_score check.
+    # GEN-005 AC-3/AC-4: ACL post-retrieve filter before max_score check.
     acl_result = filter_chunks_by_tier(chunks, parsed.user_tier)
+
     if not acl_result.visible and acl_result.blocked_count >= 1:
-        return await _run_mystery(
-            ctx, intent_result, retrieve_ms=retrieve_ms, blocked_count=acl_result.blocked_count
+        mystery_messages = build_mystery_messages(
+            parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
+        )
+        return PreparedMode(
+            mode="mystery",
+            messages=mystery_messages,
+            visible_chunks=[],
+            retrieve_ms=retrieve_ms,
+            max_score=0.0,
+            blocked_count=acl_result.blocked_count,
+            intent_result=intent_result,
         )
 
-    # Use only visible chunks for downstream processing (AC-5).
     visible_chunks = acl_result.visible
-    blocked_count = acl_result.blocked_count
-
-    # AC-2: evaluate max cosine score; if below threshold, divert to Mode 3 lore-gap.
     max_score = max((c.score for c in visible_chunks), default=0.0)
+
     if max_score < LORE_GAP_THRESHOLD:
-        return await _run_lore_gap(
-            ctx, intent_result, chunks=visible_chunks, retrieve_ms=retrieve_ms
+        lore_gap_messages = build_lore_gap_messages(
+            parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
+        )
+        return PreparedMode(
+            mode="lore_gap",
+            messages=lore_gap_messages,
+            visible_chunks=visible_chunks,
+            retrieve_ms=retrieve_ms,
+            max_score=max_score,
+            blocked_count=acl_result.blocked_count,
+            intent_result=intent_result,
         )
 
-    messages = build_messages(
+    canon_messages = build_messages(
         parsed.query,
         visible_chunks,
         suspected_injection=bool(ctx.suspected),
         history=ctx.memory_messages,
     )
+    return PreparedMode(
+        mode="canon",
+        messages=canon_messages,
+        visible_chunks=visible_chunks,
+        retrieve_ms=retrieve_ms,
+        max_score=max_score,
+        blocked_count=acl_result.blocked_count,
+        intent_result=intent_result,
+    )
+
+
+async def _invoke_and_finalize(
+    ctx: _RequestContext,
+    prepared: PreparedMode,
+) -> GenerateResponse:
+    """Invoke the LLM, handle failure-path query_log inserts, then finalize."""
+    parsed = ctx.parsed
+    intent_result = prepared.intent_result
 
     llm_started = time.perf_counter()
     try:
-        ai_message = await ctx.llm_client.invoke(messages)
+        ai_message = await ctx.llm_client.invoke(prepared.messages)
     except LlmTimeoutError:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="canon",
-                intent=intent_result.intent,
-                status_code=504,
-                latency_ms=latency_ms,
-                prompt_tokens=None,
-                completion_tokens=None,
-                cost_eur=None,
-            )
-        )
+        await ctx.query_log_repo.insert(_failure_row(ctx, prepared, 504))
         raise _GenerateError(504, "llm_timeout") from None
     except LlmUpstreamError as exc:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
         logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="canon",
-                intent=intent_result.intent,
-                status_code=502,
-                latency_ms=latency_ms,
-                prompt_tokens=None,
-                completion_tokens=None,
-                cost_eur=None,
-            )
-        )
+        await ctx.query_log_repo.insert(_failure_row(ctx, prepared, 502))
         raise _GenerateError(502, "llm_upstream") from exc
-    llm_ms = int((time.perf_counter() - llm_started) * 1000)
+
+    llm_ms_raw = int((time.perf_counter() - llm_started) * 1000)
+    # lore_gap/off_topic llm_ms includes classifier latency (AC-7/AC-9).
+    llm_ms = (
+        intent_result.latency_ms + llm_ms_raw
+        if prepared.mode in ("lore_gap", "off_topic")
+        else llm_ms_raw
+    )
 
     answer = str(ai_message.content) if ai_message.content is not None else ""
-    citations = extract_citations(answer, visible_chunks)
-    if not citations and visible_chunks:
+    citations = extract_citations(answer, prepared.visible_chunks)
+    if not citations and prepared.visible_chunks:
         logger.warning("llm_no_citation", request_id=parsed.request_id)
 
-    usage = extract_usage(ai_message, ctx.llm_client.provider)
-    cost_eur = compute_cost_eur(ctx.llm_client.model, usage.prompt_tokens, usage.completion_tokens)
-    if cost_eur is None and usage.prompt_tokens is not None:
-        logger.warning("unknown_model_pricing", model=ctx.llm_client.model)
-    canon_usage = Usage(
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        cost_eur=cost_eur,
-    )
+    usage = _build_usage(ctx, prepared, ai_message)
+    result = GenerationResult(answer=answer, usage=usage, citations=citations, llm_ms=llm_ms)
 
-    now = datetime.now(UTC)
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
+    await finalize_generation(ctx, prepared, result, log_event="generate")
 
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="canon",
-            intent=intent_result.intent,
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=canon_usage.prompt_tokens,
-            completion_tokens=canon_usage.completion_tokens,
-            cost_eur=canon_usage.cost_eur,
-        )
-    )
-
-    # U-5: blocked_count kwarg added only when canon AND blocked_count > 0 (AC-18).
-    extra_log: dict[str, Any] = {}
-    if blocked_count > 0:
-        extra_log["blocked_count"] = blocked_count
-    logger.info(
-        "generate",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent=intent_result.intent,
-        mode="canon",
-        status=200,
-        retrieve_ms=retrieve_ms,
-        llm_ms=llm_ms,
-        chunks=len(visible_chunks),
-        citations=len(citations),
-        **extra_log,
-    )
     return GenerateResponse(
         answer=answer,
         citations=citations,
-        mode="canon",
+        mode=prepared.mode,
         conversation_id=ctx.conversation_id,
         request_id=parsed.request_id,
-        usage=canon_usage,
-        retrieve_ms=retrieve_ms,
+        usage=usage,
+        retrieve_ms=prepared.retrieve_ms,
         llm_ms=llm_ms,
     )
 
 
-async def _run_mystery(
-    ctx: _RequestContext,
-    intent_result: IntentResult,
-    *,
-    retrieve_ms: int,
-    blocked_count: int,
-) -> GenerateResponse:
-    """Mode 4 mystery — all top-K chunks ACL-blocked; evasive LLM response (AC-4, AC-7/8).
+def _failure_row(ctx: _RequestContext, prepared: PreparedMode, status_code: int) -> QueryLogRow:
+    """Build a failure-path query_log row (no LLM tokens; classifier tokens for lore_gap/off_topic).
 
-    Timing-constant: calls LLM, persists conversation (2 POST ING-003), inserts query_log.
-    No chunk content reaches the LLM — only the mystery system prompt + user query (AC-8).
+    AC-13/AC-14 (lore_gap): only classifier tokens on LLM timeout/upstream.
+    AC-15/AC-16 (off_topic): only classifier tokens on LLM timeout/upstream.
+    canon/mystery: None tokens (no LLM call completed).
     """
     parsed = ctx.parsed
-    mystery_messages = build_mystery_messages(
-        parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
-    )
-
-    llm_started = time.perf_counter()
-    try:
-        mystery_ai = await ctx.llm_client.invoke(mystery_messages)
-    except LlmTimeoutError:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="mystery",
-                intent=intent_result.intent,
-                status_code=504,
-                latency_ms=latency_ms,
-                prompt_tokens=None,
-                completion_tokens=None,
-                cost_eur=None,
-            )
-        )
-        raise _GenerateError(504, "llm_timeout") from None
-    except LlmUpstreamError as exc:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="mystery",
-                intent=intent_result.intent,
-                status_code=502,
-                latency_ms=latency_ms,
-                prompt_tokens=None,
-                completion_tokens=None,
-                cost_eur=None,
-            )
-        )
-        raise _GenerateError(502, "llm_upstream") from exc
-    llm_ms = int((time.perf_counter() - llm_started) * 1000)
-
-    answer = str(mystery_ai.content) if mystery_ai.content is not None else ""
-
-    usage_raw = extract_usage(mystery_ai, ctx.llm_client.provider)
-    cost_eur = compute_cost_eur(
-        ctx.llm_client.model, usage_raw.prompt_tokens, usage_raw.completion_tokens
-    )
-    if cost_eur is None and usage_raw.prompt_tokens is not None:
-        logger.warning("unknown_model_pricing", model=ctx.llm_client.model)
-    mystery_usage = Usage(
-        prompt_tokens=usage_raw.prompt_tokens,
-        completion_tokens=usage_raw.completion_tokens,
-        cost_eur=cost_eur,
-    )
-
-    # AC-11: persist conversation (2 sequential posts, same as canon).
-    now = datetime.now(UTC)
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-
+    intent_result = prepared.intent_result
     latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="mystery",
-            intent=intent_result.intent,
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=mystery_usage.prompt_tokens,
-            completion_tokens=mystery_usage.completion_tokens,
-            cost_eur=mystery_usage.cost_eur,
-        )
-    )
-
-    # AC-18: blocked_count always present for mystery (AC-18).
-    logger.info(
-        "generate",
+    intent_val = "off_topic" if prepared.mode == "off_topic" else intent_result.intent
+    use_classifier_tokens = prepared.mode in ("lore_gap", "off_topic")
+    return QueryLogRow(
         request_id=parsed.request_id,
+        user_id=parsed.user_id,
         conversation_id=ctx.conversation_id,
-        intent=intent_result.intent,
-        mode="mystery",
-        status=200,
-        retrieve_ms=retrieve_ms,
-        llm_ms=llm_ms,
-        chunks=blocked_count,
-        citations=0,
-        blocked_count=blocked_count,
-    )
-    return GenerateResponse(
-        answer=answer,
-        citations=[],
-        mode="mystery",
-        conversation_id=ctx.conversation_id,
-        request_id=parsed.request_id,
-        usage=mystery_usage,
-        retrieve_ms=retrieve_ms,
-        llm_ms=llm_ms,
+        query_text=parsed.query,
+        mode=prepared.mode,
+        intent=intent_val,
+        status_code=status_code,
+        latency_ms=latency_ms,
+        prompt_tokens=intent_result.prompt_tokens if use_classifier_tokens else None,
+        completion_tokens=intent_result.completion_tokens if use_classifier_tokens else None,
+        cost_eur=intent_result.cost_eur if use_classifier_tokens else None,
     )
 
 
-async def _run_lore_gap(
-    ctx: _RequestContext,
-    intent_result: IntentResult,
-    *,
-    chunks: list[Any],
-    retrieve_ms: int,
-) -> GenerateResponse:
-    """Mode 3 lore_gap — noté pour archives, no lore chunks injected (AC-3/AC-5)."""
-    parsed = ctx.parsed
-    max_score = max((c.score for c in chunks), default=0.0)
-
-    # AC-5: build_lore_gap_messages — no chunks, only the raw query.
-    lore_gap_messages = build_lore_gap_messages(
-        parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
-    )
-
-    llm_started = time.perf_counter()
-    try:
-        lore_gap_ai = await ctx.llm_client.invoke(lore_gap_messages)
-    except LlmTimeoutError:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        # AC-13: only classifier tokens; ticket NOT created.
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="lore_gap",
-                intent=intent_result.intent,
-                status_code=504,
-                latency_ms=latency_ms,
-                prompt_tokens=intent_result.prompt_tokens,
-                completion_tokens=intent_result.completion_tokens,
-                cost_eur=intent_result.cost_eur,
-            )
-        )
-        raise _GenerateError(504, "llm_timeout") from None
-    except LlmUpstreamError as exc:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
-        # AC-14: only classifier tokens; ticket NOT created.
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="lore_gap",
-                intent=intent_result.intent,
-                status_code=502,
-                latency_ms=latency_ms,
-                prompt_tokens=intent_result.prompt_tokens,
-                completion_tokens=intent_result.completion_tokens,
-                cost_eur=intent_result.cost_eur,
-            )
-        )
-        raise _GenerateError(502, "llm_upstream") from exc
-    llm_ms = intent_result.latency_ms + int((time.perf_counter() - llm_started) * 1000)
-
-    answer = str(lore_gap_ai.content) if lore_gap_ai.content is not None else ""
-
-    # AC-7: aggregate usage from classifier + lore_gap LLM.
-    lore_raw_usage = extract_usage(lore_gap_ai, ctx.llm_client.provider)
-    lore_cost = compute_cost_eur(
-        ctx.llm_client.model,
-        lore_raw_usage.prompt_tokens,
-        lore_raw_usage.completion_tokens,
-    )
-    combined_prompt = _add_optional(intent_result.prompt_tokens, lore_raw_usage.prompt_tokens)
-    combined_completion = _add_optional(
-        intent_result.completion_tokens, lore_raw_usage.completion_tokens
-    )
-    combined_cost = _add_decimal_optional(intent_result.cost_eur, lore_cost)
-    if combined_cost is None and combined_prompt is not None:
+def _build_usage(ctx: _RequestContext, prepared: PreparedMode, ai_message: Any) -> Usage:
+    """Compute Usage, combining classifier tokens for lore_gap and off_topic (AC-7/AC-10)."""
+    raw = extract_usage(ai_message, ctx.llm_client.provider)
+    cost = compute_cost_eur(ctx.llm_client.model, raw.prompt_tokens, raw.completion_tokens)
+    if cost is None and raw.prompt_tokens is not None:
         logger.warning("unknown_model_pricing", model=ctx.llm_client.model)
 
-    lore_gap_usage = Usage(
-        prompt_tokens=combined_prompt,
-        completion_tokens=combined_completion,
-        cost_eur=combined_cost,
-    )
-
-    # AC-8: persist conversation (2 sequential posts: user then assistant).
-    now = datetime.now(UTC)
-    user_result = await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    asst_result = await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-    conversation_logged = user_result.ok and asst_result.ok
-
-    # AC-9: ticket_service AFTER ING-003. If ING-003 failed, skip ticket (FK safety, D4).
-    ticket_action = "skipped_error"
-    if conversation_logged and ctx.db_pool is not None and ctx.embedder is not None:
-        ticket_result: TicketResult = await create_or_increment(
-            ctx.db_pool,
-            ctx.embedder,
-            conversation_id=ctx.conversation_id,
-            # AC-12: store raw query (no prefix) in tickets.question.
-            question=parsed.query,
-            request_id=parsed.request_id,
+    if prepared.mode in ("lore_gap", "off_topic"):
+        ir = prepared.intent_result
+        return Usage(
+            prompt_tokens=add_optional(ir.prompt_tokens, raw.prompt_tokens),
+            completion_tokens=add_optional(ir.completion_tokens, raw.completion_tokens),
+            cost_eur=add_decimal_optional(ir.cost_eur, cost),
         )
-        ticket_action = ticket_result.action
-    elif not conversation_logged:
-        logger.warning(
-            "ticket_service_skipped_after_conversation_log_failed",
-            request_id=parsed.request_id,
-        )
-
-    # AC-11: INSERT query_log.
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="lore_gap",
-            intent=intent_result.intent,
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=lore_gap_usage.prompt_tokens,
-            completion_tokens=lore_gap_usage.completion_tokens,
-            cost_eur=lore_gap_usage.cost_eur,
-        )
+    return Usage(
+        prompt_tokens=raw.prompt_tokens,
+        completion_tokens=raw.completion_tokens,
+        cost_eur=cost,
     )
-
-    # AC-18: log INFO with top_score + ticket_action + chunks + citations=0.
-    logger.info(
-        "generate",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent=intent_result.intent,
-        mode="lore_gap",
-        status=200,
-        retrieve_ms=retrieve_ms,
-        llm_ms=llm_ms,
-        chunks=len(chunks),
-        citations=0,
-        top_score=round(max_score, 4),
-        ticket_action=ticket_action,
-    )
-    return GenerateResponse(
-        answer=answer,
-        citations=[],
-        mode="lore_gap",
-        conversation_id=ctx.conversation_id,
-        request_id=parsed.request_id,
-        usage=lore_gap_usage,
-        retrieve_ms=retrieve_ms,
-        llm_ms=llm_ms,
-    )
-
-
-async def _run_off_topic(ctx: _RequestContext, intent_result: IntentResult) -> GenerateResponse:
-    """Mode 2 off_topic — LLM refusal, no retrieve, no canon LLM (AC-3/AC-7)."""
-    parsed = ctx.parsed
-
-    refusal_messages = build_off_topic_messages(
-        parsed.query, suspected_injection=bool(ctx.suspected), history=ctx.memory_messages
-    )
-    refusal_started = time.perf_counter()
-    try:
-        refusal_ai = await ctx.llm_client.invoke(refusal_messages)
-    except LlmTimeoutError:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        # AC-15: partial query_log with classifier usage only.
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="off_topic",
-                intent="off_topic",
-                status_code=504,
-                latency_ms=latency_ms,
-                prompt_tokens=intent_result.prompt_tokens,
-                completion_tokens=intent_result.completion_tokens,
-                cost_eur=intent_result.cost_eur,
-            )
-        )
-        raise _GenerateError(504, "llm_timeout") from None
-    except LlmUpstreamError as exc:
-        latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-        logger.error("llm_upstream", request_id=parsed.request_id, status=exc.status_code)
-        # AC-16: partial query_log with classifier usage only.
-        await ctx.query_log_repo.insert(
-            QueryLogRow(
-                request_id=parsed.request_id,
-                user_id=parsed.user_id,
-                conversation_id=ctx.conversation_id,
-                query_text=parsed.query,
-                mode="off_topic",
-                intent="off_topic",
-                status_code=502,
-                latency_ms=latency_ms,
-                prompt_tokens=intent_result.prompt_tokens,
-                completion_tokens=intent_result.completion_tokens,
-                cost_eur=intent_result.cost_eur,
-            )
-        )
-        raise _GenerateError(502, "llm_upstream") from exc
-    refusal_ms = int((time.perf_counter() - refusal_started) * 1000)
-
-    answer = str(refusal_ai.content) if refusal_ai.content is not None else ""
-
-    # AC-10: aggregate usage from classifier + refusal LLM.
-    refusal_raw_usage = extract_usage(refusal_ai, ctx.llm_client.provider)
-    refusal_cost = compute_cost_eur(
-        ctx.llm_client.model,
-        refusal_raw_usage.prompt_tokens,
-        refusal_raw_usage.completion_tokens,
-    )
-
-    combined_prompt = _add_optional(intent_result.prompt_tokens, refusal_raw_usage.prompt_tokens)
-    combined_completion = _add_optional(
-        intent_result.completion_tokens, refusal_raw_usage.completion_tokens
-    )
-    combined_cost = _add_decimal_optional(intent_result.cost_eur, refusal_cost)
-
-    if combined_cost is None and combined_prompt is not None:
-        logger.warning("unknown_model_pricing", model=ctx.llm_client.model)
-
-    off_topic_usage = Usage(
-        prompt_tokens=combined_prompt,
-        completion_tokens=combined_completion,
-        cost_eur=combined_cost,
-    )
-
-    # AC-9: retrieve_ms=0, llm_ms = classifier + refusal.
-    llm_ms = intent_result.latency_ms + refusal_ms
-
-    # AC-11: persist conversation messages.
-    now = datetime.now(UTC)
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="user",
-        content=parsed.query,
-        timestamp=now,
-        user_id=parsed.user_id,
-    )
-    await ctx.conversation_client.append_message(
-        conversation_id=ctx.conversation_id,
-        role="assistant",
-        content=answer,
-        timestamp=datetime.now(UTC),
-        user_id=parsed.user_id,
-    )
-
-    # AC-12: insert query_log.
-    latency_ms = int((time.perf_counter() - ctx.started) * 1000)
-    await ctx.query_log_repo.insert(
-        QueryLogRow(
-            request_id=parsed.request_id,
-            user_id=parsed.user_id,
-            conversation_id=ctx.conversation_id,
-            query_text=parsed.query,
-            mode="off_topic",
-            intent="off_topic",
-            status_code=200,
-            latency_ms=latency_ms,
-            prompt_tokens=off_topic_usage.prompt_tokens,
-            completion_tokens=off_topic_usage.completion_tokens,
-            cost_eur=off_topic_usage.cost_eur,
-        )
-    )
-
-    # AC-20: log INFO with intent, chunks=0, citations=0.
-    logger.info(
-        "generate",
-        request_id=parsed.request_id,
-        conversation_id=ctx.conversation_id,
-        intent="off_topic",
-        mode="off_topic",
-        status=200,
-        retrieve_ms=0,
-        llm_ms=llm_ms,
-        chunks=0,
-        citations=0,
-    )
-    return GenerateResponse(
-        answer=answer,
-        citations=[],
-        mode="off_topic",
-        conversation_id=ctx.conversation_id,
-        request_id=parsed.request_id,
-        usage=off_topic_usage,
-        retrieve_ms=0,
-        llm_ms=llm_ms,
-    )
-
-
-def _add_optional(a: int | None, b: int | None) -> int | None:
-    if a is None or b is None:
-        return None
-    return a + b
-
-
-def _add_decimal_optional(a: Decimal | None, b: Decimal | None) -> Decimal | None:
-    if a is None or b is None:
-        return None
-    return a + b

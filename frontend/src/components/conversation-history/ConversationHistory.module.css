@@ -1,0 +1,74 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  padding: 1rem 0.75rem;
+  overflow-y: auto;
+}
+
+.sidebarHeading {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text);
+  margin-bottom: 0.25rem;
+}
+
+.newButton {
+  background: var(--color-accent);
+  color: var(--color-bg);
+  border: none;
+  border-radius: 4px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 0.5rem;
+}
+
+.newButton:hover,
+.newButton:focus {
+  filter: brightness(1.15);
+}
+
+.conversationItem {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text);
+  line-height: 1.35;
+}
+
+.conversationItem:hover,
+.conversationItem:focus {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+
+.conversationItem[aria-current="true"] {
+  background: var(--color-surface);
+  border-color: var(--color-accent);
+}
+
+.count {
+  font-size: 0.75rem;
+  color: var(--color-text);
+  opacity: 0.6;
+  display: block;
+}
+
+.empty {
+  font-size: 0.8rem;
+  color: var(--color-text);
+  opacity: 0.5;
+  font-style: italic;
+}

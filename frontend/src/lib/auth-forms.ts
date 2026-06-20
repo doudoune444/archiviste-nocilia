@@ -3,9 +3,12 @@
  *
  * AUTH-001:
  * - mapGatewayStatusToMessage: translates gateway HTTP status + body to
- *   a human-readable French message. This is the behavior-rich unit-test core.
- * - validatePassword: client-side guard that rejects sub-minimum passwords
- *   before the form is submitted.
+ *   a human-readable French message for login. Behavior-rich unit-test core.
+ * - isPasswordLongEnough: client-side guard before form submission.
+ *
+ * AUTH-002:
+ * - mapSignupStatusToMessage: signup-aware variant that adds a 409 branch
+ *   (email already registered) on top of the shared mapping behavior.
  *
  * A09: raw gateway response bodies are never logged; only structured codes.
  */
@@ -132,4 +135,30 @@ function isGatewayAuthError(value: unknown): value is GatewayAuthError {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   return typeof obj["error"] === "string";
+}
+
+/**
+ * Maps a gateway HTTP status code to a French UI message for the signup flow.
+ *
+ * Adds a 409 branch on top of the shared login mapping:
+ *   409 → { error: "email_taken" } — directs user to log in instead.
+ *
+ * All other status codes delegate to mapGatewayStatusToMessage so the
+ * 503 / 429 / fallback messages stay byte-identical between login and signup.
+ *
+ * A09: gateway error codes are never surfaced verbatim.
+ */
+export function mapSignupStatusToMessage(
+  status: number,
+  body: unknown,
+  retryAfterHeader: string | null
+): GatewayStatusResult {
+  if (status === 409) {
+    return {
+      message:
+        "Cette adresse e-mail est déjà enregistrée. Connectez-vous.",
+    };
+  }
+
+  return mapGatewayStatusToMessage(status, body, retryAfterHeader);
 }

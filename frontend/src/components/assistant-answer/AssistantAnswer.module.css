@@ -1,0 +1,71 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+/* Normalize prose spacing for common markdown elements */
+.markdown p {
+  margin: 0 0 0.5rem;
+}
+
+.markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0.25rem 0 0.5rem 1.25rem;
+  padding: 0;
+}
+
+.markdown li {
+  margin-bottom: 0.2rem;
+}
+
+.markdown pre {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+
+.markdown code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.88em;
+}
+
+.markdown pre code {
+  font-size: 0.85rem;
+  background: none;
+  padding: 0;
+}
+
+.footer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.modeChip {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.45rem;
+  color: var(--color-accent);
+}
+
+.citations {
+  font-size: 0.75rem;
+  color: var(--color-text);
+  opacity: 0.6;
+}

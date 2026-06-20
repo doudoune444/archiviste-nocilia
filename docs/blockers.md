@@ -20,6 +20,14 @@ When an agent (or human) hits a blocker, append an entry below — never patch a
 
 <!-- Append below this line. Most recent first. -->
 
+## 2026-06-19 — CHAT-002 — bff-proxy 30 s AbortSignal may truncate long SSE streams
+
+- File: `frontend/src/lib/bff-proxy.ts:197` (`AbortSignal.timeout(GATEWAY_TIMEOUT_MS)` on the internal `fetch()`)
+- Symptom: `bff-proxy.forward()` attaches `AbortSignal.timeout(30_000)` to its internal `fetch()` call. For LLM responses that take longer than 30 s end-to-end (retrieve + LLM generation), the signal fires mid-stream, aborting the SSE body before `done` or `error` is emitted. The browser SSE consumer (`consumeSseStream`) will receive an `AbortError` from `reader.read()` and the chat surface will show the generic French error message even though part of the answer was already streamed.
+- Why blocked: `bff-proxy.ts` is owned by PLATFORM-002 and the `GATEWAY_TIMEOUT_MS = 30_000` constant is load-bearing for all non-streaming routes (security.md A04: "30 s default, hard cap"). Raising it for streaming without a separate streaming-aware code path would weaken the timeout on all other BFF calls. Patching bff-proxy here (CHAT-002) would be an out-of-scope cross-slice modification forbidden by the plan. Implementing a separate `forwardStream()` variant in bff-proxy requires a dedicated bff-proxy ticket and an ADR to document the streaming timeout policy.
+- Suggested resolution: New ticket `PLATFORM-005` — add `forwardStream(request, path, timeoutMs)` to `bff-proxy.ts` that uses a longer (e.g. 120 s) or no timeout for streaming paths, while keeping `GATEWAY_TIMEOUT_MS` on the existing `forward()`. The chat stream route `POST /api/v1/chat/stream` would then call `forwardStream()` instead of `forward()`. In the interim the 30 s limit is acceptable for shorter LLM responses but must be noted in the runbook.
+- Status: open — risk documented; `forward()` used as-is for CHAT-002 per no-workaround.md protocol
+
 ## 2026-06-18 — PLATFORM-004 — `npm run build` fails with pre-existing observability/page.tsx named-export type error
 
 - File: `frontend/src/app/observability/page.tsx` (not a PLATFORM-004 file)

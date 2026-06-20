@@ -2,6 +2,7 @@
 //!
 //! Covers AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-19, AC-20, AC-22, AC-23.
 //! SEC-004: `rsa_fixture` removed; signing now via IAM signBlob (mockito-backed in DB tests).
+//! DASH-001: category filter + sort for `/v1/tickets` — mirrors board endpoint test coverage.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
@@ -947,5 +948,190 @@ fn sec004_ac12_sign_get_uses_token_provider() {
     assert!(
         src.contains(".await"),
         "conversations.rs must await sign_get (async path)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// DASH-001: category filter + sort=priority|date on /v1/tickets
+// ---------------------------------------------------------------------------
+
+/// Seed helper for dashboard tests: insert one conversation + one ticket.
+async fn insert_author_ticket(
+    pool: &sqlx::PgPool,
+    conv_id: Uuid,
+    user_id: Uuid,
+    question: &str,
+    category: &str,
+    priority_score: i32,
+) {
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(conv_id)
+    .bind(user_id)
+    .bind(format!("gs://archiviste-conversations/conv/{conv_id}.md"))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status) \
+         VALUES ($1, $2, $3, $4, 'open')",
+    )
+    .bind(conv_id)
+    .bind(question)
+    .bind(category)
+    .bind(priority_score)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// DASH-001 AC: `?category=lore` on /v1/tickets returns only matching tickets (author-gated).
+#[sqlx::test(migrations = "../migrations")]
+async fn dash001_tickets_category_filter_narrows_results(pool: sqlx::PgPool) {
+    // DASH-001 AC: category filter on /v1/tickets narrows results to matching category
+    let user_id = Uuid::nil();
+    insert_author_ticket(&pool, Uuid::from_u128(300), user_id, "Lore Q1", "lore", 5).await;
+    insert_author_ticket(&pool, Uuid::from_u128(301), user_id, "Lore Q2", "lore", 3).await;
+    insert_author_ticket(
+        &pool,
+        Uuid::from_u128(302),
+        user_id,
+        "Chrono Q",
+        "chronologie",
+        4,
+    )
+    .await;
+
+    let token = author_token_with_session(&pool).await;
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/tickets?category=lore", Some(&token)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+
+    assert_eq!(items.len(), 2, "category=lore must return exactly 2 items");
+    assert_eq!(body["total"], 2, "total reflects filtered count");
+    for item in items {
+        assert_eq!(
+            item["category"], "lore",
+            "all returned tickets must have category=lore"
+        );
+    }
+}
+
+/// DASH-001 AC: `?sort=date` on /v1/tickets orders by created_at DESC (most recent first).
+#[sqlx::test(migrations = "../migrations")]
+async fn dash001_tickets_sort_date_orders_by_created_at_desc(pool: sqlx::PgPool) {
+    // DASH-001 AC: sort=date on /v1/tickets → items ordered by created_at DESC
+    let user_id = Uuid::nil();
+
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(Uuid::from_u128(310))
+    .bind(user_id)
+    .bind("gs://archiviste-conversations/conv/310.md")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, created_at) \
+         VALUES ($1, $2, $3, $4, 'open', '2024-01-01T00:00:00Z')",
+    )
+    .bind(Uuid::from_u128(310))
+    .bind("Oldest dashboard ticket")
+    .bind("lore")
+    .bind(5_i32)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, gcs_uri, message_count) VALUES ($1, $2, $3, 0)",
+    )
+    .bind(Uuid::from_u128(311))
+    .bind(user_id)
+    .bind("gs://archiviste-conversations/conv/311.md")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tickets (conversation_id, question, category, priority_score, status, created_at) \
+         VALUES ($1, $2, $3, $4, 'open', '2025-06-01T00:00:00Z')",
+    )
+    .bind(Uuid::from_u128(311))
+    .bind("Newest dashboard ticket")
+    .bind("lore")
+    .bind(1_i32)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let token = author_token_with_session(&pool).await;
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/tickets?sort=date", Some(&token)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 2);
+
+    // sort=date → created_at DESC: newest (2025) first, oldest (2024) last
+    assert_eq!(
+        items[0]["question"], "Newest dashboard ticket",
+        "sort=date: newest ticket must be first"
+    );
+    assert_eq!(
+        items[1]["question"], "Oldest dashboard ticket",
+        "sort=date: oldest ticket must be last"
+    );
+}
+
+/// DASH-001 AC: no params on /v1/tickets preserves default ordering (priority DESC — backward-compat).
+#[sqlx::test(migrations = "../migrations")]
+async fn dash001_tickets_no_params_backward_compatible(pool: sqlx::PgPool) {
+    // DASH-001 AC: omitting category + sort preserves default ordering (priority DESC)
+    let user_id = Uuid::nil();
+    insert_author_ticket(&pool, Uuid::from_u128(320), user_id, "Low prio", "lore", 2).await;
+    insert_author_ticket(&pool, Uuid::from_u128(321), user_id, "High prio", "lore", 9).await;
+
+    let token = author_token_with_session(&pool).await;
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/tickets", Some(&token)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 2);
+
+    // Default (no params) → priority_score DESC: 9 first
+    assert_eq!(
+        items[0]["priority_score"], 9,
+        "default ordering must be priority_score DESC"
+    );
+    assert_eq!(items[1]["priority_score"], 2);
+}
+
+/// DASH-001 AC: tickets source uses SortOrder (shared enum from board.rs — no duplication).
+#[test]
+fn dash001_tickets_uses_sort_order_from_board() {
+    // DASH-001 AC: tickets.rs must reuse board.rs SortOrder (no duplication)
+    let src = include_str!("../src/handlers/tickets.rs");
+    assert!(
+        src.contains("handlers::board::SortOrder"),
+        "tickets.rs must import SortOrder from handlers::board (no duplication)"
+    );
+    // security.md A03: format! must not appear in actual code (function call token).
+    // Check for the invocation pattern `format!(` not bare word in comments.
+    assert!(
+        !src.contains("format!("),
+        "tickets.rs must never call format!() for SQL construction (security.md A03)"
+    );
+    assert!(
+        src.contains("category"),
+        "tickets.rs must support category filter param"
     );
 }

@@ -1135,3 +1135,110 @@ fn dash001_tickets_uses_sort_order_from_board() {
         "tickets.rs must support category filter param"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #231: /v1/tickets categories field — pagination-independent and filter-independent
+// ---------------------------------------------------------------------------
+
+/// #231 AC: /v1/tickets categories includes category from beyond page 1.
+///
+/// Seeds 21 open tickets where "rare-cat" only appears on ticket 21.
+/// With limit=20, items has only "common-cat" tickets, but categories lists "rare-cat".
+#[sqlx::test(migrations = "../migrations")]
+async fn tickets_categories_includes_beyond_first_page(pool: sqlx::PgPool) {
+    // #231 AC: /v1/tickets categories is pagination-independent
+    let user_id = Uuid::nil();
+
+    // Insert 20 tickets in "common-cat" (fill page 1)
+    for n in 0_u32..20 {
+        insert_author_ticket(
+            &pool,
+            Uuid::from_u128(u128::from(n) + 600),
+            user_id,
+            &format!("Common Q{n}"),
+            "common-cat",
+            i32::try_from(n + 1).unwrap(),
+        )
+        .await;
+    }
+
+    // Insert 1 ticket in "rare-cat" — priority 0, so it stays on page 2
+    insert_author_ticket(
+        &pool,
+        Uuid::from_u128(620),
+        user_id,
+        "Rare Q",
+        "rare-cat",
+        0,
+    )
+    .await;
+
+    let token = author_token_with_session(&pool).await;
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/tickets?limit=20", Some(&token)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 20, "first page must return 20 items");
+    for item in items {
+        assert_eq!(item["category"], "common-cat");
+    }
+
+    let categories = body["categories"]
+        .as_array()
+        .expect("categories must be array");
+    let cat_strings: Vec<&str> = categories
+        .iter()
+        .map(|v| v.as_str().expect("category must be string"))
+        .collect();
+    assert!(
+        cat_strings.contains(&"rare-cat"),
+        "categories must contain 'rare-cat' (beyond page 1): {cat_strings:?}"
+    );
+}
+
+/// #231 AC: ?category filter on /v1/tickets does not shrink the categories list.
+#[sqlx::test(migrations = "../migrations")]
+async fn tickets_categories_unaffected_by_active_filter(pool: sqlx::PgPool) {
+    // #231 AC: categories is filter-independent on /v1/tickets
+    let user_id = Uuid::nil();
+    insert_author_ticket(&pool, Uuid::from_u128(630), user_id, "Lore Q", "lore", 5).await;
+    insert_author_ticket(
+        &pool,
+        Uuid::from_u128(631),
+        user_id,
+        "Chrono Q",
+        "chronologie",
+        3,
+    )
+    .await;
+
+    let token = author_token_with_session(&pool).await;
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/tickets?category=lore", Some(&token)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+
+    // items reflects the filter
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 1);
+
+    // categories lists ALL open-ticket categories regardless of filter
+    let categories = body["categories"]
+        .as_array()
+        .expect("categories must be array");
+    let cat_strings: Vec<&str> = categories
+        .iter()
+        .map(|v| v.as_str().expect("category must be string"))
+        .collect();
+    assert_eq!(
+        cat_strings.len(),
+        2,
+        "categories must list both categories: {cat_strings:?}"
+    );
+    assert!(cat_strings.contains(&"lore"));
+    assert!(cat_strings.contains(&"chronologie"));
+}

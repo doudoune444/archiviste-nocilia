@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use crate::{
     errors::ApiError,
-    handlers::tickets::{TicketItem, TicketsResponse},
+    handlers::tickets::{fetch_open_categories, TicketItem, TicketsResponse},
     state::AppState,
 };
 
@@ -139,6 +139,11 @@ pub async fn list_board(
         .await
         .map_err(|_| ApiError::UpstreamUnavailable)?;
 
+    // #231: fetch the full distinct category list independent of the active filter.
+    let categories = fetch_open_categories(pool)
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
+
     // A09: never log question text (visitor-supplied content).
     tracing::info!(
         event = "board.tickets.list",
@@ -167,6 +172,7 @@ pub async fn list_board(
         total,
         limit,
         offset,
+        categories,
     }))
 }
 

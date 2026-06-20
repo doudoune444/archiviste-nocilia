@@ -84,7 +84,7 @@ pub struct TicketItem {
     pub judges_not_passed: bool,
 }
 
-/// Response envelope for `GET /v1/tickets` (AC-5).
+/// Response envelope for `GET /v1/tickets` and `GET /v1/board` (#231).
 #[derive(Debug, Serialize)]
 pub struct TicketsResponse {
     /// Paginated ticket items.
@@ -95,6 +95,9 @@ pub struct TicketsResponse {
     pub limit: i64,
     /// Effective offset used in this request.
     pub offset: i64,
+    /// Distinct sorted category values across ALL open tickets — pagination-independent
+    /// and filter-independent (#231: dropdown must show every selectable category).
+    pub categories: Vec<String>,
 }
 
 /// Count row for the `SELECT count(*)` query.
@@ -188,12 +191,31 @@ pub async fn list_tickets(
         })
         .collect();
 
+    let categories = fetch_open_categories(pool)
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
+
     Ok(Json(TicketsResponse {
         items,
         total,
         limit,
         offset,
+        categories,
     }))
+}
+
+/// Fetch all distinct categories of open tickets, sorted alphabetically (#231).
+///
+/// The query intentionally ignores any active `category` filter param — it must
+/// always return the full distinct set so the dropdown lists every selectable option.
+/// No `format!` or string interpolation (security.md A03).
+pub(crate) async fn fetch_open_categories(pool: &sqlx::PgPool) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT category FROM tickets WHERE status = 'open' ORDER BY category",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(c,)| c).collect())
 }
 
 /// Fetch ticket rows applying optional category filter and sort order.

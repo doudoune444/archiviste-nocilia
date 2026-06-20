@@ -23,10 +23,12 @@ export interface BoardPage {
   total: number;
   limit: number;
   offset: number;
+  /** Distinct sorted category values across ALL open tickets (#231). */
+  categories: string[];
 }
 
 /**
- * Minimal runtime shape guard — checks the two fields that callers depend on
+ * Minimal runtime shape guard — checks the fields that callers depend on
  * before casting an unknown response body to BoardPage.
  * No zod dependency: per ADR, heavy deps require an ADR ticket.
  */
@@ -35,6 +37,7 @@ export function isBoardPage(x: unknown): x is BoardPage {
     typeof x === "object" &&
     x !== null &&
     Array.isArray((x as BoardPage).items) &&
-    typeof (x as BoardPage).total === "number"
+    typeof (x as BoardPage).total === "number" &&
+    Array.isArray((x as BoardPage).categories)
   );
 }

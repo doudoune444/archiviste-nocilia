@@ -80,15 +80,6 @@ async function fetchInitialBoard(filter: BoardFilter): Promise<FetchResult> {
   }
 }
 
-/** Derive the sorted deduplicated category list from the loaded page items. */
-function deriveCategories(page: BoardPage): string[] {
-  const seen = new Set<string>();
-  for (const ticket of page.items) {
-    seen.add(ticket.category);
-  }
-  return Array.from(seen).sort();
-}
-
 interface BoardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
@@ -112,7 +103,8 @@ export default async function BoardPage({ searchParams }: BoardPageProps) {
   // present even when the board is empty or failed to load — the controls drive
   // a URL-param re-fetch, so they must not vanish on the error path. Categories
   // can only be derived from a successful page; empty otherwise.
-  const availableCategories = result.ok ? deriveCategories(result.page) : [];
+  // #231: categories comes from the server — pagination- and filter-independent.
+  const availableCategories = result.ok ? result.page.categories : [];
 
   return (
     <section className={styles.page}>

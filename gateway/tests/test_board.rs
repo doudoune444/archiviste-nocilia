@@ -898,3 +898,189 @@ async fn board_category_and_sort_combined(pool: sqlx::PgPool) {
         assert_eq!(item["category"], "lore");
     }
 }
+
+// ---------------------------------------------------------------------------
+// #231: distinct categories field — pagination-independent and filter-independent
+// ---------------------------------------------------------------------------
+
+/// #231 AC: categories contains "rare-cat" even when it only appears beyond page 1.
+///
+/// Seeds BOARD_PAGE_SIZE + 1 (21) open tickets where "rare-cat" is on ticket 21
+/// (offset 20, beyond the default first page). Asserts that `categories` includes
+/// "rare-cat" even though `items` (first page, limit=20) does not contain it.
+#[sqlx::test(migrations = "../migrations")]
+async fn board_categories_includes_beyond_first_page(pool: sqlx::PgPool) {
+    // #231 AC: categories lists ALL open-ticket categories, not just those in items
+    let user_id = Uuid::nil();
+
+    // Insert 20 tickets in "common-cat" (fill page 1)
+    for n in 0_u32..20 {
+        insert_ticket(
+            &pool,
+            Uuid::from_u128(u128::from(n) + 500),
+            user_id,
+            &format!("Common Q{n}"),
+            "common-cat",
+            i32::try_from(n + 1).unwrap(),
+        )
+        .await;
+    }
+
+    // Insert 1 ticket in "rare-cat" — this is ticket 21, beyond page 1
+    insert_ticket(
+        &pool,
+        Uuid::from_u128(520),
+        user_id,
+        "Rare Q",
+        "rare-cat",
+        0,
+    )
+    .await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    // Default limit=20 → first page only; "rare-cat" ticket has priority 0 (last)
+    let resp = get_anon(app, "/v1/board?limit=20").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+
+    let items = body["items"].as_array().expect("items must be array");
+    // First page: only "common-cat" tickets (rare-cat has lowest priority)
+    assert_eq!(items.len(), 20, "first page must return 20 items");
+    for item in items {
+        assert_eq!(
+            item["category"], "common-cat",
+            "first page items must all be common-cat"
+        );
+    }
+
+    // #231 AC: categories must include "rare-cat" despite it not appearing in items
+    let categories = body["categories"]
+        .as_array()
+        .expect("categories must be array");
+    let cat_strings: Vec<&str> = categories
+        .iter()
+        .map(|v| v.as_str().expect("category must be string"))
+        .collect();
+    assert!(
+        cat_strings.contains(&"rare-cat"),
+        "categories must contain 'rare-cat' (beyond page 1): {cat_strings:?}"
+    );
+    assert!(
+        cat_strings.contains(&"common-cat"),
+        "categories must contain 'common-cat': {cat_strings:?}"
+    );
+}
+
+/// #231 AC: ?category=<someCat> still returns the FULL categories list (unfiltered).
+#[sqlx::test(migrations = "../migrations")]
+async fn board_categories_unaffected_by_active_filter(pool: sqlx::PgPool) {
+    // #231 AC: categories is filter-independent — full list regardless of ?category= param
+    let user_id = Uuid::nil();
+    insert_ticket(&pool, Uuid::from_u128(530), user_id, "Lore Q", "lore", 5).await;
+    insert_ticket(
+        &pool,
+        Uuid::from_u128(531),
+        user_id,
+        "Chrono Q",
+        "chronologie",
+        3,
+    )
+    .await;
+    insert_ticket(
+        &pool,
+        Uuid::from_u128(532),
+        user_id,
+        "Geo Q",
+        "geographie",
+        4,
+    )
+    .await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    // Filter to "lore" only — items will be 1, but categories must list all 3
+    let resp = get_anon(app, "/v1/board?category=lore").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+
+    // items reflects the filter
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 1, "filtered items: only lore");
+
+    // categories is NOT filtered
+    let categories = body["categories"]
+        .as_array()
+        .expect("categories must be array");
+    let cat_strings: Vec<&str> = categories
+        .iter()
+        .map(|v| v.as_str().expect("category must be string"))
+        .collect();
+    assert_eq!(
+        cat_strings.len(),
+        3,
+        "categories must list all 3 categories regardless of filter: {cat_strings:?}"
+    );
+    assert!(cat_strings.contains(&"lore"), "must include 'lore'");
+    assert!(
+        cat_strings.contains(&"chronologie"),
+        "must include 'chronologie'"
+    );
+    assert!(
+        cat_strings.contains(&"geographie"),
+        "must include 'geographie'"
+    );
+}
+
+/// #231 AC: categories is sorted and contains no duplicates.
+#[sqlx::test(migrations = "../migrations")]
+async fn board_categories_sorted_and_distinct(pool: sqlx::PgPool) {
+    // #231 AC: categories is ORDER BY category (alphabetical) and DISTINCT
+    let user_id = Uuid::nil();
+    // Insert multiple tickets with the same category ("lore" appears twice)
+    insert_ticket(&pool, Uuid::from_u128(540), user_id, "Lore Q1", "lore", 3).await;
+    insert_ticket(&pool, Uuid::from_u128(541), user_id, "Lore Q2", "lore", 2).await;
+    insert_ticket(
+        &pool,
+        Uuid::from_u128(542),
+        user_id,
+        "Chrono Q",
+        "chronologie",
+        5,
+    )
+    .await;
+
+    let state =
+        Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/board").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+
+    let categories = body["categories"]
+        .as_array()
+        .expect("categories must be array");
+    let cat_strings: Vec<&str> = categories
+        .iter()
+        .map(|v| v.as_str().expect("category must be string"))
+        .collect();
+
+    // #231 AC: distinct — "lore" appears only once despite two tickets
+    assert_eq!(
+        cat_strings.len(),
+        2,
+        "categories must be distinct: {cat_strings:?}"
+    );
+
+    // #231 AC: sorted alphabetically — "chronologie" < "lore"
+    assert_eq!(
+        cat_strings[0], "chronologie",
+        "categories must be sorted: chronologie before lore"
+    );
+    assert_eq!(cat_strings[1], "lore");
+}

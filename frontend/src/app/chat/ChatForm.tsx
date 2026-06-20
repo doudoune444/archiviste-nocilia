@@ -1,6 +1,6 @@
 "use client";
 /**
- * ChatForm — streaming chat input/output (CHAT-002 + CHAT-004).
+ * ChatForm — streaming chat input/output (CHAT-002 + CHAT-003 + CHAT-004).
  *
  * Manages form state, optimistic user message echo, and incremental assistant
  * answer rendering via the SSE consumer.
@@ -12,14 +12,18 @@
  *
  * AC-scope (CHAT-002): token-by-token rendering, streaming indicator, optimistic
  * echo, double-submit guard, single French error message on failure.
- * AC-scope (CHAT-004): data-testid="assistant-answer" kept intact for existing tests.
+ * AC-scope (CHAT-003): committed assistant answers rendered as sanitized Markdown;
+ *   meta.mode and done.citations captured and surfaced in AssistantAnswer.
+ * AC-scope (CHAT-004): data-testid="assistant-answer" kept intact (lives on AssistantAnswer).
  *
  * A09: query text is never logged.
- * A03: LLM output is rendered as plain text (pre-wrap) — never dangerouslySetInnerHTML.
+ * A03: LLM output rendered via AssistantAnswer (react-markdown + rehype-sanitize).
+ *      Plain streaming text uses pre-wrap — never dangerouslySetInnerHTML.
  */
 
 import { useState, useCallback } from "react";
 import { consumeSseStream } from "@/lib/sse-stream";
+import AssistantAnswer from "@/components/assistant-answer/AssistantAnswer";
 import type { ConversationSummary } from "@/components/conversation-history/types";
 import styles from "./chat.module.css";
 
@@ -109,14 +113,20 @@ export function ChatForm({
 
         let accumulated = "";
         let streamFailed = false;
+        // CHAT-003: capture mode from the meta chunk and citations from done.
+        let capturedMode: string | undefined;
+        let capturedCitations: unknown[] | undefined;
         for await (const chunk of consumeSseStream(response.body)) {
-          if (chunk.kind === "token") {
+          if (chunk.kind === "meta") {
+            capturedMode = chunk.mode || undefined;
+          } else if (chunk.kind === "token") {
             accumulated += chunk.text;
             setStreamingText(accumulated);
           } else if (chunk.kind === "stream-error") {
             streamFailed = true;
             break;
           } else if (chunk.kind === "done") {
+            capturedCitations = chunk.citations.length > 0 ? chunk.citations : undefined;
             break;
           }
         }
@@ -132,7 +142,12 @@ export function ChatForm({
         const committedText = accumulated || ERROR_MESSAGE_FRENCH;
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", text: committedText },
+          {
+            role: "assistant",
+            text: committedText,
+            mode: capturedMode,
+            citations: capturedCitations,
+          },
         ]);
 
         // AC CHAT-004: refresh sidebar list after first assistant answer.
@@ -161,13 +176,15 @@ export function ChatForm({
               {message.text}
             </p>
           ) : (
-            <p
-              key={index}
-              className={styles.messageAssistant}
-              data-testid="assistant-answer"
-            >
-              {message.text}
-            </p>
+            // CHAT-003: committed assistant answers render as sanitized Markdown.
+            // data-testid="assistant-answer" lives on AssistantAnswer's container div.
+            <div key={index} className={styles.messageAssistant}>
+              <AssistantAnswer
+                text={message.text}
+                mode={message.mode}
+                citations={message.citations}
+              />
+            </div>
           )
         )}
 

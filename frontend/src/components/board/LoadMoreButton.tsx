@@ -18,14 +18,28 @@ import { buildPaginationParams } from "@/components/category-filter/params";
 import type { BoardFilter } from "@/components/category-filter/params";
 import styles from "./LoadMoreButton.module.css";
 
+/** API path used for pagination fetches — default is the public board route. */
+const DEFAULT_API_PATH = "/api/v1/board";
+
 interface LoadMoreButtonProps {
   initialTickets: BoardTicket[];
   total: number;
   /** BOARD-003: active filter+sort so pagination stays within the filtered set. */
   filter: BoardFilter;
+  /**
+   * Internal API route to call for "load more" pagination.
+   * Defaults to /api/v1/board (public board). Pass /api/v1/tickets for
+   * the author-gated dashboard (DASH-001).
+   */
+  apiPath?: string;
 }
 
-export function LoadMoreButton({ initialTickets, total, filter }: LoadMoreButtonProps) {
+export function LoadMoreButton({
+  initialTickets,
+  total,
+  filter,
+  apiPath = DEFAULT_API_PATH,
+}: LoadMoreButtonProps) {
   const [tickets, setTickets] = useState<BoardTicket[]>(initialTickets);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +55,7 @@ export function LoadMoreButton({ initialTickets, total, filter }: LoadMoreButton
     const params = buildPaginationParams(filter, BOARD_PAGE_SIZE, tickets.length);
 
     try {
-      const response = await fetch(`/api/v1/board?${params}`);
+      const response = await fetch(`${apiPath}?${params}`);
       if (!response.ok) {
         const requestId = response.headers.get("x-request-id") ?? "inconnu";
         setError(`Échec du chargement (id: ${requestId})`);

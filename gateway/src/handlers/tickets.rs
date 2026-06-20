@@ -3,6 +3,12 @@
 //! Uses `sqlx::query_as` (runtime-typed) to avoid the offline-cache requirement of
 //! `sqlx::query!` macros when no live DB is present at compile time (blockers.md MED-3).
 //! The SQL is byte-for-byte as required by AC-20.
+//!
+//! DASH-001 fix: optional `category` filter and `sort=priority|date` added, mirroring
+//! the board endpoint's filter/sort (board.rs). Sort is represented as a Rust enum —
+//! never interpolated into SQL strings. Four separate `sqlx::query_as` literal calls
+//! carry the four (category × sort) combinations; no `format!` is ever used
+//! (security.md A03 — injection prevention).
 
 use std::sync::Arc;
 
@@ -18,17 +24,26 @@ use uuid::Uuid;
 use crate::{
     auth::extractor::{RequireAuthor, UserTier},
     errors::ApiError,
+    handlers::board::SortOrder,
     state::AppState,
     RequestId,
 };
 
-/// Query params for `GET /v1/tickets` (AC-5, AC-7).
+/// Query params for `GET /v1/tickets` (AC-5, AC-7, DASH-001).
 #[derive(Debug, Deserialize)]
 pub struct TicketsQuery {
     /// Max items returned. Range `[1, 200]`; default 50 (AC-5, AC-7).
     pub limit: Option<i64>,
     /// Offset for pagination. Must be `≥ 0`; default 0 (AC-5, AC-7).
     pub offset: Option<i64>,
+    /// Optional category filter. When present, only tickets whose `category` column
+    /// matches exactly are returned. Value is passed as a bound parameter — never
+    /// interpolated into SQL (security.md A03).
+    pub category: Option<String>,
+    /// Sort order: `priority` (default) or `date`.
+    /// Unknown values silently fall back to the default (backward-compatible).
+    #[serde(default)]
+    pub sort: SortOrder,
 }
 
 /// Single ticket row as returned by the SQL query (AC-5, AC-20).
@@ -88,12 +103,17 @@ struct CountRow {
     count: i64,
 }
 
-/// Handler: `GET /v1/tickets` — author-gated, paginated open tickets (AC-5, AC-6, AC-7).
+/// Handler: `GET /v1/tickets` — author-gated, paginated open tickets (AC-5, AC-6, AC-7, DASH-001).
 ///
 /// Uses `RequireAuthor` directly (without `Result<>`) so that Axum lets
 /// `AuthError::IntoResponse` produce the correct status codes:
 /// `InvalidToken`/`SessionRevoked` → 401, `Upstream` → 503, `AuthorRequired` → 403.
 /// This preserves the SEC-001 AC-12 contract and the UI-002 failure-mode contract.
+///
+/// Optional params (DASH-001):
+/// - `category=<text>` — exact match filter on the `category` column (bound param, not
+///   interpolated — security.md A03).
+/// - `sort=priority|date` — controls ORDER BY. Defaults to `priority` (backward-compatible).
 ///
 /// # Errors
 /// Extractor rejection if caller is not `author` or JWT invalid (AC-6, SEC-001 AC-12).
@@ -120,28 +140,22 @@ pub async fn list_tickets(
         .ok_or(ApiError::UpstreamUnavailable)?;
     let start = std::time::Instant::now();
 
-    // AC-20: SQL literal — ORDER BY priority_score DESC, created_at DESC, WHERE status='open'.
-    // Uses `sqlx::query_as` (runtime-typed) instead of `sqlx::query!` macro to avoid
-    // requiring a live DB at compile time (no `.sqlx` offline cache in this repo).
-    let rows: Vec<TicketRow> = sqlx::query_as(
-        "SELECT id, conversation_id, question, category, priority_score, status, \
-         created_at, updated_at, judges_not_passed \
-         FROM tickets \
-         WHERE status = 'open' \
-         ORDER BY priority_score DESC, created_at DESC \
-         LIMIT $1 OFFSET $2",
+    // DASH-001: fetch rows using the appropriate literal SQL for each sort/filter
+    // combination. Sort ordering is expressed as separate query literals — never
+    // interpolated from user input (security.md A03). Category is always a bound $N param.
+    let rows: Vec<TicketRow> = fetch_ticket_rows(
+        pool,
+        limit,
+        offset,
+        params.category.as_deref(),
+        &params.sort,
     )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
     .await
     .map_err(|_| ApiError::UpstreamUnavailable)?;
 
-    let count_row: CountRow =
-        sqlx::query_as("SELECT count(*) as count FROM tickets WHERE status = 'open'")
-            .fetch_one(pool)
-            .await
-            .map_err(|_| ApiError::UpstreamUnavailable)?;
+    let total = fetch_ticket_count(pool, params.category.as_deref())
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
 
     let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let item_count = rows.len();
@@ -176,8 +190,106 @@ pub async fn list_tickets(
 
     Ok(Json(TicketsResponse {
         items,
-        total: count_row.count,
+        total,
         limit,
         offset,
     }))
+}
+
+/// Fetch ticket rows applying optional category filter and sort order.
+///
+/// Four separate literal SQL strings carry the four combinations of
+/// (category filter present/absent) × (sort by priority/date).
+/// No `format!` or string interpolation is used — ORDER BY and WHERE clauses
+/// are chosen in Rust match arms, not embedded from user input (security.md A03).
+async fn fetch_ticket_rows(
+    pool: &sqlx::PgPool,
+    limit: i64,
+    offset: i64,
+    category: Option<&str>,
+    sort: &SortOrder,
+) -> Result<Vec<TicketRow>, sqlx::Error> {
+    match (category, sort) {
+        (None, SortOrder::Priority) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' \
+                 ORDER BY priority_score DESC, created_at DESC \
+                 LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        (None, SortOrder::Date) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' \
+                 ORDER BY created_at DESC, priority_score DESC \
+                 LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        (Some(cat), SortOrder::Priority) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' AND category = $1 \
+                 ORDER BY priority_score DESC, created_at DESC \
+                 LIMIT $2 OFFSET $3",
+            )
+            .bind(cat)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        (Some(cat), SortOrder::Date) => {
+            sqlx::query_as(
+                "SELECT id, conversation_id, question, category, priority_score, status, \
+                 created_at, updated_at, judges_not_passed \
+                 FROM tickets \
+                 WHERE status = 'open' AND category = $1 \
+                 ORDER BY created_at DESC, priority_score DESC \
+                 LIMIT $2 OFFSET $3",
+            )
+            .bind(cat)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+    }
+}
+
+/// Fetch the total count of open tickets, optionally filtered by category.
+async fn fetch_ticket_count(
+    pool: &sqlx::PgPool,
+    category: Option<&str>,
+) -> Result<i64, sqlx::Error> {
+    let row: CountRow = match category {
+        None => {
+            sqlx::query_as("SELECT count(*) as count FROM tickets WHERE status = 'open'")
+                .fetch_one(pool)
+                .await?
+        }
+        Some(cat) => {
+            sqlx::query_as(
+                "SELECT count(*) as count FROM tickets WHERE status = 'open' AND category = $1",
+            )
+            .bind(cat)
+            .fetch_one(pool)
+            .await?
+        }
+    };
+    Ok(row.count)
 }

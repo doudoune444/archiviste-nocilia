@@ -7,7 +7,10 @@
  *
  * AC-scope: token-by-token rendering, streaming indicator, optimistic echo,
  * double-submit guard, single French error message on failure.
- * OUT OF SCOPE: Markdown rendering, history, signal — downstream slices.
+ * OUT OF SCOPE: Markdown rendering, history — downstream slices.
+ *
+ * CHAT-005: per-answer SignalForm rendered under each committed assistant
+ * answer when conversationId is available from the meta SSE chunk.
  *
  * A09: query text is never logged.
  * A03: LLM output is rendered as plain text (pre-wrap) — never dangerouslySetInnerHTML.
@@ -15,6 +18,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import { consumeSseStream } from "@/lib/sse-stream";
+import { SignalForm } from "@/components/signal-form/SignalForm";
 import styles from "./chat.module.css";
 
 /** Named constant for the gateway path — keeps the module self-documenting. */
@@ -24,9 +28,17 @@ const CHAT_STREAM_PATH = "/api/v1/chat/stream";
 const ERROR_MESSAGE_FRENCH =
   "Une erreur est survenue. Veuillez réessayer dans quelques instants.";
 
+/**
+ * Shared contract for a chat message.
+ * All optional fields beyond role/text are filled by specific tickets;
+ * keep all optional so parallel slices compose without conflicts.
+ */
 interface Message {
   role: "user" | "assistant";
   text: string;
+  mode?: string;            // another ticket
+  citations?: unknown[];    // another ticket
+  conversationId?: string;  // CHAT-005: set from meta.conversation_id
 }
 
 function ChatForm() {
@@ -72,8 +84,17 @@ function ChatForm() {
 
         let accumulated = "";
         let streamFailed = false;
+        // CHAT-005: capture conversation_id from the meta chunk so we can
+        // attach it to the committed assistant message for SignalForm.
+        let capturedConversationId: string | undefined;
+
         for await (const chunk of consumeSseStream(response.body)) {
-          if (chunk.kind === "token") {
+          if (chunk.kind === "meta") {
+            // meta.conversation_id is always a string (may be empty on error path).
+            if (chunk.conversation_id) {
+              capturedConversationId = chunk.conversation_id;
+            }
+          } else if (chunk.kind === "token") {
             accumulated += chunk.text;
             setStreamingText(accumulated);
           } else if (chunk.kind === "stream-error") {
@@ -98,7 +119,11 @@ function ChatForm() {
         const committedText = accumulated || ERROR_MESSAGE_FRENCH;
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", text: committedText },
+          {
+            role: "assistant",
+            text: committedText,
+            conversationId: capturedConversationId,
+          },
         ]);
       } catch {
         // Network failure or AbortError — never log (may contain query context).
@@ -123,13 +148,22 @@ function ChatForm() {
               {message.text}
             </p>
           ) : (
-            <p
-              key={index}
-              className={styles.messageAssistant}
-              data-testid="assistant-answer"
-            >
-              {message.text}
-            </p>
+            <div key={index}>
+              <p
+                className={styles.messageAssistant}
+                data-testid="assistant-answer"
+              >
+                {message.text}
+              </p>
+              {/* AC CHAT-005: render the signal control under each committed
+                  assistant answer when the conversationId is available. */}
+              {message.conversationId !== undefined && (
+                <SignalForm
+                  conversationId={message.conversationId}
+                  citations={message.citations}
+                />
+              )}
+            </div>
           )
         )}
 

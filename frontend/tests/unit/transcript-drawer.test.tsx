@@ -325,7 +325,7 @@ describe("DashboardTickets integration — open drawer then close", () => {
       <DashboardTickets
         initialTickets={[makeTicket()]}
         total={1}
-        filter={{ category: null, sort: "priority" }}
+        filter={{ category: undefined, sort: "priority" }}
         apiPath="/api/v1/tickets"
       />
     );
@@ -361,7 +361,7 @@ describe("DashboardTickets integration — open drawer then close", () => {
       <DashboardTickets
         initialTickets={[makeTicket({ conversation_id: "conv-99" })]}
         total={1}
-        filter={{ category: null, sort: "priority" }}
+        filter={{ category: undefined, sort: "priority" }}
         apiPath="/api/v1/tickets"
       />
     );

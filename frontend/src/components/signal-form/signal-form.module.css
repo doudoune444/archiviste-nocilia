@@ -1,0 +1,83 @@
+.wrapper {
+  margin-top: 0.5rem;
+}
+
+.triggerButton {
+  background: none;
+  border: none;
+  color: var(--color-accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.25rem 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.triggerButton:hover {
+  opacity: 0.8;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.claimLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.claimTextarea {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  resize: vertical;
+  min-height: 64px;
+  width: 100%;
+  font-family: var(--font-sans);
+}
+
+.claimTextarea:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.submitButton {
+  align-self: flex-end;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 0.4rem 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.submitButton:hover:not(:disabled),
+.submitButton:focus:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.submitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.outcomeConfirmed {
+  font-size: 0.85rem;
+  color: var(--color-accent);
+  padding: 0.35rem 0;
+}
+
+.outcomeNotConfirmed {
+  font-size: 0.85rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  padding: 0.35rem 0;
+}

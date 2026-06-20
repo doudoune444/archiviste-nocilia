@@ -13,7 +13,7 @@
 
 import { cookies, headers } from "next/headers";
 import { forward } from "@/lib/bff-proxy";
-import { LoadMoreButton } from "@/components/board/LoadMoreButton";
+import { DashboardTickets } from "@/components/dashboard/DashboardTickets";
 import { BoardControls } from "@/components/category-filter/BoardControls";
 import {
   filterFromParams,
@@ -144,8 +144,8 @@ export default async function DashboardPage({
             {result.page.total} ticket{result.page.total !== 1 ? "s" : ""}{" "}
             ouvert{result.page.total !== 1 ? "s" : ""}
           </p>
-          {/* AC-3: reuse LoadMoreButton (which wraps TicketTable) */}
-          <LoadMoreButton
+          {/* AC-3: reuse LoadMoreButton via DashboardTickets (which owns drawer state — DASH-002) */}
+          <DashboardTickets
             initialTickets={result.page.items}
             total={result.page.total}
             filter={filter}

@@ -32,6 +32,11 @@ interface LoadMoreButtonProps {
    * the author-gated dashboard (DASH-001).
    */
   apiPath?: string;
+  /**
+   * DASH-002: when provided, adds a per-row "open transcript" button.
+   * Passed through to TicketTable. Public board omits this → no button.
+   */
+  onOpenTranscript?: (ticket: BoardTicket) => void;
 }
 
 export function LoadMoreButton({
@@ -39,6 +44,7 @@ export function LoadMoreButton({
   total,
   filter,
   apiPath = DEFAULT_API_PATH,
+  onOpenTranscript,
 }: LoadMoreButtonProps) {
   const [tickets, setTickets] = useState<BoardTicket[]>(initialTickets);
   const [isLoading, setIsLoading] = useState(false);
@@ -78,7 +84,7 @@ export function LoadMoreButton({
 
   return (
     <div>
-      <TicketTable tickets={tickets} />
+      <TicketTable tickets={tickets} onOpenTranscript={onOpenTranscript} />
       {error !== null && (
         <p className={styles.error} role="alert">
           {error}

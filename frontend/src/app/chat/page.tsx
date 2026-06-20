@@ -1,6 +1,6 @@
 "use client";
 /**
- * /chat — streaming chat surface (CHAT-002, CHAT-003).
+ * /chat — streaming chat surface (CHAT-002, CHAT-003, CHAT-005).
  *
  * Client Component: manages form state, optimistic user message echo, and
  * incremental assistant answer rendering via the SSE consumer.
@@ -8,7 +8,9 @@
  * AC-scope (CHAT-002): token-by-token rendering, streaming indicator, optimistic echo,
  * double-submit guard, single French error message on failure.
  * AC-scope (CHAT-003): committed assistant answers rendered as sanitized Markdown;
- * meta.mode and done.citations captured and surfaced in AssistantAnswer.
+ *      meta.mode and done.citations captured and surfaced in AssistantAnswer.
+ * AC-scope (CHAT-005): per-answer SignalForm rendered under each committed assistant
+ *      answer when conversationId is available from the meta SSE chunk.
  *
  * A09: query text is never logged.
  * A03: LLM output rendered via AssistantAnswer (react-markdown + rehype-sanitize).
@@ -17,6 +19,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import { consumeSseStream } from "@/lib/sse-stream";
+import { SignalForm } from "@/components/signal-form/SignalForm";
 import AssistantAnswer from "@/components/assistant-answer/AssistantAnswer";
 import styles from "./chat.module.css";
 
@@ -27,12 +30,17 @@ const CHAT_STREAM_PATH = "/api/v1/chat/stream";
 const ERROR_MESSAGE_FRENCH =
   "Une erreur est survenue. Veuillez réessayer dans quelques instants.";
 
+/**
+ * Shared contract for a chat message.
+ * All optional fields beyond role/text are filled by specific tickets;
+ * keep all optional so parallel slices compose without conflicts.
+ */
 interface Message {
   role: "user" | "assistant";
   text: string;
   mode?: string;            // CHAT-003: sourced from SSE meta chunk
   citations?: unknown[];    // CHAT-003: sourced from SSE done chunk
-  conversationId?: string;  // reserved for a downstream slice — leave declared
+  conversationId?: string;  // CHAT-005: set from meta.conversation_id
 }
 
 function ChatForm() {
@@ -78,13 +86,20 @@ function ChatForm() {
 
         let accumulated = "";
         let streamFailed = false;
-        // CHAT-003: capture mode from the first meta chunk and citations from done.
+        // CHAT-003: capture mode from the meta chunk and citations from done.
+        // CHAT-005: capture conversation_id from the meta chunk so we can
+        // attach it to the committed assistant message for SignalForm.
         let capturedMode: string | undefined;
         let capturedCitations: unknown[] | undefined;
+        let capturedConversationId: string | undefined;
 
         for await (const chunk of consumeSseStream(response.body)) {
           if (chunk.kind === "meta") {
             capturedMode = chunk.mode || undefined;
+            // meta.conversation_id is always a string (may be empty on error path).
+            if (chunk.conversation_id) {
+              capturedConversationId = chunk.conversation_id;
+            }
           } else if (chunk.kind === "token") {
             accumulated += chunk.text;
             setStreamingText(accumulated);
@@ -116,6 +131,7 @@ function ChatForm() {
             text: committedText,
             mode: capturedMode,
             citations: capturedCitations,
+            conversationId: capturedConversationId,
           },
         ]);
       } catch {
@@ -149,6 +165,14 @@ function ChatForm() {
                 mode={message.mode}
                 citations={message.citations}
               />
+              {/* AC CHAT-005: render the signal control under each committed
+                  assistant answer when the conversationId is available. */}
+              {message.conversationId !== undefined && (
+                <SignalForm
+                  conversationId={message.conversationId}
+                  citations={message.citations}
+                />
+              )}
             </div>
           )
         )}

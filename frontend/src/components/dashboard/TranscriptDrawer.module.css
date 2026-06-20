@@ -1,0 +1,144 @@
+/**
+ * DASH-002: Slide-over transcript drawer that sits alongside the ticket list.
+ * On a laptop (≥900px) it shares horizontal space with the list (flex row).
+ * On narrow viewports it overlays as a right-anchored panel.
+ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 100;
+  /* Only show backdrop on narrow viewports — on laptop the drawer sits alongside */
+  display: none;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(480px, 100vw);
+  background: var(--color-bg);
+  border-left: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  z-index: 101;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.closeBtn {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.closeBtn:hover {
+  color: var(--color-text);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Loading + error states */
+.status {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  padding: 0.5rem 0;
+}
+
+.error {
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+}
+
+.requestId {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* Turn layout */
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.turnLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.turnLabel[data-role="user"] {
+  color: var(--color-accent);
+}
+
+.turnContent {
+  background: var(--color-surface);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--color-border);
+}
+
+/* On laptop: drawer is inline (flex child of wrapper), not fixed */
+@media (min-width: 900px) {
+  .backdrop {
+    display: none;
+  }
+
+  .drawer {
+    position: static;
+    width: 440px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--color-border);
+    border-top: none;
+    height: auto;
+    min-height: 400px;
+  }
+}
+
+/* On narrow: show backdrop */
+@media (max-width: 899px) {
+  .backdrop {
+    display: block;
+  }
+}

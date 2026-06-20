@@ -324,6 +324,105 @@ async fn hist001_signed_url_author_reads_any(pool: sqlx::PgPool) {
 // #161 — reload regression: backend contract the JS reload path relies on
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// DASH-002 AC: author may read any conversation's turns (owner-or-author)
+// ---------------------------------------------------------------------------
+
+/// DASH-002 AC: author calling /messages for a conversation owned by a DIFFERENT user
+/// → 200 with turns in ordinal order (moderation dashboard read).
+///
+/// Non-author tier is unchanged — the AC for that (non-owner → 404) is tested
+/// in `hist001_messages_cross_owner_denied_404` below.
+#[sqlx::test(migrations = "../migrations")]
+async fn dash002_messages_author_reads_other_user_conversation(pool: sqlx::PgPool) {
+    // DASH-002 AC: author may read any conversation for moderation.
+    let (_author_id, author_token) = seed_user_with_session(&pool, UserTier::Author).await;
+    let other_id = seed_anon_owner(&pool).await;
+    let conv = seed_conversation(&pool, other_id, 2, ts(30)).await;
+    seed_message(&pool, conv, "user", 0, "question modérée").await;
+    seed_message(&pool, conv, "assistant", 1, "réponse modérée").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(
+        app,
+        &format!("/v1/conversations/{conv}/messages"),
+        Some(&author_token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "author must read any conversation for moderation dashboard (DASH-002)"
+    );
+
+    let body = body_json(resp).await;
+    assert_eq!(body["conversation_id"], conv.to_string());
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2, "author must see both turns");
+    // Turns returned in ordinal order (ascending).
+    assert_eq!(messages[0]["ordinal"], 0);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "question modérée");
+    assert_eq!(messages[1]["ordinal"], 1);
+    assert_eq!(messages[1]["role"], "assistant");
+}
+
+/// DASH-002 AC: non-author, non-owner calling /messages → 404 (IDOR preserved).
+/// Indistinguishable from a non-existent conversation.
+#[sqlx::test(migrations = "../migrations")]
+async fn dash002_messages_non_author_non_owner_denied_404(pool: sqlx::PgPool) {
+    // DASH-002 AC: non-author non-owner → 404, existence hidden (security.md A01 IDOR).
+    let (_caller_id, caller_token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let other_id = seed_anon_owner(&pool).await;
+    let foreign = seed_conversation(&pool, other_id, 1, ts(30)).await;
+    seed_message(&pool, foreign, "user", 0, "secret").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(
+        app,
+        &format!("/v1/conversations/{foreign}/messages"),
+        Some(&caller_token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "non-author non-owner must get 404 (IDOR preserved)"
+    );
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "conversation_not_found");
+}
+
+/// DASH-002 AC (no regression): owner (non-author) reading their own conversation → 200.
+#[sqlx::test(migrations = "../migrations")]
+async fn dash002_messages_owner_non_author_reads_own_200(pool: sqlx::PgPool) {
+    // DASH-002 AC: owner (non-author tier) must still read their own conversation.
+    let (owner_id, owner_token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, owner_id, 1, ts(30)).await;
+    seed_message(&pool, conv, "user", 0, "ma question").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(
+        app,
+        &format!("/v1/conversations/{conv}/messages"),
+        Some(&owner_token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "owner (non-author) must still read their own conversation (no regression)"
+    );
+    let body = body_json(resp).await;
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["content"], "ma question");
+}
+
+// ---------------------------------------------------------------------------
+// #161 — reload regression: backend contract the JS reload path relies on
+// ---------------------------------------------------------------------------
+
 /// #161 AC: on page reload, `reopenConversation(activeId)` in app.js calls
 /// GET /v1/conversations/{id}/messages as the owner and expects 200 + ordered turns.
 /// This test documents the server contract that makes the reload flow safe:

@@ -1,0 +1,21 @@
+/**
+ * DASH-002: layout wrapper for the dashboard ticket list + transcript drawer.
+ * On laptop (≥900px) the drawer sits alongside the list as a flex row.
+ */
+
+.wrapper {
+  width: 100%;
+}
+
+.wrapperWithDrawer {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+}
+
+.listPane {
+  flex: 1;
+  min-width: 0;
+}

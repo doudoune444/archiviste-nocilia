@@ -1,16 +1,19 @@
-//! Owner-scoped conversation history endpoints (HIST-001) + GCS signed URL.
+//! Conversation history endpoints (HIST-001, DASH-002) + GCS signed URL.
 //!
 //! Three routes, all resolving the caller via the `AnonIdentity` extension
 //! (set by `resolve_identity` middleware) so anonymous visitors reach them:
 //!   - `GET /v1/conversations` — list the caller's own conversations.
-//!   - `GET /v1/conversations/{id}/messages` — turns of an owned conversation,
-//!     read directly from the structured `conversation_messages` store (MEM-001).
+//!   - `GET /v1/conversations/{id}/messages` — turns of a conversation; owner-or-author
+//!     (authors moderate any conversation via the dashboard; every other tier only their own).
 //!   - `GET /v1/conversations/{id}/signed-url` — GCS V4 signed URL; owner-or-author
 //!     (authors moderate any conversation, every other tier only their own).
 //!
-//! Ownership is enforced in SQL on every read so a caller passing another user's
+//! Visibility is enforced in SQL on every read so a caller passing another user's
 //! `conversation_id` learns nothing (security.md A01 — IDOR). The two list/read
 //! queries carry a `LIMIT` (no unbounded bulk endpoint, security.md A04).
+//!
+//! The single predicate `caller_moderates_all` is the source of truth for the
+//! "author sees any conversation" rule (DASH-002 AC: single shared predicate).
 //!
 //! Uses `sqlx::query_as` (runtime-typed) to avoid compile-time DB requirement (blockers.md MED-3).
 
@@ -38,6 +41,20 @@ const MAX_CONVERSATIONS: i64 = 50;
 
 /// Max turns returned when reopening a conversation (security.md A04 LIMIT guard).
 const MAX_MESSAGES: i64 = 500;
+
+// ---------------------------------------------------------------------------
+// Shared visibility predicate
+// ---------------------------------------------------------------------------
+
+/// Returns `true` when the caller holds the `Author` tier and therefore may read
+/// any conversation regardless of ownership (DASH-002 moderation dashboard).
+///
+/// Single source of truth for the "author sees all" rule — used by both the
+/// `conversation_messages` and `fetch_gcs_uri_for_caller` paths so that a future
+/// change to the tier requirement only touches this one place.
+const fn caller_moderates_all(identity: &AnonIdentity) -> bool {
+    matches!(identity.tier, UserTier::Author)
+}
 
 // ---------------------------------------------------------------------------
 // GET /v1/conversations — owner-scoped list
@@ -99,7 +116,7 @@ pub async fn list_conversations(
 }
 
 // ---------------------------------------------------------------------------
-// GET /v1/conversations/{id}/messages — owner-scoped turns read
+// GET /v1/conversations/{id}/messages — owner-or-author turns read
 // ---------------------------------------------------------------------------
 
 /// One turn row from `conversation_messages`.
@@ -117,16 +134,19 @@ pub struct ConversationMessagesResponse {
     messages: Vec<ConversationMessage>,
 }
 
-/// Handler: `GET /v1/conversations/{id}/messages` — turns of an owned conversation.
+/// Handler: `GET /v1/conversations/{id}/messages` — turns of a conversation (owner-or-author).
 ///
 /// Reads the structured `conversation_messages` store directly (AFK — no workers
-/// call, no contract change). The `JOIN conversations` enforces ownership in SQL,
-/// so a caller passing another user's `conversation_id` gets zero rows.
+/// call, no contract change). Authors (moderation dashboard, DASH-002) may read
+/// any conversation; every other tier is restricted to conversations they own.
+/// Visibility is enforced in SQL: a non-author passing another user's
+/// `conversation_id` gets zero rows (security.md A01 IDOR).
 ///
 /// # Errors
 /// `ApiError::UpstreamUnavailable` if no DB pool is configured or the query fails.
-/// `ApiError::ConversationNotFound` if the conversation is not the caller's or does
-/// not exist (both collapse to 404 so a non-owner cannot probe existence).
+/// `ApiError::ConversationNotFound` if the conversation is not visible to the caller
+/// (not found, or not owned by a non-author — both collapse to 404 so callers
+/// cannot probe existence).
 pub async fn conversation_messages(
     Extension(identity): Extension<AnonIdentity>,
     Extension(req_id): Extension<RequestId>,
@@ -138,24 +158,12 @@ pub async fn conversation_messages(
         .as_ref()
         .ok_or(ApiError::UpstreamUnavailable)?;
 
-    // Ownership enforced in SQL (JOIN on conversations.user_id = caller): a caller
-    // passing another user's conversation_id gets zero rows (security.md A01 IDOR).
-    let messages: Vec<ConversationMessage> = sqlx::query_as(
-        "SELECT cm.role, cm.ordinal, cm.content \
-         FROM conversation_messages cm \
-         JOIN conversations c ON c.id = cm.conversation_id \
-         WHERE cm.conversation_id = $1 AND c.user_id = $2 \
-         ORDER BY cm.ordinal ASC LIMIT $3",
-    )
-    .bind(conversation_id)
-    .bind(identity.user_id)
-    .bind(MAX_MESSAGES)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| ApiError::UpstreamUnavailable)?;
+    let messages = fetch_messages_for_caller(pool, conversation_id, &identity)
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
 
-    // Empty ⇒ not the caller's conversation or non-existent. 404 in both cases so a
-    // non-owner cannot distinguish them; an owned conversation always has ≥1 turn.
+    // Empty ⇒ conversation not visible to caller (not found or not owned by non-author).
+    // 404 in both cases so callers cannot probe existence (security.md A01 IDOR).
     if messages.is_empty() {
         return Err(ApiError::ConversationNotFound);
     }
@@ -173,6 +181,44 @@ pub async fn conversation_messages(
         conversation_id,
         messages,
     }))
+}
+
+/// Fetch conversation turns, owner-scoped unless the caller is an author.
+///
+/// Authors (moderation dashboard) read any conversation's turns; every other tier
+/// is restricted to conversations they own (security.md A01 IDOR, DASH-002).
+async fn fetch_messages_for_caller(
+    pool: &sqlx::PgPool,
+    conversation_id: Uuid,
+    identity: &AnonIdentity,
+) -> Result<Vec<ConversationMessage>, sqlx::Error> {
+    if caller_moderates_all(identity) {
+        // Author path: no ownership filter — any conversation is readable.
+        sqlx::query_as(
+            "SELECT cm.role, cm.ordinal, cm.content \
+             FROM conversation_messages cm \
+             WHERE cm.conversation_id = $1 \
+             ORDER BY cm.ordinal ASC LIMIT $2",
+        )
+        .bind(conversation_id)
+        .bind(MAX_MESSAGES)
+        .fetch_all(pool)
+        .await
+    } else {
+        // Non-author path: JOIN enforces ownership in SQL; zero rows → 404 above.
+        sqlx::query_as(
+            "SELECT cm.role, cm.ordinal, cm.content \
+             FROM conversation_messages cm \
+             JOIN conversations c ON c.id = cm.conversation_id \
+             WHERE cm.conversation_id = $1 AND c.user_id = $2 \
+             ORDER BY cm.ordinal ASC LIMIT $3",
+        )
+        .bind(conversation_id)
+        .bind(identity.user_id)
+        .bind(MAX_MESSAGES)
+        .fetch_all(pool)
+        .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,12 +328,13 @@ pub async fn signed_url(
 ///
 /// Authors (moderation dashboard) read any conversation; every other tier is
 /// restricted to conversations they own, closing the signed-url IDOR (HIST-001).
+/// Uses `caller_moderates_all` — the single source of truth for the author rule.
 async fn fetch_gcs_uri_for_caller(
     pool: &sqlx::PgPool,
     conversation_id: Uuid,
     identity: &AnonIdentity,
 ) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<ConversationGcsRow> = if identity.tier == UserTier::Author {
+    let row: Option<ConversationGcsRow> = if caller_moderates_all(identity) {
         sqlx::query_as("SELECT gcs_uri FROM conversations WHERE id = $1")
             .bind(conversation_id)
             .fetch_optional(pool)

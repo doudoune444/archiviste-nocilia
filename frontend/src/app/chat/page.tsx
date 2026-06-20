@@ -1,20 +1,23 @@
 "use client";
 /**
- * /chat — streaming chat surface (CHAT-002).
+ * /chat — streaming chat surface (CHAT-002, CHAT-003).
  *
  * Client Component: manages form state, optimistic user message echo, and
  * incremental assistant answer rendering via the SSE consumer.
  *
- * AC-scope: token-by-token rendering, streaming indicator, optimistic echo,
+ * AC-scope (CHAT-002): token-by-token rendering, streaming indicator, optimistic echo,
  * double-submit guard, single French error message on failure.
- * OUT OF SCOPE: Markdown rendering, history, signal — downstream slices.
+ * AC-scope (CHAT-003): committed assistant answers rendered as sanitized Markdown;
+ * meta.mode and done.citations captured and surfaced in AssistantAnswer.
  *
  * A09: query text is never logged.
- * A03: LLM output is rendered as plain text (pre-wrap) — never dangerouslySetInnerHTML.
+ * A03: LLM output rendered via AssistantAnswer (react-markdown + rehype-sanitize).
+ *      Plain streaming text uses pre-wrap — never dangerouslySetInnerHTML.
  */
 
 import { useState, useCallback, useRef } from "react";
 import { consumeSseStream } from "@/lib/sse-stream";
+import AssistantAnswer from "@/components/assistant-answer/AssistantAnswer";
 import styles from "./chat.module.css";
 
 /** Named constant for the gateway path — keeps the module self-documenting. */
@@ -27,6 +30,9 @@ const ERROR_MESSAGE_FRENCH =
 interface Message {
   role: "user" | "assistant";
   text: string;
+  mode?: string;            // CHAT-003: sourced from SSE meta chunk
+  citations?: unknown[];    // CHAT-003: sourced from SSE done chunk
+  conversationId?: string;  // reserved for a downstream slice — leave declared
 }
 
 function ChatForm() {
@@ -72,8 +78,14 @@ function ChatForm() {
 
         let accumulated = "";
         let streamFailed = false;
+        // CHAT-003: capture mode from the first meta chunk and citations from done.
+        let capturedMode: string | undefined;
+        let capturedCitations: unknown[] | undefined;
+
         for await (const chunk of consumeSseStream(response.body)) {
-          if (chunk.kind === "token") {
+          if (chunk.kind === "meta") {
+            capturedMode = chunk.mode || undefined;
+          } else if (chunk.kind === "token") {
             accumulated += chunk.text;
             setStreamingText(accumulated);
           } else if (chunk.kind === "stream-error") {
@@ -81,6 +93,7 @@ function ChatForm() {
             streamFailed = true;
             break;
           } else if (chunk.kind === "done") {
+            capturedCitations = chunk.citations.length > 0 ? chunk.citations : undefined;
             break;
           }
         }
@@ -98,7 +111,12 @@ function ChatForm() {
         const committedText = accumulated || ERROR_MESSAGE_FRENCH;
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", text: committedText },
+          {
+            role: "assistant",
+            text: committedText,
+            mode: capturedMode,
+            citations: capturedCitations,
+          },
         ]);
       } catch {
         // Network failure or AbortError — never log (may contain query context).
@@ -123,13 +141,15 @@ function ChatForm() {
               {message.text}
             </p>
           ) : (
-            <p
-              key={index}
-              className={styles.messageAssistant}
-              data-testid="assistant-answer"
-            >
-              {message.text}
-            </p>
+            // CHAT-003: committed assistant answers render as sanitized Markdown.
+            // data-testid="assistant-answer" lives on AssistantAnswer's container div.
+            <div key={index} className={styles.messageAssistant}>
+              <AssistantAnswer
+                text={message.text}
+                mode={message.mode}
+                citations={message.citations}
+              />
+            </div>
           )
         )}
 

@@ -1,16 +1,17 @@
 "use client";
 /**
- * /login — authentication form page (AUTH-001).
+ * /signup — account creation form page (AUTH-002).
  *
  * Client Component: handles form state, client-side validation, and
- * server-round-trip through the BFF API route POST /api/v1/auth/login.
+ * server-round-trip through the BFF API route POST /api/v1/auth/signup.
  *
+ * AC: invalid email rejected client-side before submit.
  * AC: sub-minimum password rejected client-side before submit.
- * AC: 401/429/503 each map to a clear French message.
- * AC: on success, user is redirected to the originating page (default /).
+ * AC: 409 (email already taken) maps to a clear French message directing
+ *     the user to log in ("Cette adresse e-mail est déjà enregistrée.
+ *     Connectez-vous.").
+ * AC: on success, user is redirected to /login to authenticate.
  * AC: password field is masked (type="password"); credentials never logged.
- *
- * AUTH-002: "Créer un compte" link added — navigates to /signup.
  *
  * A09: credentials are never logged or echoed.
  */
@@ -18,33 +19,54 @@
 import { Suspense, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { isPasswordLongEnough, mapGatewayStatusToMessage, safeRedirectTarget } from "@/lib/auth-forms";
-import styles from "./login.module.css";
+import {
+  isPasswordLongEnough,
+  mapSignupStatusToMessage,
+  safeRedirectTarget,
+} from "@/lib/auth-forms";
+import styles from "../login/login.module.css";
 
 /** Minimum characters the UI validates locally (mirrors gateway PASSWORD_MIN_LEN). */
 const PASSWORD_MIN_LEN = 12;
 
-function LoginForm() {
+/** Simple email shape check — mirrors the gateway regex AC-3 pattern. */
+function isEmailValid(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function SignupForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
 
-  /** Client-side password length check — rejects before any network call. */
+  /** Client-side validation — rejects before any network call. */
   const validateForm = useCallback((): boolean => {
+    let valid = true;
+
+    if (!isEmailValid(email)) {
+      setEmailError("Adresse e-mail invalide.");
+      valid = false;
+    } else {
+      setEmailError(null);
+    }
+
     if (!isPasswordLongEnough(password)) {
       setPasswordError(
         `Le mot de passe doit contenir au moins ${PASSWORD_MIN_LEN} caractères.`
       );
-      return false;
+      valid = false;
+    } else {
+      setPasswordError(null);
     }
-    setPasswordError(null);
-    return true;
-  }, [password]);
+
+    return valid;
+  }, [email, password]);
 
   const handleSubmit = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -55,32 +77,34 @@ function LoginForm() {
 
       setIsPending(true);
       try {
-        const response = await fetch("/api/v1/auth/login", {
+        const response = await fetch("/api/v1/auth/signup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, password }),
         });
 
         if (response.ok) {
-          // AC: return to originating page (default /)
-          // safeRedirectTarget rejects external URLs, protocol-relative paths,
-          // and backslash tricks — prevents open-redirect phishing pivot.
+          // AC: signup does not auto-login (gateway returns 201 without a
+          // session cookie). Redirect to /login so the user can authenticate.
+          // safeRedirectTarget guards the ?from= param (OWASP A01 / CWE-601).
           const from = safeRedirectTarget(searchParams.get("from"));
+          const target = from === "/" ? "/login" : from;
           router.refresh();
-          router.push(from);
+          router.push(target);
           return;
         }
 
         const body: unknown = await response.json().catch(() => null);
         const retryAfterHeader = response.headers.get("retry-after");
-        const { message } = mapGatewayStatusToMessage(
+        const { message } = mapSignupStatusToMessage(
           response.status,
           body,
           retryAfterHeader
         );
         setErrorMessage(message);
       } catch {
-        // Network failure — never log the error object (may contain credentials context).
+        // Network failure — never log the error object (may contain credentials
+        // context).
         setErrorMessage(
           "Le service est temporairement indisponible. Réessayez dans quelques instants."
         );
@@ -93,32 +117,40 @@ function LoginForm() {
 
   return (
     <section className={styles.container}>
-      <h1 className={styles.heading}>Se connecter</h1>
+      <h1 className={styles.heading}>Créer un compte</h1>
       <form className={styles.form} onSubmit={handleSubmit} noValidate>
         <div className={styles.field}>
-          <label htmlFor="login-email" className={styles.label}>
+          <label htmlFor="signup-email" className={styles.label}>
             Adresse e-mail
           </label>
           <input
-            id="login-email"
+            id="signup-email"
             type="email"
             autoComplete="email"
             required
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (emailError !== null) setEmailError(null);
+            }}
             className={styles.input}
             disabled={isPending}
           />
+          {emailError !== null && (
+            <span className={styles.fieldError} role="alert">
+              {emailError}
+            </span>
+          )}
         </div>
         <div className={styles.field}>
-          <label htmlFor="login-password" className={styles.label}>
+          <label htmlFor="signup-password" className={styles.label}>
             Mot de passe
           </label>
           {/* AC: password field masked — type="password" prevents echoing */}
           <input
-            id="login-password"
+            id="signup-password"
             type="password"
-            autoComplete="current-password"
+            autoComplete="new-password"
             required
             value={password}
             onChange={(e) => {
@@ -146,12 +178,11 @@ function LoginForm() {
           className={styles.submitButton}
           disabled={isPending}
         >
-          {isPending ? "Connexion…" : "Se connecter"}
+          {isPending ? "Création…" : "Créer un compte"}
         </button>
       </form>
-      {/* AUTH-002: link between login and signup */}
       <p className={styles.switchLink}>
-        <Link href="/signup">Créer un compte</Link>
+        <Link href="/login">J&apos;ai déjà un compte</Link>
       </p>
     </section>
   );
@@ -162,16 +193,16 @@ function LoginForm() {
  * boundary, otherwise the static prerender of this client page bails the build.
  * The fallback renders the static shell so layout stays stable until hydration.
  */
-export default function LoginPage() {
+export default function SignupPage() {
   return (
     <Suspense
       fallback={
         <section className={styles.container}>
-          <h1 className={styles.heading}>Se connecter</h1>
+          <h1 className={styles.heading}>Créer un compte</h1>
         </section>
       }
     >
-      <LoginForm />
+      <SignupForm />
     </Suspense>
   );
 }

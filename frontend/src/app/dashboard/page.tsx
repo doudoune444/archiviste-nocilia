@@ -84,15 +84,6 @@ async function fetchInitialTickets(filter: BoardFilter): Promise<FetchResult> {
   }
 }
 
-/** Derive the sorted deduplicated category list from the loaded page items. */
-function deriveCategories(page: BoardPage): string[] {
-  const seen = new Set<string>();
-  for (const ticket of page.items) {
-    seen.add(ticket.category);
-  }
-  return Array.from(seen).sort();
-}
-
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
@@ -131,7 +122,8 @@ export default async function DashboardPage({
     );
   }
 
-  const availableCategories = result.ok ? deriveCategories(result.page) : [];
+  // #231: categories comes from the server — pagination- and filter-independent.
+  const availableCategories = result.ok ? result.page.categories : [];
 
   return (
     <section className={styles.page}>

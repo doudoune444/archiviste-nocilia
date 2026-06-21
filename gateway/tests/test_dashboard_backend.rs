@@ -1157,19 +1157,21 @@ async fn tickets_categories_includes_beyond_first_page(pool: sqlx::PgPool) {
             user_id,
             &format!("Common Q{n}"),
             "common-cat",
-            i32::try_from(n + 1).unwrap(),
+            // priority 2..=21 — all strictly above rare-cat so they fill page 1
+            i32::try_from(n + 2).unwrap(),
         )
         .await;
     }
 
-    // Insert 1 ticket in "rare-cat" — priority 0, so it stays on page 2
+    // Insert 1 ticket in "rare-cat" — priority 1 (lowest valid; CHECK priority_score >= 1),
+    // strictly below every common-cat ticket so it sorts to rank 21 (beyond page 1).
     insert_author_ticket(
         &pool,
         Uuid::from_u128(620),
         user_id,
         "Rare Q",
         "rare-cat",
-        0,
+        1,
     )
     .await;
 

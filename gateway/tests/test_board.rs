@@ -921,26 +921,28 @@ async fn board_categories_includes_beyond_first_page(pool: sqlx::PgPool) {
             user_id,
             &format!("Common Q{n}"),
             "common-cat",
-            i32::try_from(n + 1).unwrap(),
+            // priority 2..=21 — all strictly above rare-cat so they fill page 1
+            i32::try_from(n + 2).unwrap(),
         )
         .await;
     }
 
-    // Insert 1 ticket in "rare-cat" — this is ticket 21, beyond page 1
+    // Insert 1 ticket in "rare-cat" — priority 1 (lowest valid; CHECK priority_score >= 1),
+    // strictly below every common-cat ticket so it sorts to rank 21 (beyond page 1).
     insert_ticket(
         &pool,
         Uuid::from_u128(520),
         user_id,
         "Rare Q",
         "rare-cat",
-        0,
+        1,
     )
     .await;
 
     let state =
         Arc::new(AppState::new_with_pool(make_test_config("http://127.0.0.1:1"), pool).unwrap());
     let app = router(state);
-    // Default limit=20 → first page only; "rare-cat" ticket has priority 0 (last)
+    // Default limit=20 → first page only; "rare-cat" ticket has priority 1 (last)
     let resp = get_anon(app, "/v1/board?limit=20").await;
 
     assert_eq!(resp.status(), StatusCode::OK);

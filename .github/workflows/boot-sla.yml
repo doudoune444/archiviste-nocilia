@@ -31,7 +31,7 @@ jobs:
     name: measure boot
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: write .env (placeholders only)
         # GCS_EMULATOR_HOST forces workers to skip ADC discovery at boot (ING-003).
@@ -108,7 +108,7 @@ jobs:
     name: stack integration (redis auth + persistence + migrator profile)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: write .env (placeholders only)
         run: |
@@ -126,7 +126,7 @@ jobs:
     name: migrations runner (AC-7..AC-10)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: run migrator integration suite
         run: bash tests/migrations/run_tests.sh

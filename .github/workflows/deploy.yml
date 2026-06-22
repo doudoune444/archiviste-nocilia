@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # AC-11: WIF auth — zero JSON key secrets, OIDC only.
       - name: authenticate to GCP via WIF

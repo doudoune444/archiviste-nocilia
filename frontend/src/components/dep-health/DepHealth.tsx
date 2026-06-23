@@ -14,8 +14,16 @@
  */
 
 import { useEffect, useReducer } from "react";
-import { parseStatusBody, type DepHealthResult } from "./parse-status";
+import {
+  parseStatusBody,
+  type DepHealthResult,
+  type WorkersStatusValue,
+} from "./parse-status";
+import { InfoTooltip } from "@/components/info-tooltip/InfoTooltip";
 import styles from "./DepHealth.module.css";
+
+/** Explanation shown in the "En veille" info tooltip (#253). */
+const DORMANT_EXPLANATION = "S'active automatiquement à la demande, à froid.";
 
 /** Named constant — no magic number (clean-code.md). Exported for test import. */
 export const POLL_INTERVAL_MS = 60_000;
@@ -71,6 +79,32 @@ function DepRow({ label, status }: DepRowProps) {
       </span>
     </div>
   );
+}
+
+/**
+ * Workers row — tri-state (#253). "dormant" renders "En veille" with a neutral
+ * pill (never the red `down` style) plus an info tooltip explaining the cold start.
+ * "ok"/"down" reuse the same visual contract as the binary rows.
+ */
+function WorkersRow({ status }: { status: WorkersStatusValue }) {
+  if (status === "dormant") {
+    return (
+      <div className={styles.depRow}>
+        <span className={styles.dotDormant} aria-hidden="true" />
+        <span className={styles.depLabel}>Workers</span>
+        <span className={styles.statusWrap}>
+          <span className={styles.statusDormant} aria-label="Workers en veille">
+            En veille
+          </span>
+          <InfoTooltip
+            label="En veille : pourquoi ?"
+            explanation={DORMANT_EXPLANATION}
+          />
+        </span>
+      </div>
+    );
+  }
+  return <DepRow label="Workers" status={status} />;
 }
 
 export function DepHealth() {
@@ -131,7 +165,7 @@ export function DepHealth() {
       <div className={styles.deps}>
         <DepRow label="PostgreSQL" status={result.postgres} />
         <DepRow label="GCS" status={result.gcs} />
-        <DepRow label="Workers" status={result.workers} />
+        <WorkersRow status={result.workers} />
       </div>
     </article>
   );

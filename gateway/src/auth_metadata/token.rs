@@ -41,6 +41,13 @@ impl OAuthScope {
     /// Cloud SQL IAM auth scope (`sqlservice.admin`, SEC-005).
     pub const CLOUD_SQL: Self = Self("https://www.googleapis.com/auth/sqlservice.admin");
 
+    /// Cloud-platform read scope used for the Cloud Run Admin API (#253).
+    ///
+    /// The OAuth scope is `cloud-platform`; least-privilege is enforced by the
+    /// IAM role `run.viewer` granted to the gateway service account, not by a
+    /// narrower scope (Cloud Run Admin has no dedicated read-only OAuth scope).
+    pub const CLOUD_PLATFORM: Self = Self("https://www.googleapis.com/auth/cloud-platform");
+
     /// Return `Some(("scopes", value))` when a non-empty scope should be appended to the URL.
     pub(crate) fn as_query_pair(self) -> Option<(&'static str, &'static str)> {
         if self.0.is_empty() {
@@ -111,6 +118,17 @@ impl TokenProvider {
         Self::with_base_url(
             "http://metadata.google.internal".to_string(),
             OAuthScope::CLOUD_SQL,
+        )
+    }
+
+    /// Build a `TokenProvider` for the Cloud Run Admin API (`cloud-platform` scope, #253).
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be constructed.
+    pub fn for_cloud_run() -> Result<Self, TokenError> {
+        Self::with_base_url(
+            "http://metadata.google.internal".to_string(),
+            OAuthScope::CLOUD_PLATFORM,
         )
     }
 

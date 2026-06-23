@@ -42,6 +42,14 @@ pub struct Config {
     pub gcs_signing_sa_email: String,
     /// GCS bucket name (e.g. `archiviste-conversations`).
     pub gcs_bucket: String,
+    /// Full Cloud Run Admin API v2 URL of the workers service descriptor (#253).
+    ///
+    /// Example:
+    /// `https://run.googleapis.com/v2/projects/<p>/locations/<l>/services/<svc>`.
+    /// The gateway issues an authenticated read-only GET against this URL to read
+    /// the `Ready` condition of the latest revision — an out-of-band signal that
+    /// does NOT wake the scale-to-zero service.  Injectable for testing.
+    pub cloud_run_service_url: String,
 }
 
 impl Config {
@@ -78,6 +86,8 @@ impl Config {
             gcs_signing_sa_email: std::env::var("GCS_SIGNING_SA_EMAIL")
                 .context("GCS_SIGNING_SA_EMAIL env var required")?,
             gcs_bucket: std::env::var("GCS_BUCKET").context("GCS_BUCKET env var required")?,
+            cloud_run_service_url: std::env::var("CLOUD_RUN_SERVICE_URL")
+                .context("CLOUD_RUN_SERVICE_URL env var required")?,
         })
     }
 }

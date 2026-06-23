@@ -13,7 +13,14 @@
 // THIS file is the actual proof of AC2.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import {
+  render,
+  act,
+  screen,
+  within,
+  fireEvent,
+  cleanup,
+} from "@testing-library/react";
 
 // DepHealth is a "use client" component; jsdom environment handles that.
 import { DepHealth } from "@/components/dep-health/DepHealth";
@@ -111,5 +118,99 @@ describe("DepHealth polling (AC2)", () => {
 
     // Still only one call: the interval was cleared before it could fire.
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #253: Workers third state — "En veille" (dormant) renders honestly:
+//   - label "En veille" (not "Hors service");
+//   - NOT styled as down/red (the down status text must be absent on that row);
+//   - an accessible InfoTooltip explains the scale-to-zero behaviour;
+//   - postgres/gcs keep their ok/down rendering (no regression).
+// ---------------------------------------------------------------------------
+
+const STATUS_DORMANT = {
+  status: "ok",
+  dependencies: {
+    postgres: { status: "ok", latency_ms: 3 },
+    gcs: { status: "ok", latency_ms: 12 },
+    workers: { status: "dormant", latency_ms: 5 },
+  },
+  checked_at: "2026-06-19T10:00:00Z",
+};
+
+async function renderWith(body: unknown): Promise<void> {
+  const mockFetch = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+  );
+  vi.stubGlobal("fetch", mockFetch);
+  await act(async () => {
+    render(<DepHealth />);
+  });
+}
+
+describe("DepHealth workers dormant state (#253)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("renders 'En veille' for a dormant workers and never 'Hors service'", async () => {
+    await renderWith(STATUS_DORMANT);
+
+    expect(screen.getByText("En veille")).toBeInTheDocument();
+    expect(screen.queryByText("Hors service")).not.toBeInTheDocument();
+  });
+
+  it("does not style dormant workers as down (workers row not red/down)", async () => {
+    await renderWith(STATUS_DORMANT);
+
+    const card = screen.getByRole("article", { name: "Dépendances" });
+    // The accessible status for the Workers row must NOT say "hors service".
+    expect(
+      within(card).queryByLabelText(/Workers hors service/i)
+    ).not.toBeInTheDocument();
+    // It must announce the dormant state instead.
+    expect(
+      within(card).getByLabelText(/Workers en veille/i)
+    ).toBeInTheDocument();
+  });
+
+  it("exposes an accessible info tooltip explaining the cold start", async () => {
+    await renderWith(STATUS_DORMANT);
+
+    const trigger = screen.getByRole("button", {
+      name: /en veille|à froid|demande/i,
+    });
+    expect(trigger).toBeInTheDocument();
+
+    // Explanation is hidden until activated, then revealed (InfoTooltip contract).
+    expect(
+      screen.queryByText(/s'active automatiquement à la demande, à froid/i)
+    ).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(
+      screen.getByText(/s'active automatiquement à la demande, à froid/i)
+    ).toBeInTheDocument();
+  });
+
+  it("keeps postgres/gcs ok and a down dep red without regression", async () => {
+    await renderWith({
+      status: "degraded",
+      dependencies: {
+        postgres: { status: "down", latency_ms: 0 },
+        gcs: { status: "ok", latency_ms: 12 },
+        workers: { status: "dormant", latency_ms: 5 },
+      },
+      checked_at: "2026-06-19T10:00:00Z",
+    });
+
+    const card = screen.getByRole("article", { name: "Dépendances" });
+    expect(within(card).getByLabelText(/PostgreSQL hors service/i)).toBeInTheDocument();
+    expect(within(card).getByLabelText(/GCS opérationnel/i)).toBeInTheDocument();
+    expect(within(card).getByText("En veille")).toBeInTheDocument();
   });
 });

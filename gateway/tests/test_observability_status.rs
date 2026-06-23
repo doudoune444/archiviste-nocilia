@@ -174,9 +174,15 @@ async fn ac1_ac2_ac5_status_shape_200_sanitised() {
         let dep_status = dep_obj["status"]
             .as_str()
             .expect("dep.status must be string");
+        // #253: workers may also be "dormant"; postgres/gcs stay ok|down.
+        let allowed = if dep_name == "workers" {
+            dep_status == "ok" || dep_status == "down" || dep_status == "dormant"
+        } else {
+            dep_status == "ok" || dep_status == "down"
+        };
         assert!(
-            dep_status == "ok" || dep_status == "down",
-            "AC-2: {dep_name}.status must be ok|down, got: {dep_status}"
+            allowed,
+            "AC-2: {dep_name}.status domain violated, got: {dep_status}"
         );
         // latency_ms must be a non-negative integer.
         dep_obj["latency_ms"]
@@ -202,21 +208,31 @@ async fn ac1_ac2_ac5_status_shape_200_sanitised() {
 // AC-3 (property — table-driven, 8 combinations, local only)
 // ---------------------------------------------------------------------------
 
-/// AC-3: status_root == "ok" ⟺ all 3 deps "ok"; ≥1 down ⟹ "degraded".
-/// Table-driven across all 8 combinations (not in specs/properties.md — local invariant only).
+/// AC-3 (#253): root == "ok" ⟺ every dep ∈ {ok, dormant}; any "down" ⟹ "degraded".
+///
+/// `dormant` (Workers scale-to-zero, Ready=True) counts as healthy and never
+/// degrades the root — that is the core invariant of #253 (Lot 2).  Postgres and
+/// GCS never emit `dormant`, but the aggregation is value-driven so the table
+/// also exercises `dormant` in those positions to pin the pure function's contract.
 #[test]
 fn ac3_aggregate_status_property_table() {
     use archiviste_gateway::handlers::status::{aggregate_status, DepStatus};
 
     // (postgres, gcs, workers) → expected root status.
     let cases: &[(&str, &str, &str, &str)] = &[
+        // All healthy combinations of ok/dormant → root ok.
         ("ok", "ok", "ok", "ok"),
+        ("ok", "ok", "dormant", "ok"),
+        ("dormant", "ok", "ok", "ok"),
+        ("ok", "dormant", "ok", "ok"),
+        ("dormant", "dormant", "dormant", "ok"),
+        // Any down → degraded, regardless of dormant elsewhere.
         ("down", "ok", "ok", "degraded"),
         ("ok", "down", "ok", "degraded"),
         ("ok", "ok", "down", "degraded"),
-        ("down", "down", "ok", "degraded"),
-        ("down", "ok", "down", "degraded"),
-        ("ok", "down", "down", "degraded"),
+        ("dormant", "ok", "down", "degraded"),
+        ("ok", "dormant", "down", "degraded"),
+        ("down", "dormant", "dormant", "degraded"),
         ("down", "down", "down", "degraded"),
     ];
 
@@ -238,10 +254,12 @@ fn ac3_aggregate_status_property_table() {
             result, expected,
             "AC-3: aggregate({pg_s},{gcs_s},{wrk_s}) expected {expected}, got {result}"
         );
-        // AC-3 exact property: ok ⟺ all three ok.
-        let all_ok = pg_s == "ok" && gcs_s == "ok" && wrk_s == "ok";
-        if all_ok {
-            assert_eq!(result, "ok", "AC-3 property: all ok → root ok");
+        // AC-3 exact property: ok ⟺ every dep is ok or dormant.
+        let all_healthy = [pg_s, gcs_s, wrk_s]
+            .iter()
+            .all(|s| *s == "ok" || *s == "dormant");
+        if all_healthy {
+            assert_eq!(result, "ok", "AC-3 property: all healthy → root ok");
         } else {
             assert_eq!(
                 result, "degraded",
@@ -328,9 +346,11 @@ async fn ac8_ac9_all_probes_timeout_bounded_wall_clock() {
         }
     });
 
-    let workers_url = format!("http://{addr}");
-    let mut config = make_test_config(&workers_url);
-    config.workers_url = workers_url.clone();
+    let hanging_url = format!("http://{addr}");
+    // #253: the workers probe reads the Cloud Run Admin API, not {workers}/health.
+    // Point that URL at the hanging listener so the workers probe hits PROBE_TIMEOUT.
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.cloud_run_service_url = hanging_url.clone();
     // Short connect timeout so the HTTP client doesn't stall on connect.
     config.connect_timeout_ms = 500;
     // request_timeout > PROBE_TIMEOUT (2s) so timeout is driven by our handler, not reqwest.
@@ -430,62 +450,118 @@ async fn ac11_probe_error_down_no_detail_in_body() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-12: workers probe 2xx → ok
+// AC-12 (#253): workers probe reads the Cloud Run Admin `Ready` condition
+//   Ready=True  → dormant (healthy, scale-to-zero, never red)
+//   Ready=False → down
+//   API unreachable / timeout → down (robust, never panics)
+// The probe NEVER calls {workers}/health, so it cannot wake the service.
 // ---------------------------------------------------------------------------
 
-/// AC-12: workers endpoint responds 2xx → workers.status="ok".
-#[tokio::test]
-async fn ac12_workers_2xx_is_ok() {
-    // AC-12: mockito /health returns 200 → workers probe = ok.
-    let mut server = mockito::Server::new_async().await;
-    let _mock = server
-        .mock("GET", "/health")
+/// OAuth access-token body served by the mocked metadata endpoint (no real secret).
+const FAKE_RUN_TOKEN_BODY: &str =
+    r#"{"access_token":"fake-run-token","expires_in":3600,"token_type":"Bearer"}"#;
+
+/// Cloud Run Admin path the mocked server answers (arbitrary — base URL is injected).
+const CLOUD_RUN_SERVICE_PATH: &str = "/v2/projects/p/locations/l/services/workers";
+
+/// Build an `AppState` whose workers probe reads the Cloud Run Admin API mocked by `server`.
+///
+/// The same mockito `server` serves both the metadata OAuth token endpoint and the
+/// Cloud Run service descriptor, so no live GCP call is made (secret-hygiene rule).
+fn make_state_with_cloud_run(server_url: &str) -> Arc<AppState> {
+    use archiviste_gateway::auth_metadata::{OAuthScope, TokenProvider};
+    let mut config = make_test_config("http://127.0.0.1:1");
+    config.cloud_run_service_url = format!("{server_url}{CLOUD_RUN_SERVICE_PATH}");
+    let run_token_provider = Arc::new(
+        TokenProvider::with_base_url(server_url.to_string(), OAuthScope::CLOUD_PLATFORM)
+            .expect("run TokenProvider"),
+    );
+    Arc::new(AppState::new_with_run_token_provider(config, run_token_provider).expect("AppState"))
+}
+
+async fn mock_metadata_token(server: &mut mockito::ServerGuard) -> mockito::Mock {
+    server
+        .mock(
+            "GET",
+            "/computeMetadata/v1/instance/service-accounts/default/token",
+        )
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
-        .with_body("{}")
+        .with_header("content-type", "application/json")
+        .with_body(FAKE_RUN_TOKEN_BODY)
+        .create_async()
+        .await
+}
+
+async fn workers_status_via_cloud_run(server: &mut mockito::ServerGuard) -> serde_json::Value {
+    let url = server.url();
+    let state = make_state_with_cloud_run(&url);
+    let app = router(state);
+    let resp = get_anon(app, "/v1/status").await;
+    assert_eq!(resp.status(), StatusCode::OK, "must be 200");
+    body_json(resp).await
+}
+
+/// AC-12: Cloud Run `Ready=CONDITION_SUCCEEDED` → workers.status="dormant" (healthy).
+#[tokio::test]
+async fn ac12_cloud_run_ready_true_is_dormant() {
+    let mut server = mockito::Server::new_async().await;
+    let _token = mock_metadata_token(&mut server).await;
+    let _svc = server
+        .mock("GET", CLOUD_RUN_SERVICE_PATH)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"conditions":[{"type":"Ready","state":"CONDITION_SUCCEEDED"}]}"#)
         .create_async()
         .await;
 
-    let config = make_test_config(&server.url());
-    let id_provider =
-        Arc::new(IdTokenProvider::new_stub_always_valid().expect("stub IdTokenProvider"));
-    let state =
-        Arc::new(AppState::new_with_id_token_provider(config, id_provider).expect("AppState"));
-
-    let app = router(state);
-    let resp = get_anon(app, "/v1/status").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
+    let json = workers_status_via_cloud_run(&mut server).await;
     assert_eq!(
-        json["dependencies"]["workers"]["status"], "ok",
-        "AC-12: workers 2xx → ok"
+        json["dependencies"]["workers"]["status"], "dormant",
+        "AC-12: Ready=True → dormant"
+    );
+    // A dormant Workers must NOT degrade the root (#253 core invariant): only the
+    // unreachable postgres/gcs probes degrade it here, never the dormant workers.
+    let workers = &json["dependencies"]["workers"];
+    assert_ne!(workers["status"], "down", "dormant is never down");
+}
+
+/// AC-12: Cloud Run `Ready=CONDITION_FAILED` → workers.status="down" (real outage).
+#[tokio::test]
+async fn ac12_cloud_run_ready_false_is_down() {
+    let mut server = mockito::Server::new_async().await;
+    let _token = mock_metadata_token(&mut server).await;
+    let _svc = server
+        .mock("GET", CLOUD_RUN_SERVICE_PATH)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"conditions":[{"type":"Ready","state":"CONDITION_FAILED"}]}"#)
+        .create_async()
+        .await;
+
+    let json = workers_status_via_cloud_run(&mut server).await;
+    assert_eq!(
+        json["dependencies"]["workers"]["status"], "down",
+        "AC-12: Ready=False → down"
     );
 }
 
-/// AC-12: workers endpoint responds non-2xx → workers.status="down".
+/// AC-13 (#253): Cloud Run Admin API unreachable → workers.status="down", card never crashes.
 #[tokio::test]
-async fn ac12_workers_non_2xx_is_down() {
-    // AC-12: mockito /health returns 503 → workers probe = down.
+async fn ac13_cloud_run_unreachable_is_down() {
+    // No mock for the service path → the mocked server 501s the unexpected call,
+    // and the metadata token endpoint is also absent → token fetch fails.
     let mut server = mockito::Server::new_async().await;
-    let _mock = server
-        .mock("GET", "/health")
-        .with_status(503)
-        .create_async()
-        .await;
-
-    let config = make_test_config(&server.url());
-    let id_provider =
-        Arc::new(IdTokenProvider::new_stub_always_valid().expect("stub IdTokenProvider"));
-    let state =
-        Arc::new(AppState::new_with_id_token_provider(config, id_provider).expect("AppState"));
-
-    let app = router(state);
-    let resp = get_anon(app, "/v1/status").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
+    // Intentionally NOT mocking the token nor the service path.
+    let json = workers_status_via_cloud_run(&mut server).await;
     assert_eq!(
         json["dependencies"]["workers"]["status"], "down",
-        "AC-12: workers non-2xx → down"
+        "AC-13: Cloud Run unreachable → safe down"
     );
+    // Robustness: still a well-formed 3-key body, no error leak.
+    assert!(json.as_object().unwrap().contains_key("dependencies"));
+    let body_str = json.to_string();
+    assert!(!body_str.contains(&server.url()), "no host leak in body");
 }
 
 // ---------------------------------------------------------------------------

@@ -30,6 +30,17 @@ const STATUS_DEGRADED = {
   checked_at: "2026-06-19T10:00:00Z",
 };
 
+// #253: Workers scale-to-zero is healthy ("dormant"); root stays "ok".
+const STATUS_WORKERS_DORMANT = {
+  status: "ok",
+  dependencies: {
+    postgres: { status: "ok", latency_ms: 3 },
+    gcs: { status: "ok", latency_ms: 12 },
+    workers: { status: "dormant", latency_ms: 5 },
+  },
+  checked_at: "2026-06-19T10:00:00Z",
+};
+
 // AC3: intercept the same-origin bff-proxy route, not the gateway directly.
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/status", (route) => {
@@ -82,6 +93,38 @@ test("AC1: dépendances affiche postgres hors service sans ambiguïté", async (
   // gcs and workers remain healthy
   const statusLabels = card.getByText("Opérationnel");
   await expect(statusLabels).toHaveCount(2);
+});
+
+test("#253: Workers en veille s'affiche comme état nominal, jamais 'Hors service'", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/status", (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(STATUS_WORKERS_DORMANT),
+    });
+  });
+
+  await page.goto("/metriques");
+
+  const card = page.getByRole("article", { name: "Dépendances" });
+  await expect(card).toBeVisible();
+
+  // Workers shows the neutral "En veille" label, not the red "Hors service".
+  await expect(card.getByText("En veille")).toBeVisible();
+  await expect(card.getByText("Hors service")).toHaveCount(0);
+
+  // postgres + gcs remain healthy.
+  await expect(card.getByText("Opérationnel")).toHaveCount(2);
+
+  // An accessible info tooltip explains the cold start.
+  const info = card.getByRole("button", { name: /en veille/i });
+  await expect(info).toBeVisible();
+  await info.click();
+  await expect(
+    card.getByText(/S['']active automatiquement à la demande, à froid/)
+  ).toBeVisible();
 });
 
 test("AC1: état d'erreur rendu sans ambiguïté quand /api/v1/status échoue", async ({

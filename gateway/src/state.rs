@@ -70,6 +70,11 @@ pub struct AppState {
     /// 60-second refresh-ahead semantics — independent cache from the OAuth
     /// access token providers above.
     pub workers_id_token_provider: Arc<IdTokenProvider>,
+    /// OAuth token provider for the Cloud Run Admin API (`cloud-platform` scope, #253).
+    ///
+    /// Read-only: used solely to read the workers service `Ready` condition.
+    /// Independent cache from the GCS / SQL token providers (per-scope instance).
+    pub run_token_provider: Arc<TokenProvider>,
     /// In-memory snapshot cache for `GET /v1/status` (OBS-002 AC-10 / D-3).
     ///
     /// Shared across all requests via `Arc`; TTL 10 s.  Per-replica cache —
@@ -97,6 +102,7 @@ impl AppState {
         let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
         let workers_id_token_provider =
             Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
+        let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
 
         Ok(Self {
             config,
@@ -109,6 +115,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
@@ -135,6 +142,7 @@ impl AppState {
         let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
         let workers_id_token_provider =
             Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
+        let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
 
         let lookup: Arc<dyn UserLookup> = Arc::new(PgUserLookup(pool.clone()));
         let creator: Arc<dyn SessionCreator> = Arc::new(PgSessionCreator(pool.clone()));
@@ -151,6 +159,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
@@ -236,6 +245,7 @@ impl AppState {
         let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
         let workers_id_token_provider =
             Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
+        let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
 
         Ok(Self {
             config,
@@ -248,6 +258,7 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
         })
     }
@@ -273,6 +284,7 @@ impl AppState {
 
         let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
         let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
+        let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
 
         Ok(Self {
             config,
@@ -285,8 +297,29 @@ impl AppState {
             gcs_token_provider,
             sql_token_provider,
             workers_id_token_provider,
+            run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
         })
+    }
+
+    /// Build state with an injected Cloud Run `TokenProvider` for the workers probe (#253 test ctor).
+    ///
+    /// Points the workers Cloud Run Admin read at a mockito server.  Other providers
+    /// use the default metadata server (their probes fail to `down` in tests, which
+    /// is the intended deterministic behaviour for postgres/gcs without a backend).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be constructed.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_with_run_token_provider(
+        config: Config,
+        run_token_provider: Arc<TokenProvider>,
+    ) -> Result<Self> {
+        let workers_id_token_provider = Arc::new(IdTokenProvider::new_stub_always_valid()?);
+        let mut state = Self::new_with_id_token_provider(config, workers_id_token_provider)?;
+        state.run_token_provider = run_token_provider;
+        Ok(state)
     }
 
     /// Build state with a pool and an injected GCS `TokenProvider` (DB + IAM mock injection).

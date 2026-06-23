@@ -768,6 +768,7 @@ fn make_config_db() -> archiviste_gateway::config::Config {
         request_timeout_ms: 5_000,
         gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
         gcs_bucket: "archiviste-conversations".to_string(),
+        cloud_run_service_url: "http://127.0.0.1:1".to_string(),
     }
 }
 

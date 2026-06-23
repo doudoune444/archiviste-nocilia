@@ -53,6 +53,41 @@ describe("parseStatusBody", () => {
     }
   });
 
+  // #253: workers "dormant" (Cloud Run Ready=True, scale-to-zero) is parsed as a
+  // distinct healthy third state — never collapsed to "down".
+  it("maps workers dormant to the dormant state", () => {
+    const body = {
+      ...VALID_BODY,
+      status: "ok",
+      dependencies: {
+        ...VALID_BODY.dependencies,
+        workers: { status: "dormant", latency_ms: 5 },
+      },
+    };
+    const result = parseStatusBody(body);
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.workers).toBe("dormant");
+      expect(result.postgres).toBe("ok");
+      expect(result.gcs).toBe("ok");
+    }
+  });
+
+  // #253: postgres/gcs never carry "dormant"; an unexpected dormant there → down.
+  it("treats dormant on postgres/gcs as down (only workers may be dormant)", () => {
+    const body = {
+      ...VALID_BODY,
+      dependencies: {
+        ...VALID_BODY.dependencies,
+        postgres: { status: "dormant", latency_ms: 0 },
+      },
+    };
+    const result = parseStatusBody(body);
+    if (result.kind === "ok") {
+      expect(result.postgres).toBe("down");
+    }
+  });
+
   // AC1: unknown dep status string treated as "down" (unambiguous)
   it("treats unknown dep status string as down", () => {
     const body = {

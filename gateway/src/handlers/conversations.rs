@@ -39,6 +39,11 @@ use crate::{
 /// Max conversations returned by the owner-scoped list (security.md A04 LIMIT guard).
 const MAX_CONVERSATIONS: i64 = 50;
 
+/// Max number of characters (codepoints) kept in a derived history title before
+/// it is truncated with an ellipsis (#250). Counted in `char`s, not bytes, so
+/// multibyte text (accents) is never split.
+const TITLE_MAX_CHARS: usize = 60;
+
 /// Max turns returned when reopening a conversation (security.md A04 LIMIT guard).
 const MAX_MESSAGES: i64 = 500;
 
@@ -60,13 +65,62 @@ const fn caller_moderates_all(identity: &AnonIdentity) -> bool {
 // GET /v1/conversations — owner-scoped list
 // ---------------------------------------------------------------------------
 
-/// One conversation summary row for the owner-scoped list.
-#[derive(Debug, Serialize, FromRow)]
+/// One conversation summary row as read from the DB.
+///
+/// `first_user_message` is the content of the `role = 'user'` row with the minimal
+/// `ordinal` (correlated subquery), `None` when the conversation has no user turn
+/// yet. It is derived into the public `title` at read time and never serialized
+/// itself — conversation content is not exposed verbatim or logged (#250 scoping).
+#[derive(Debug, FromRow)]
+struct ConversationSummaryRow {
+    id: Uuid,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+    message_count: i32,
+    first_user_message: Option<String>,
+}
+
+/// One conversation summary in the owner-scoped list response.
+///
+/// `title` is derived from the first user message, truncated on a UTF-8 boundary
+/// (#250). Existing fields are preserved unchanged.
+#[derive(Debug, Serialize)]
 struct ConversationSummary {
     id: Uuid,
     created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
     message_count: i32,
+    title: String,
+}
+
+impl From<ConversationSummaryRow> for ConversationSummary {
+    fn from(row: ConversationSummaryRow) -> Self {
+        let title = row
+            .first_user_message
+            .as_deref()
+            .map(derive_title)
+            .unwrap_or_default();
+        Self {
+            id: row.id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            message_count: row.message_count,
+            title,
+        }
+    }
+}
+
+/// Derive a readable history title from a first user message: trimmed, then
+/// truncated to `TITLE_MAX_CHARS` codepoints with a `…` suffix when longer.
+///
+/// Truncation counts `char`s (not bytes), so multibyte text is never split.
+fn derive_title(first_user_message: &str) -> String {
+    let trimmed = first_user_message.trim();
+    if trimmed.chars().count() <= TITLE_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(TITLE_MAX_CHARS).collect();
+    format!("{head}…")
 }
 
 /// Response body for `GET /v1/conversations`.
@@ -93,16 +147,22 @@ pub async fn list_conversations(
         .as_ref()
         .ok_or(ApiError::UpstreamUnavailable)?;
 
-    let conversations: Vec<ConversationSummary> = sqlx::query_as(
-        "SELECT id, created_at, updated_at, message_count \
-         FROM conversations WHERE user_id = $1 \
-         ORDER BY updated_at DESC LIMIT $2",
+    let rows: Vec<ConversationSummaryRow> = sqlx::query_as(
+        "SELECT c.id, c.created_at, c.updated_at, c.message_count, \
+                (SELECT cm.content FROM conversation_messages cm \
+                 WHERE cm.conversation_id = c.id AND cm.role = 'user' \
+                 ORDER BY cm.ordinal ASC LIMIT 1) AS first_user_message \
+         FROM conversations c WHERE c.user_id = $1 \
+         ORDER BY c.updated_at DESC LIMIT $2",
     )
     .bind(identity.user_id)
     .bind(MAX_CONVERSATIONS)
     .fetch_all(pool)
     .await
     .map_err(|_| ApiError::UpstreamUnavailable)?;
+
+    let conversations: Vec<ConversationSummary> =
+        rows.into_iter().map(ConversationSummary::from).collect();
 
     tracing::info!(
         event = "conversations.list",
@@ -352,4 +412,35 @@ async fn fetch_gcs_uri_for_caller(
 /// Strip `gs://<bucket>/` prefix from a `gcs_uri`, returning the object path within the bucket.
 fn gcs_uri_to_object_path<'a>(gcs_uri: &'a str, bucket: &str) -> Option<&'a str> {
     gcs_uri.strip_prefix(&format!("gs://{bucket}/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_title, TITLE_MAX_CHARS};
+
+    #[test]
+    fn short_message_is_verbatim() {
+        assert_eq!(derive_title("Bonjour"), "Bonjour");
+    }
+
+    #[test]
+    fn message_is_trimmed() {
+        assert_eq!(derive_title("  Bonjour  "), "Bonjour");
+    }
+
+    #[test]
+    fn at_limit_is_not_truncated() {
+        let text = "a".repeat(TITLE_MAX_CHARS);
+        assert_eq!(derive_title(&text), text);
+    }
+
+    #[test]
+    fn over_limit_is_truncated_on_char_boundary() {
+        let text = "é".repeat(TITLE_MAX_CHARS + 10);
+        let title = derive_title(&text);
+        assert!(title.ends_with('…'));
+        let visible = title.trim_end_matches('…');
+        assert_eq!(visible.chars().count(), TITLE_MAX_CHARS);
+        assert!(visible.chars().all(|c| c == 'é'), "no codepoint split");
+    }
 }

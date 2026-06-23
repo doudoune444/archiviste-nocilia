@@ -181,6 +181,126 @@ async fn hist001_list_returns_only_own_conversations(pool: sqlx::PgPool) {
     assert_eq!(items[0]["message_count"], 4);
 }
 
+// ---------------------------------------------------------------------------
+// #250 — derived history titles (first user message, truncated on UTF-8 boundary)
+// ---------------------------------------------------------------------------
+
+/// A title is the start of the conversation's first user message (minimal ordinal
+/// among `role = 'user'` rows), not the assistant turn or a later user turn.
+#[sqlx::test(migrations = "../migrations")]
+async fn title250_is_first_user_message(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 3, ts(30)).await;
+    // Ordinal 0 is an assistant turn (e.g. a greeting) — must be ignored for the title.
+    seed_message(
+        &pool,
+        conv,
+        "assistant",
+        0,
+        "Bonjour, posez votre question.",
+    )
+    .await;
+    seed_message(&pool, conv, "user", 1, "Quelle est l'histoire de Nocilia ?").await;
+    seed_message(&pool, conv, "user", 2, "Et sa géographie ?").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0]["title"], "Quelle est l'histoire de Nocilia ?",
+        "title must be the first user message (minimal ordinal user row)"
+    );
+}
+
+/// A long first user message is truncated to ~60 chars with a `…` suffix, on a
+/// UTF-8 boundary (no split codepoint, no panic on multibyte input).
+#[sqlx::test(migrations = "../migrations")]
+async fn title250_truncates_long_message_on_utf8_boundary(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    // 70 accented chars (multibyte): truncation must land on a char boundary.
+    let long = "é".repeat(70);
+    seed_message(&pool, conv, "user", 0, &long).await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let title = body["conversations"][0]["title"].as_str().unwrap();
+    assert!(
+        title.ends_with('…'),
+        "over-limit title must end with an ellipsis"
+    );
+    let visible_chars = title.trim_end_matches('…').chars().count();
+    assert_eq!(
+        visible_chars, 60,
+        "truncation keeps the first 60 chars before the ellipsis"
+    );
+    assert!(
+        title.chars().all(|c| c == 'é' || c == '…'),
+        "no codepoint may be split"
+    );
+}
+
+/// A short first user message is returned verbatim — no ellipsis added.
+#[sqlx::test(migrations = "../migrations")]
+async fn title250_short_message_is_verbatim(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    seed_message(&pool, conv, "user", 0, "Bonjour").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["conversations"][0]["title"], "Bonjour");
+}
+
+/// A title is computed only for the caller's own conversations; a foreign
+/// conversation's first user message never leaks into the caller's list.
+#[sqlx::test(migrations = "../migrations")]
+async fn title250_is_owner_scoped(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let other_id = seed_anon_owner(&pool).await;
+
+    let own = seed_conversation(&pool, caller_id, 1, ts(10)).await;
+    seed_message(&pool, own, "user", 0, "ma question").await;
+    let foreign = seed_conversation(&pool, other_id, 1, ts(5)).await;
+    seed_message(&pool, foreign, "user", 0, "secret de l'autre").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "caller sees only their own conversation");
+    assert_eq!(items[0]["title"], "ma question");
+}
+
+/// A conversation with no user message yet yields an empty-string title (no panic,
+/// existing fields preserved).
+#[sqlx::test(migrations = "../migrations")]
+async fn title250_no_user_message_yields_empty_title(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    seed_message(&pool, conv, "assistant", 0, "Bonjour.").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["conversations"][0]["title"], "");
+    assert_eq!(body["conversations"][0]["message_count"], 1);
+}
+
 /// A caller with no conversations gets an empty list (not an error).
 #[sqlx::test(migrations = "../migrations")]
 async fn hist001_list_empty_for_new_caller(pool: sqlx::PgPool) {

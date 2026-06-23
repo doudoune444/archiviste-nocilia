@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import "@/styles/globals.css";
 import styles from "./layout.module.css";
-import AuthAwareNav from "@/components/auth-aware-nav/AuthAwareNav";
+import AppSidebar from "@/components/app-sidebar/AppSidebar";
+import { SidebarChatProvider } from "@/components/app-sidebar/SidebarChatContext";
 
 export const metadata: Metadata = {
   title: "Archiviste Nocilia",
@@ -17,13 +18,12 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="fr">
       <body>
-        <div className={styles.shell}>
-          <AuthAwareNav />
-          <main className={styles.main}>{children}</main>
-          <footer className={styles.footer}>
-            <p>Archives de Nocilia — usage personnel</p>
-          </footer>
-        </div>
+        <SidebarChatProvider>
+          <div className={styles.shell}>
+            <AppSidebar />
+            <main className={styles.main}>{children}</main>
+          </div>
+        </SidebarChatProvider>
       </body>
     </html>
   );

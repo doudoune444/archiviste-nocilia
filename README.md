@@ -16,8 +16,8 @@ This repository is a **showcase / portfolio project**. It demonstrates how to sh
 
 Three motivations, in order:
 
-- **Ship something production-ready with the rigor of regulated industries** — threat model, default-deny security, strict linting, eval gates, ADRs, vertical slices ≤ 300 LOC, deployed on GCP (Cloud Run, Cloud SQL, Secret Manager) with Terraform-managed infra. Treat a solo side project like a compliance-sensitive production deployment to see what it actually costs.
-- **Test a new way of working with AI** — six specialized Claude Code sub-agents (`spec-author`, `architect`, `implementer`, `reviewer`, `eval-runner`, `debugger`), each with narrow scope and read/write boundaries. Goal: enforce cleanliness and avoid the sloppy code an LLM produces when given free rein. Spec → plan → impl → review as a hard contract, not a suggestion.
+- **Ship something production-ready with the rigor of regulated industries** — threat model, default-deny security, strict linting, eval gates, deployed on GCP (Cloud Run, Cloud SQL, Secret Manager) with Terraform-managed infra. Treat a solo side project like a compliance-sensitive production deployment to see what it actually costs.
+- **Test a new way of working with AI** — drive the whole build through Claude Code with narrow, well-scoped agents and hard rules, to enforce cleanliness and avoid the sloppy code an LLM produces when given free rein.
 - **Build the tool I actually need** — a RAG over my own world-building corpus, queryable in natural language, that also surfaces *lore gaps*: missing cases, contradictions, and inconsistencies get filed as tickets I can act on. The engineering rigor above is the showcase; the corpus is the genuine use case.
 
 ---
@@ -32,8 +32,8 @@ Three motivations, in order:
 | **Storage** | Google Cloud Storage (conversations as Markdown) |
 | **Observability** | Langfuse · OpenTelemetry · Prometheus · structlog |
 | **Eval** | Ragas (faithfulness, answer relevancy, context precision/recall) |
-| **Infra** | Cloud Run · Cloud SQL · Secret Manager · Terraform (deferred — see [ADR-0003](docs/adr/0003-terraform-deferred.md)) |
-| **CI/CD** | GitHub Actions · release-please · Dependabot |
+| **Infra** | Cloud Run · Cloud SQL · Secret Manager · Terraform (deferred) |
+| **CI/CD** | GitHub Actions · Dependabot |
 
 ---
 
@@ -45,30 +45,11 @@ Three motivations, in order:
 - **Persistence** : PostgreSQL 16 with pgvector (Cloud SQL, private IP) for users, sessions, embeddings ; GCS for conversation transcripts (Markdown, namespaced per user, versioned)
 - **External services** : LLM provider API (Anthropic / OpenAI), Langfuse for LLM tracing, GCP Secret Manager for credentials
 
-Full data model, sequence diagrams, and SLOs in [`docs/architecture.md`](docs/architecture.md).
-
 ---
 
 ## Engineering principles
 
-### 1. Spec-first
-
-Every change starts as a **human-authored acceptance ticket** in [`specs/acceptance/`](specs/acceptance/). No code is written until the spec is marked `Status: ready`. The architect agent then produces a plan, the implementer ships the slice, the reviewer audits adversarially.
-
-### 2. Agent boundaries are strict
-
-| Agent | Purpose | Writes to |
-|---|---|---|
-| `spec-author` | Socratic dialogue with human to author specs | `specs/acceptance/` |
-| `architect` | Produce implementation plans | `specs/plans/` |
-| `implementer` | Write code + tests for a validated plan | `gateway/`, `workers/`, etc. |
-| `reviewer` | Adversarial PR review | `specs/reviews/` |
-| `eval-runner` | Run Ragas against the golden Q/A set | `eval/runs/` |
-| `debugger` | Diagnose failures (read-only) | nothing |
-
-Hard-denied paths (`migrations/`, `specs/openapi/`, `specs/properties.md`, `specs/golden_qa.jsonl`, `specs/threat-model.md`, `eval/baseline.json`) require human approval.
-
-### 3. Security is non-negotiable
+### 1. Security is non-negotiable
 
 - **Threat model** in STRIDE methodology — [`specs/threat-model.md`](specs/threat-model.md)
 - **OWASP Top 10 + RAG-specific threats** — [`.claude/rules/security.md`](.claude/rules/security.md) (prompt injection, embedding poisoning, output XSS, SSRF via doc URLs)
@@ -77,11 +58,11 @@ Hard-denied paths (`migrations/`, `specs/openapi/`, `specs/properties.md`, `spec
 - **Sensitive types enforced** — `secrecy::Secret<T>` (Rust), `pydantic.SecretStr` (Python). Logging redact-by-default.
 - **No secrets in repo** — GCP Secret Manager in production, `.env.example` only as template
 
-### 4. Observability is built-in, not bolted on
+### 2. Observability is built-in, not bolted on
 
 LLM calls go through Langfuse (with PII redaction before push). Application metrics through Prometheus + OpenTelemetry. Structured JSON logs everywhere.
 
-### 5. Eval is a first-class CI gate
+### 3. Eval is a first-class CI gate
 
 A Ragas eval workflow runs on every PR touching the RAG path or the golden Q/A set. Regressions vs `eval/baseline.json` block merge.
 
@@ -102,23 +83,23 @@ curl http://localhost:8080/healthz
 curl http://localhost:8000/healthz
 ```
 
-For granular development (running services on host, hot reload, etc.), see [`docs/runbook.md`](docs/runbook.md).
+For granular development (running services on host, hot reload, etc.), see [`docs/runbook/`](docs/runbook/).
 
 ---
 
 ## Repository layout
 
 ```
-.claude/         Agent definitions, workflow rules, hooks, permissions
+.claude/         Rules, skills, commands, hooks, permissions
 gateway/         Rust Axum service — handlers, auth, rate limit, OpenAPI client
 workers/         Python FastAPI service — ingestion, retrieval, generation, eval
-specs/           Sources of truth — acceptance/, plans/, reviews/, openapi/, golden_qa.jsonl, properties.md, threat-model.md
-docs/            architecture.md, runbook.md, blockers.md, ADRs
+specs/           Contract & eval sources — openapi/, golden_qa.jsonl, properties.md, threat-model.md
+docs/            runbook/, agents/ (skill config), load-test report
 eval/            Ragas runner, baseline metrics, seed corpus
 infra/           Dockerfiles, docker-compose, Terraform (deferred)
 migrations/      SQL migrations (human-only, sqlx-checked)
 scripts/         Setup helpers
-.github/         CI/CD, release-please, Dependabot, issue and PR templates
+.github/         CI/CD, Dependabot, issue and PR templates
 ```
 
 ---
@@ -127,20 +108,16 @@ scripts/         Setup helpers
 
 | Document | Purpose |
 |---|---|
-| [`BOOTSTRAP.md`](BOOTSTRAP.md) | Setup checklist (run after cloning) |
-| [`CLAUDE.md`](CLAUDE.md) | Project memory — workflow, conventions, sources of truth |
-| [`docs/architecture.md`](docs/architecture.md) | High-level architecture, SLOs, data model |
-| [`docs/runbook.md`](docs/runbook.md) | Local development, incidents, deployment |
-| [`specs/threat-model.md`](specs/threat-model.md) | STRIDE matrix — 27 scenarios across all components |
-| [`docs/blockers.md`](docs/blockers.md) | Append-only log of blockers (no silent workarounds rule) |
-| [`docs/adr/`](docs/adr/) | Architecture Decision Records |
+| [`CLAUDE.md`](CLAUDE.md) | Project memory — conventions, sources of truth |
+| [`specs/threat-model.md`](specs/threat-model.md) | STRIDE matrix across all components |
+| [`docs/runbook/`](docs/runbook/) | Local development, incidents, deployment |
 | [`SECURITY.md`](SECURITY.md) | Vulnerability disclosure policy |
 
 ---
 
 ## Status
 
-**Bootstrap phase** — repository scaffolding is complete (`FOUND-001`). The first business slices (auth, ingestion, retrieval, generation) are tracked as upcoming tickets in [`specs/acceptance/`](specs/acceptance/).
+Active development — tracked work lives in GitHub Issues.
 
 This is a solo project. I am not currently accepting external contributions, but the workflow and the code are public for review.
 

@@ -51,7 +51,7 @@ jobs:
       # the Job runs on the current :latest workers image (pre-deploy.yml promotion).
       # The lore .md files do not depend on the chunking code version; if chunking logic
       # changed in the same push, re-run ingest manually after deploy.yml promotes the new
-      # image (see docs/runbook.md §Ingestion DB après sync — procédure manuelle de secours).
+      # image (re-run the archiviste-ingest Job manually after promotion).
       - name: execute archiviste-ingest Job and wait
         run: |
           gcloud run jobs execute archiviste-ingest \

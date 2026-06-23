@@ -8,7 +8,6 @@ on:
       - "**/*.md"
       - "docs/**"
       - ".claude/**"
-      - "CHANGELOG.md"
       - ".gitignore"
       - "LICENSE"
 

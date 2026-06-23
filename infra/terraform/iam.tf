@@ -80,6 +80,18 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_deploy_invoker" {
   member   = "serviceAccount:${google_service_account.gha_deploy.email}"
 }
 
+# #253: the gateway runtime SA reads the workers Cloud Run Admin v2 descriptor
+# (Ready condition) out-of-band to derive Workers' three-state health without
+# waking the scale-to-zero service. Least-privilege: roles/run.viewer scoped to
+# the workers service only, not project-wide.
+resource "google_cloud_run_v2_service_iam_member" "runtime_workers_viewer" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.workers.name
+  role     = "roles/run.viewer"
+  member   = "serviceAccount:${google_service_account.archiviste_runtime.email}"
+}
+
 # PLATFORM-004: the canary smoke step mints an ID token via
 # `print-identity-token --impersonate-service-account=gha-deploy`. Under WIF the
 # active credential already impersonates gha-deploy, so the generateIdToken call

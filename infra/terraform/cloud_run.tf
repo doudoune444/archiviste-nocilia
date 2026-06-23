@@ -86,6 +86,15 @@ resource "google_cloud_run_v2_service" "gateway" {
         value = google_cloud_run_v2_service.workers.uri
       }
 
+      # #253: gateway reads the workers Cloud Run Admin v2 descriptor out-of-band
+      # to derive the three-state health (Ready condition) without waking the
+      # scale-to-zero service. Required at boot (gateway/src/config.rs). The runtime
+      # SA needs roles/run.viewer on the workers service (see iam.tf).
+      env {
+        name  = "CLOUD_RUN_SERVICE_URL"
+        value = "https://run.googleapis.com/v2/${google_cloud_run_v2_service.workers.id}"
+      }
+
       volume_mounts {
         name       = "cloudsql"
         mount_path = "/cloudsql"

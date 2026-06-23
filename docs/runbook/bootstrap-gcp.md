@@ -171,9 +171,6 @@ GCS V4 signed URLs are now generated via IAM `signBlob` auto-impersonation
 token obtained from the Cloud Run metadata server. No SA private key is needed
 and `GCS_SIGNING_PRIVATE_KEY_PEM` no longer exists in the configuration.
 
-See `docs/runbook.md §5` for the full post-deploy verification procedure and
-the local-dev `gcloud` commands.
-
 ## 6. Bootstrap pgvector extension
 
 Cloud SQL `db-f1-micro` Postgres 16. First set the `postgres` superuser password (Cloud SQL

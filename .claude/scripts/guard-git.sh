@@ -59,8 +59,8 @@ if echo "$cmd" | grep -qE '(^|[[:space:]])(>|>>|<)([[:space:]]|/)'; then
 fi
 
 # ---- Destructive git ops ----------------------------------------------------
-if echo "$cmd" | grep -qE 'git (checkout|switch|stash|reset --hard|rebase|filter-branch|filter-repo)\b'; then
-  echo "BLOCKED: destructive git op forbidden." >&2
+if echo "$cmd" | grep -qE 'git (reset --hard|rebase|filter-branch|filter-repo)\b'; then
+  echo "BLOCKED: destructive git op forbidden (history rewrite / data loss)." >&2
   exit 2
 fi
 

@@ -1,68 +1,44 @@
-<!-- Title format: <type>(<scope>): <subject>  e.g.  feat(gateway): FOUND-002 add /v1/retrieve handler -->
+<!-- Title: <type>(<scope>): #<issue> <subject>   e.g.  feat(gateway): #142 anonymous cookie identity -->
 
-## Ticket
+## Closes
 
-- ID : `<TICKET-ID>`
-- Acceptance : `specs/acceptance/<ID>.md`
-- Plan : `specs/plans/<ID>.md`
-- Review : `specs/reviews/<ID>.md`
+Closes #<issue>
 
-## Summary
+## Vertical slice
 
-<!-- 1–3 lines: what this PR delivers, end-to-end. -->
+<!-- One or two lines: the end-to-end behavior this slice delivers. Mirror the issue's
+     "What to build" — describe behavior through the layers, not a file list. -->
 
-## Changes
+## User story
 
-<!-- Bulleted list of notable changes by area -->
-- `gateway/` — ...
-- `workers/` — ...
-- `migrations/` — ...
-- `specs/` — ...
-- `docs/` — ...
+<!-- From the issue / PRD. Omit this section if the slice has none. -->
+As a <role>, I want <capability>, so that <outcome>.
 
-## Acceptance criteria coverage
+## What changed & why
 
-<!-- Copy ACs from specs/acceptance/<ID>.md and tick each -->
-- [ ] AC-1 covered by `<test_path>::<test_name>`
-- [ ] AC-2 covered by `<test_path>::<test_name>`
-- [ ] AC-3 covered by `<test_path>::<test_name>`
+<!-- The decision-rich summary. WHAT changed at a high level, plus the WHY behind any
+     non-obvious choice — a tradeoff taken, a constraint, an alternative rejected.
+     Not a restatement of the diff; the reviewer can read the diff. -->
 
-## Test plan
+## Acceptance criteria
 
-- [ ] `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` green
-- [ ] `ruff check` + `ruff format --check` + `mypy --strict` + `pytest` green
-- [ ] Schemathesis run (if OpenAPI touched)
-- [ ] Ragas eval (if RAG path touched) — score not regressed vs `eval/baseline.json`
-- [ ] Property tests added/updated (if invariant touched in `specs/properties.md`)
-- [ ] Manual smoke test : `<command or scenario>`
+<!-- Copy from the issue; tick what this PR actually meets. -->
+- [ ] AC-1 — covered by `<test>`
+- [ ] AC-2 — covered by `<test>`
 
-## Security checklist
+## Tests (TDD)
 
-- [ ] No secrets in diff (`gitleaks` clean)
-- [ ] User input validated at trust boundaries
-- [ ] Sensitive types wrapped (`secrecy::Secret<T>` Rust / `pydantic.SecretStr` Python)
-- [ ] SQL parameterized (no string concat)
-- [ ] Threat model row updated if new attack surface introduced
-- [ ] Rate limit applied on new public route
-- [ ] CORS / CSP headers verified if route exposed
+- [ ] Behavior verified through public interfaces (integration-style), not implementation details
+- [ ] Red → green → refactor followed — test written before the code that satisfies it
+- [ ] Full suite green locally
 
-## ADR
+## Self-review
 
-- [ ] No new heavy dependency / architectural decision, OR
-- [ ] ADR added : `docs/adr/NNNN-<slug>.md`
-
-## CHANGELOG
-
-- [ ] Entry added under `## [Unreleased]` in `CHANGELOG.md`, OR
-- [ ] release-please will generate (commits are conventional)
+- [ ] `.claude/rules/clean-code.md` — ≤40-line functions, no abbreviations, no dead/commented code, semantic DRY
+- [ ] `.claude/rules/security.md` pinned decisions + auto-fail list respected (if `gateway/` / `workers/` / `infra/` touched)
+- [ ] No workaround — any blocker logged in `docs/blockers.md`, never patched around
+- [ ] No secrets in the diff
 
 ## Out of scope
 
-<!-- Explicitly list what this PR does NOT do, deferred to future tickets -->
-
-## Risks / rollback
-
-<!-- Migration safety, feature flag status, rollback steps if needed -->
-
----
-**Reviewer note** : `/review <ID>` runs the adversarial review agent. Verdict must be `APPROVE` before merge.
+<!-- What this PR deliberately does NOT do — deferred follow-ups, with issue refs if they exist. -->

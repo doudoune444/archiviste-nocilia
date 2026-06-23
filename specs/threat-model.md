@@ -109,7 +109,7 @@ Hors périmètre : laptops dev (risque #4 traité hors threat model app), runner
 - **Login throttling** : 5 tentatives échouées / 15 min / compte → backoff exponentiel.
 - **CSP** : `default-src 'self'; object-src 'none'; frame-ancestors 'none'`.
 - **CORS** : allowlist explicite des origines, JAMAIS wildcard avec `allow_credentials: true`.
-- **Réponse à incident** : `docs/runbook.md` (TODO).
+- **Réponse à incident** : `docs/runbook/` (TODO).
 - **Pen test** : externe avant le launch public + annuel.
 
 ## Cadence de revue

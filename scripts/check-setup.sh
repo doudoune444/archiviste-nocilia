@@ -45,33 +45,26 @@ done
 [ "$fail" -eq 0 ] && say "   ok"
 
 say "4. Rules present"
-for rule in clean-code vertical-slice no-workaround secret-hygiene security; do
+for rule in clean-code no-workaround secret-hygiene security; do
   if [ ! -f ".claude/rules/$rule.md" ]; then
     err ".claude/rules/$rule.md missing"
   fi
 done
 [ "$fail" -eq 0 ] && say "   ok"
 
-say "5. specs/ structure"
-for d in specs/acceptance specs/plans specs/reviews; do
-  if [ ! -d "$d" ]; then
-    err "$d missing"
-  fi
-done
-
-say "6. No tracked secrets"
+say "5. No tracked secrets"
 if git ls-files 2>/dev/null | grep -E '(^|/)\.env$|\.key$|\.pem$|^secrets/' | grep -v '\.env\.example$'; then
   err "secret-looking files tracked in git"
 fi
 
-say "7. .gitignore covers secrets"
+say "6. .gitignore covers secrets"
 if [ -f .gitignore ]; then
   for pat in '^\.env$' 'settings\.local\.json' '\*-sa\.json' '\*\.tfvars' 'kubeconfig' 'id_rsa' '\.pypirc'; do
     grep -qE "$pat" .gitignore || err ".gitignore missing pattern: $pat"
   done
 fi
 
-say "8. Lock files committed (supply chain integrity)"
+say "7. Lock files committed (supply chain integrity)"
 if [ -f gateway/Cargo.toml ]; then
   if [ ! -f gateway/Cargo.lock ]; then
     err "gateway/Cargo.lock missing — run 'cargo build' to generate, then commit"
@@ -91,19 +84,19 @@ if [ -f workers/pyproject.toml ]; then
   fi
 fi
 
-say "9. deny.toml + audit configs"
+say "8. deny.toml + audit configs"
 if [ -f gateway/Cargo.toml ] && [ ! -f deny.toml ]; then
   err "deny.toml missing (cargo-deny config)"
 fi
 
-say "10. Guard scripts present"
+say "9. Guard scripts present"
 for sh in guard-git guard-secret-paths format-on-save validate-claude-config; do
   if [ ! -f ".claude/scripts/${sh}.sh" ]; then
     err ".claude/scripts/${sh}.sh missing"
   fi
 done
 
-say "11. threat-model.md exists"
+say "10. threat-model.md exists"
 if [ ! -f specs/threat-model.md ]; then
   err "specs/threat-model.md missing — STRIDE threat model is required"
 fi

@@ -31,7 +31,7 @@ jobs:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
         run: |
           if [ -z "${GDRIVE_SA_KEY}" ]; then
-            echo "secret GDRIVE_SA_KEY missing — see docs/runbook.md" >&2
+            echo "secret GDRIVE_SA_KEY missing — see docs/runbook/" >&2
             exit 1
           fi
 

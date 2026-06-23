@@ -15,7 +15,7 @@ CANONICAL_REGEX="^($(IFS='|'; echo "${CANONICAL_PORTS[*]}"))$"
 
 # Test sentinel ports — refused-by-default, used in gateway/tests/* to assert
 # unreachable-workers behaviour (cf. healthz_test.rs, chat_test.rs, static_test.rs).
-# Allowed in docs/specs/plans that mirror these test fixtures.
+# Allowed in docs that mirror these test fixtures.
 TEST_SENTINEL_PORTS=(1)
 TEST_SENTINEL_REGEX="^($(IFS='|'; echo "${TEST_SENTINEL_PORTS[*]}"))$"
 
@@ -27,10 +27,8 @@ TEST_SENTINEL_REGEX="^($(IFS='|'; echo "${TEST_SENTINEL_PORTS[*]}"))$"
 #   - lock files, generated files
 SCAN_PATHS=(
   README.md
-  BOOTSTRAP.md
   CLAUDE.md
   SECURITY.md
-  CHANGELOG.md
   docs
   specs
   .claude

@@ -1,8 +1,7 @@
 # Rollback canary Cloud Run (INFRA-002)
 
 Procédure de rollback manuel après auto-rollback échoué OU bug détecté
-post-promote 100 %. Référencée par `docs/vision.md` § Cible deploy V1 beta
-et `docs/adr/0003-terraform-deferred.md` § Activation 2026-05-18.
+post-promote 100 %.
 
 ## Workflow auto-rollback
 

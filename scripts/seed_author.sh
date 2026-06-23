@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # seed_author.sh — author-tier seed (manual one-shot, humain-authored).
 #
-# Plan SEC-001 PR-b mandate (specs/plans/SEC-001.md L45):
+# Plan SEC-001 PR-b mandate:
 #   "agent squelette commenté: prompt password local, calcul argon2id,
 #    émet SQL INSERT à exécuter manuellement — humain rédige le contenu réel".
 #
@@ -27,8 +27,6 @@
 # The application never promotes a user to 'author' at runtime.
 #
 # References:
-#   - specs/acceptance/SEC-001.md AC-15
-#   - specs/plans/SEC-001.md L45 (PR-b files to touch)
 #   - .claude/rules/secret-hygiene.md (no secret in argv / process listing)
 
 set -euo pipefail

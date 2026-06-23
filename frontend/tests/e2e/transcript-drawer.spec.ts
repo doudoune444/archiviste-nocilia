@@ -15,7 +15,7 @@ const hasLiveGateway = !!process.env["GATEWAY_URL"];
 
 test.describe("transcript drawer — affordance visibility (DASH-002)", () => {
   // AC: public board must NOT show any transcript button (no onOpenTranscript passed)
-  test("public board /board has no transcript affordance", async ({ page }) => {
+  test("public board /lacunes has no transcript affordance", async ({ page }) => {
     await page.goto("/lacunes");
     // The transcript button must never appear on the public board.
     const transcriptBtns = page.getByTestId("open-transcript-btn");

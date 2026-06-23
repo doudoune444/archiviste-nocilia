@@ -60,13 +60,56 @@ const fn caller_moderates_all(identity: &AnonIdentity) -> bool {
 // GET /v1/conversations — owner-scoped list
 // ---------------------------------------------------------------------------
 
+/// Max number of characters kept in a derived conversation title before truncation.
+/// Titles longer than this are cut on a UTF-8 char boundary and suffixed with `…`.
+const MAX_TITLE_CHARS: usize = 60;
+
+/// Raw list row: the conversation columns plus the first user message used to
+/// derive a title. `first_user_message` is `NULL` when no user turn exists yet.
+#[derive(Debug, FromRow)]
+struct ConversationListRow {
+    id: Uuid,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+    message_count: i32,
+    first_user_message: Option<String>,
+}
+
 /// One conversation summary row for the owner-scoped list.
-#[derive(Debug, Serialize, FromRow)]
+///
+/// `title` is derived at read time from the first user message (#245): no stored
+/// column, no write-path coupling. Empty string when the conversation has no user
+/// turn yet.
+#[derive(Debug, Serialize)]
 struct ConversationSummary {
     id: Uuid,
     created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
     message_count: i32,
+    title: String,
+}
+
+/// Derives a display title from the first user message, truncated on a UTF-8 char
+/// boundary at `MAX_TITLE_CHARS` and suffixed with `…` when longer. `None` → empty.
+fn derive_title(first_user_message: Option<String>) -> String {
+    let raw = first_user_message.unwrap_or_default();
+    if raw.chars().count() <= MAX_TITLE_CHARS {
+        return raw;
+    }
+    let truncated: String = raw.chars().take(MAX_TITLE_CHARS).collect();
+    format!("{truncated}…")
+}
+
+impl From<ConversationListRow> for ConversationSummary {
+    fn from(row: ConversationListRow) -> Self {
+        Self {
+            id: row.id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            message_count: row.message_count,
+            title: derive_title(row.first_user_message),
+        }
+    }
 }
 
 /// Response body for `GET /v1/conversations`.
@@ -93,16 +136,25 @@ pub async fn list_conversations(
         .as_ref()
         .ok_or(ApiError::UpstreamUnavailable)?;
 
-    let conversations: Vec<ConversationSummary> = sqlx::query_as(
-        "SELECT id, created_at, updated_at, message_count \
-         FROM conversations WHERE user_id = $1 \
-         ORDER BY updated_at DESC LIMIT $2",
+    // #245: derive a title at read time from the first user message via a correlated
+    // subquery (the `role = 'user'` turn of minimal ordinal). No stored column, no
+    // write-path coupling. The A04 LIMIT and `updated_at DESC` order are unchanged.
+    let rows: Vec<ConversationListRow> = sqlx::query_as(
+        "SELECT c.id, c.created_at, c.updated_at, c.message_count, \
+         (SELECT cm.content FROM conversation_messages cm \
+          WHERE cm.conversation_id = c.id AND cm.role = 'user' \
+          ORDER BY cm.ordinal ASC LIMIT 1) AS first_user_message \
+         FROM conversations c WHERE c.user_id = $1 \
+         ORDER BY c.updated_at DESC LIMIT $2",
     )
     .bind(identity.user_id)
     .bind(MAX_CONVERSATIONS)
     .fetch_all(pool)
     .await
     .map_err(|_| ApiError::UpstreamUnavailable)?;
+
+    let conversations: Vec<ConversationSummary> =
+        rows.into_iter().map(ConversationSummary::from).collect();
 
     tracing::info!(
         event = "conversations.list",

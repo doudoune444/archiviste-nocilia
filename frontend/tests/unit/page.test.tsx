@@ -1,64 +1,20 @@
-// AC #247: landing on "/" renders the chat shell directly (no hero / CTA).
-// The root page is a server component that fetches the initial conversation
-// list via bff-proxy and renders ChatShell. On fetch failure it fails soft
-// (empty sidebar) and the chat surface is still usable.
+// AC #245: the root route `/` is the chat — the hero with the "/chat" CTA is
+// gone. The page is a trivial passthrough; the chat surface itself is rendered
+// by the global AppShell on the / route (asserted in app-shell.test.tsx and
+// app-shell-server.test.tsx). This test only pins that the old hero CTA link no
+// longer exists.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import React from "react";
-
-// next/headers is unavailable in jsdom — stub cookies()/headers().
-vi.mock("next/headers", () => ({
-  cookies: vi.fn().mockResolvedValue({ toString: () => "" }),
-  headers: vi.fn().mockResolvedValue({ get: () => null }),
-}));
-
-// bff-proxy forward() — controlled per test.
-const mockForward = vi.fn<(req: Request, path: string) => Promise<Response>>();
-vi.mock("@/lib/bff-proxy", () => ({
-  forward: (req: Request, path: string) => mockForward(req, path),
-}));
-
-// CSS modules pulled in transitively by ChatForm / ConversationHistory.
-vi.mock("@/components/chat/chat.module.css", () => ({
-  default: new Proxy({}, { get: (_t, prop: string) => prop }),
-}));
-vi.mock(
-  "@/components/conversation-history/ConversationHistory.module.css",
-  () => ({ default: new Proxy({}, { get: (_t, prop: string) => prop }) })
-);
-
 import AccueilPage from "@/app/page";
 
-beforeEach(() => {
-  mockForward.mockResolvedValue(
-    new Response(JSON.stringify({ conversations: [] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })
-  );
-});
-
-describe("AccueilPage — chat at the root (#247)", () => {
-  it("renders the chat input directly, with no welcome CTA", async () => {
-    const element = await AccueilPage();
-    render(element as React.ReactElement);
-
+describe("AccueilPage — root is the chat, no hero CTA (#245)", () => {
+  it("does not render a link to /chat", () => {
+    const { container } = render(<AccueilPage />);
     expect(
-      screen.getByRole("textbox", { name: /votre question/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /Interroger l'archiviste/i })
+      screen.queryByRole("link", { name: /interroger l'archiviste/i })
     ).not.toBeInTheDocument();
-  });
-
-  it("renders the chat shell even when the conversation list fetch fails (fail-soft)", async () => {
-    mockForward.mockRejectedValue(new Error("gateway down"));
-    const element = await AccueilPage();
-    render(element as React.ReactElement);
-
-    expect(
-      screen.getByRole("textbox", { name: /votre question/i })
-    ).toBeInTheDocument();
+    // No leftover hero markup either.
+    expect(container.querySelector("a[href='/chat']")).toBeNull();
   });
 });

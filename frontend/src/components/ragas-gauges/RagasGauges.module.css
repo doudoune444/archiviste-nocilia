@@ -24,11 +24,6 @@
   font-family: var(--font-mono);
 }
 
-.separator {
-  color: var(--color-border);
-}
-
-.version,
 .finishedAt {
   color: var(--color-text-muted);
 }

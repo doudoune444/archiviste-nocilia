@@ -26,7 +26,7 @@ vi.mock("@/lib/bff-proxy", () => ({
 }));
 
 // Mock CSS modules.
-vi.mock("@/app/board/page.module.css", () => ({ default: {} }));
+vi.mock("@/app/lacunes/page.module.css", () => ({ default: {} }));
 
 // Mock the BoardControls client component (uses useRouter — unavailable in jsdom RSC tests).
 vi.mock("@/components/category-filter/BoardControls", () => ({
@@ -37,7 +37,7 @@ vi.mock("@/components/category-filter/BoardControls", () => ({
 import { forward } from "@/lib/bff-proxy";
 
 // Lazy-import the page so mocks are in place before module evaluation.
-const { default: BoardPage } = await import("@/app/board/page");
+const { default: BoardPage } = await import("@/app/lacunes/page");
 
 const forwardMock = forward as ReturnType<typeof vi.fn>;
 

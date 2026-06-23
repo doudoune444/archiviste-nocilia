@@ -14,6 +14,8 @@ export interface ConversationSummary {
   created_at: string;
   updated_at: string;
   message_count: number;
+  /** Readable label derived by the gateway from the first user message (#250). */
+  title: string;
 }
 
 /** One message turn as returned by GET /v1/conversations/{id}/messages. */

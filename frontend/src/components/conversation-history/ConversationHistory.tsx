@@ -26,21 +26,6 @@ interface ConversationHistoryProps {
   onSelect: (id: string) => void;
 }
 
-/**
- * Formats a UTC ISO timestamp as a short French locale date.
- * WHY: dates come from the gateway as ISO strings; a consistent short format
- * avoids the hydration mismatch that locale-aware toLocaleString() can cause
- * between server and client (using a fixed format string is safe).
- */
-function formatDate(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleDateString("fr-FR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-  });
-}
-
 export function ConversationHistory({
   conversations,
   selectedId,
@@ -62,11 +47,7 @@ export function ConversationHistory({
             onClick={() => onSelect(conv.id)}
             data-testid={`conversation-item-${conv.id}`}
           >
-            <span>{formatDate(conv.updated_at)}</span>
-            <span className={styles.count}>
-              {conv.message_count} message
-              {conv.message_count !== 1 ? "s" : ""}
-            </span>
+            <span className={styles.title}>{conv.title}</span>
           </button>
         ))
       )}

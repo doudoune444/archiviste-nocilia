@@ -1,0 +1,206 @@
+/* #245 — global app-shell with a fixed left sidebar (Mistral style).
+ * Desktop: sidebar always visible. Mobile (<600px): sidebar hidden, opened as
+ * an overlay drawer via the hamburger button. */
+
+.shell {
+  display: flex;
+  height: 100dvh;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 1rem 0.75rem;
+  overflow-y: auto;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Brand + popover */
+.brandBlock {
+  position: relative;
+}
+
+.brandButton {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--color-accent);
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.brandButton:hover,
+.brandButton:focus {
+  background: var(--color-bg);
+}
+
+.popover {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.popoverLink {
+  color: var(--color-text);
+  font-size: 0.9rem;
+  text-decoration: none;
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+}
+
+.popoverLink:hover,
+.popoverLink:focus {
+  background: var(--color-surface);
+  color: var(--color-accent);
+}
+
+/* New-conversation row + history occupy the middle; account anchored bottom */
+.middle {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.newButton {
+  background: var(--color-accent);
+  color: var(--color-bg);
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.newButton:hover,
+.newButton:focus {
+  filter: brightness(1.15);
+}
+
+.transcriptError {
+  padding: 1rem;
+  color: var(--color-error-text);
+}
+
+.accountBlock {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.75rem;
+}
+
+.accountLink {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.accountLink:hover,
+.accountLink:focus {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.accountLinkPrimary {
+  color: var(--color-accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.accountLinkPrimary:hover,
+.accountLinkPrimary:focus {
+  text-decoration: underline;
+}
+
+.userEmail {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mobile drawer */
+.hamburger {
+  display: none;
+  position: fixed;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 30;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.backdrop {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .hamburger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .backdropOpen {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  .content {
+    padding-top: 3rem;
+  }
+}

@@ -19,7 +19,7 @@ test.describe("conversation history sidebar (CHAT-004)", () => {
   test("sidebar renders the 'Nouvelle conversation' button", async ({
     page,
   }) => {
-    await page.goto("/chat");
+    await page.goto("/");
     await expect(
       page.getByRole("button", { name: /nouvelle conversation/i })
     ).toBeVisible();
@@ -29,7 +29,7 @@ test.describe("conversation history sidebar (CHAT-004)", () => {
   test("fresh load shows an empty thread with no assistant-answer bubble", async ({
     page,
   }) => {
-    await page.goto("/chat");
+    await page.goto("/");
     // No committed answer bubble should be present on a fresh load.
     await expect(page.locator('[data-testid="assistant-answer"]')).toHaveCount(
       0
@@ -41,7 +41,7 @@ test.describe("conversation history sidebar (CHAT-004)", () => {
   test("'Nouvelle conversation' clears the thread and stays cleared on reload", async ({
     page,
   }) => {
-    await page.goto("/chat");
+    await page.goto("/");
 
     // The button should be present.
     const newBtn = page.getByTestId("new-conversation-btn");
@@ -66,7 +66,7 @@ test.describe("conversation history sidebar (CHAT-004)", () => {
   }) => {
     test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
 
-    await page.goto("/chat");
+    await page.goto("/");
 
     // The sidebar nav must be present.
     await expect(page.getByRole("navigation", { name: /historique/i })).toBeVisible();
@@ -78,7 +78,7 @@ test.describe("conversation history sidebar (CHAT-004)", () => {
   }) => {
     test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
 
-    await page.goto("/chat");
+    await page.goto("/");
 
     // If there are any conversation items, click the first one.
     const firstItem = page.locator('[data-testid^="conversation-item-"]').first();

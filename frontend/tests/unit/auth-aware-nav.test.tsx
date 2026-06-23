@@ -1,5 +1,6 @@
 // AC: PLATFORM-003 — auth-aware nav
-// AC1: Static view links present for ALL tiers (/, /board, /observability)
+// AC1: Static view links present for ALL tiers (/, /lacunes, /metriques)
+//      Labels (#247): Archiviste, Lacunes, État & métriques
 // AC2: anonymous → "Se connecter" / "S'inscrire", no email, no dashboard
 // AC3: member → email + "Se déconnecter", no dashboard link
 // AC4: author → email + "Se déconnecter" + "/dashboard" link
@@ -76,25 +77,25 @@ describe("AuthAwareNav — static view links (AC1)", () => {
     );
   });
 
-  it("renders the Chat link to /", async () => {
-    // AC1: chat link present for all tiers
+  it("renders the Archiviste link to /", async () => {
+    // AC1 (#247): chat view link present for all tiers, labelled "Archiviste"
     await renderNav();
-    const link = screen.getByRole("link", { name: "Chat" });
+    const link = screen.getByRole("link", { name: "Archiviste" });
     expect(link).toHaveAttribute("href", "/");
   });
 
-  it("renders the Board link to /board", async () => {
-    // AC1: board link present for all tiers
+  it("renders the Lacunes link to /lacunes", async () => {
+    // AC1 (#247): former Board link, renamed Lacunes → /lacunes
     await renderNav();
-    const link = screen.getByRole("link", { name: "Board" });
-    expect(link).toHaveAttribute("href", "/board");
+    const link = screen.getByRole("link", { name: "Lacunes" });
+    expect(link).toHaveAttribute("href", "/lacunes");
   });
 
-  it("renders the Observabilité link to /observability", async () => {
-    // AC1: observability link present for all tiers
+  it("renders the État & métriques link to /metriques", async () => {
+    // AC1 (#247): former Observabilité link, renamed → /metriques
     await renderNav();
-    const link = screen.getByRole("link", { name: "Observabilité" });
-    expect(link).toHaveAttribute("href", "/observability");
+    const link = screen.getByRole("link", { name: "État & métriques" });
+    expect(link).toHaveAttribute("href", "/metriques");
   });
 });
 

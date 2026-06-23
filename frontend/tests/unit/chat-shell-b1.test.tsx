@@ -23,7 +23,7 @@ import { ChatShell } from "@/components/conversation-history/ChatShell";
 
 // chat.module.css — the component imports a CSS module; jsdom cannot process
 // real CSS, so we stub it with an identity proxy.
-vi.mock("@/app/chat/chat.module.css", () => {
+vi.mock("@/components/chat/chat.module.css", () => {
   return {
     default: new Proxy(
       {},

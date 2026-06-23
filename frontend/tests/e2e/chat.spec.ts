@@ -16,7 +16,7 @@ const hasLiveGateway = !!process.env["GATEWAY_URL"];
 test.describe("chat surface (CHAT-002)", () => {
   // AC: /chat renders a text input and a send button
   test("chat page renders the question form", async ({ page }) => {
-    await page.goto("/chat");
+    await page.goto("/");
 
     await expect(
       page.getByRole("textbox", { name: /question/i })
@@ -32,7 +32,7 @@ test.describe("chat surface (CHAT-002)", () => {
   }) => {
     test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
 
-    await page.goto("/chat");
+    await page.goto("/");
 
     const question = "Qui est Nocilia ?";
     await page.fill('textarea[name="question"]', question);

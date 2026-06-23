@@ -19,8 +19,13 @@ it is the scarce resource here.
 
 1. Find the queue:
    - If issue numbers were passed as arguments, use them.
-   - Else: `gh issue list --state open --label ready-for-agent --json number --jq '.[].number'`.
-2. If the queue is empty → report the run table and stop.
+   - Else: `gh issue list --state open --search 'label:ready-for-agent -label:prd' --json number --jq '.[].number'`.
+2. Drop any PRD from the queue. A PRD is a parent tracking umbrella, never a buildable
+   unit — building it one-shot defeats the vertical-slice methodology. For every issue
+   (including ones passed as arguments), skip it if it carries the `prd` label:
+   `gh issue view <N> --json labels --jq 'any(.labels[].name; . == "prd")'` → if `true`,
+   record `#<N> → skipped: PRD (build its child slices, not the parent)` and move on.
+   If the queue is empty → report the run table and stop.
 3. Take the next issue. Spawn **one sub-agent** with the Agent tool,
    `isolation: "worktree"`, and this task:
 
@@ -51,7 +56,7 @@ This command drains the queue once. To keep it self-restarting until the queue i
 truly empty, pair it with `/goal` (the evaluator re-checks after every turn). Paste:
 
 ```
-/goal every issue labelled ready-for-agent has an open PR that closes it. Proof: `gh issue list --state open --label ready-for-agent --json number` returns []. Constraint: leave untouched any issue with no Testing Decisions; never invent scope.
+/goal every buildable issue (labelled ready-for-agent, NOT labelled prd) has an open PR that closes it. Proof: `gh issue list --state open --search 'label:ready-for-agent -label:prd' --json number` returns []. Constraint: never build a PRD (label `prd`) — those are parent umbrellas, done only when their child slices are done; leave untouched any issue with no Testing Decisions; never invent scope.
 ```
 
 Then run `/autobuild`. Remember: `/goal` only fires while this Claude Code session is

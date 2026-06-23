@@ -8,9 +8,9 @@ test("la page d'accueil charge et affiche le layout", async ({ page }) => {
   await expect(page.locator("nav")).toBeVisible();
   await expect(page.getByText("Archiviste Nocilia").first()).toBeVisible();
 
-  // Home page content renders
+  // #247: the chat surface is the landing page — the question form is present
   await expect(
-    page.getByRole("heading", { name: /Bienvenue aux archives de Nocilia/i })
+    page.getByRole("textbox", { name: /votre question/i })
   ).toBeVisible();
 
   // Footer is present

@@ -1,28 +1,17 @@
+/* #249: full-screen layout — the shell fills the viewport and the chat surface
+   occupies all remaining height below the nav. Content pages constrain their own
+   width via their page module (.page); the layout no longer imposes a narrow box
+   or a footer. */
 .shell {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  height: 100dvh;
 }
 
 .main {
   flex: 1;
+  min-height: 0;
   width: 100%;
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem;
-}
-
-.footer {
-  border-top: 1px solid var(--color-border);
-  padding: 0.75rem 1rem;
-  text-align: center;
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-}
-
-@media (max-width: 600px) {
-  .main {
-    padding: 1rem 0.75rem;
-  }
+  display: flex;
+  flex-direction: column;
 }

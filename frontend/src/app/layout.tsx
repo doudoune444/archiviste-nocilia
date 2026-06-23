@@ -20,9 +20,6 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <div className={styles.shell}>
           <AuthAwareNav />
           <main className={styles.main}>{children}</main>
-          <footer className={styles.footer}>
-            <p>Archives de Nocilia — usage personnel</p>
-          </footer>
         </div>
       </body>
     </html>

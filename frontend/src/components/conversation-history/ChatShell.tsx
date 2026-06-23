@@ -28,6 +28,7 @@ import {
   type Message,
 } from "./types";
 import { ChatForm } from "@/components/chat/ChatForm";
+import styles from "./ChatShell.module.css";
 
 /**
  * Stable empty array reference — passed to ChatForm when no conversation is selected.
@@ -93,16 +94,16 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
   );
 
   return (
-    <div style={{ display: "flex", minHeight: "100%" }}>
+    <div className={styles.shell}>
       <ConversationHistory
         conversations={conversations}
         selectedId={selectedId}
         onSelect={handleSelectConversation}
         onNew={handleNew}
       />
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div className={styles.chatColumn}>
         {transcriptError !== null && (
-          <p role="alert" style={{ padding: "1rem", color: "var(--color-error-text)" }}>
+          <p role="alert" className={styles.transcriptError}>
             {transcriptError}
           </p>
         )}

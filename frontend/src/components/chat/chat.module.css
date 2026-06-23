@@ -1,25 +1,84 @@
-.page {
+/* #249 — full-screen chat surface. Welcome state centers the input; the
+   conversation state anchors the input at the bottom with the thread scrolling
+   above. Both fill the available height (no narrow centered box). */
+
+.welcome,
+.conversation {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
-  max-width: 720px;
-  margin: 0 auto;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+/* Welcome state: title + input + chips, vertically centered. */
+.welcome {
+  justify-content: center;
+  align-items: center;
   padding: 1.5rem 1rem;
 }
 
-.heading {
-  font-size: 1.5rem;
+.welcomeInner {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 720px;
+}
+
+.welcomeHeading {
+  font-size: 1.75rem;
+  text-align: center;
+}
+
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.chip {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.chip:hover,
+.chip:focus {
+  border-color: var(--color-accent);
+  filter: brightness(1.1);
+}
+
+.chip:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Conversation state: scrolling thread above, input pinned at the bottom. */
+.conversation {
+  padding: 0;
 }
 
 .thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  padding: 1.5rem 1rem;
 }
 
 .messageUser {
   align-self: flex-end;
-  background: var(--color-surface);
+  background: var(--color-user-bg);
   border: 1px solid var(--color-border);
   border-radius: 8px 8px 2px 8px;
   padding: 0.6rem 0.9rem;
@@ -29,7 +88,7 @@
 
 .messageAssistant {
   align-self: flex-start;
-  background: var(--color-bg);
+  background: var(--color-assistant-bg);
   border: 1px solid var(--color-border);
   border-radius: 2px 8px 8px 8px;
   padding: 0.6rem 0.9rem;
@@ -64,41 +123,65 @@
   font-size: 0.9rem;
 }
 
+/* Modern input: integrated icon button inside the field. */
 .form {
+  width: 100%;
+  padding: 0.75rem 1rem 1.25rem;
+}
+
+.conversation .form {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.inputBar {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-top: auto;
+  align-items: flex-end;
+  gap: 0.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 0.5rem 0.5rem 0.5rem 0.9rem;
+}
+
+.inputBar:focus-within {
+  border-color: var(--color-accent);
 }
 
 .textarea {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  flex: 1;
+  background: transparent;
+  border: none;
   color: var(--color-text);
   font-size: 1rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 4px;
-  resize: vertical;
-  min-height: 80px;
-  width: 100%;
+  line-height: 1.5;
   font-family: var(--font-sans);
+  resize: none;
+  max-height: 12rem;
+  overflow-y: auto;
+  padding: 0.4rem 0;
 }
 
 .textarea:focus {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  outline: none;
+}
+
+.textarea:disabled {
+  opacity: 0.6;
 }
 
 .submitButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
   background: var(--color-accent);
   color: var(--color-bg);
-  font-weight: 600;
-  font-size: 1rem;
-  padding: 0.6rem 1.25rem;
   border: none;
-  border-radius: 4px;
+  border-radius: 50%;
   cursor: pointer;
-  align-self: flex-end;
 }
 
 .submitButton:hover:not(:disabled),
@@ -107,6 +190,10 @@
 }
 
 .submitButton:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
+}
+
+.sendIcon {
+  display: block;
 }

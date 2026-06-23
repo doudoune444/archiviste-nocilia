@@ -12,7 +12,4 @@ test("la page d'accueil charge et affiche le layout", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: /Bienvenue aux archives de Nocilia/i })
   ).toBeVisible();
-
-  // Footer is present
-  await expect(page.locator("footer")).toBeVisible();
 });

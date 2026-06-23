@@ -7,7 +7,7 @@
  * clear the browser cookie. bff-proxy relays that Set-Cookie back.
  *
  * After the gateway call, redirect() returns the user to / with a fresh RSC
- * render (AuthAwareNav re-fetches /v1/me and shows the anonymous state).
+ * render (AppShellServer re-fetches /v1/me and shows the anonymous state).
  *
  * AC: "Se déconnecter" ends the session server-side (not JWT-only).
  * AC: header returns to anonymous after logout.
@@ -47,7 +47,7 @@ export default async function LogoutPage() {
   // naturally. The redirect always happens so the user is never stuck here.
   await forward(syntheticRequest, "/v1/auth/logout").catch(() => undefined);
 
-  // After gateway logout, redirect to home. The RSC re-render of AuthAwareNav
+  // After gateway logout, redirect to home. The RSC re-render of AppShellServer
   // in the new layout fetch will call /v1/me and get anonymous tier.
   redirect("/");
 }

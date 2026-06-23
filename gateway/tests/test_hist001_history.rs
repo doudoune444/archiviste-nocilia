@@ -181,6 +181,66 @@ async fn hist001_list_returns_only_own_conversations(pool: sqlx::PgPool) {
     assert_eq!(items[0]["message_count"], 4);
 }
 
+/// HIST-001 (#245): each list item carries a `title` derived from the first user
+/// message, truncated past the limit, always scoped to the owner.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist245_list_items_carry_first_user_message_title(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+
+    let short = seed_conversation(&pool, caller_id, 2, ts(120)).await;
+    seed_message(&pool, short, "user", 0, "Qui est Blowen ?").await;
+    seed_message(&pool, short, "assistant", 1, "Blowen est…").await;
+
+    // A conversation whose first user message exceeds the truncation limit.
+    let long_question = "a".repeat(200);
+    let long = seed_conversation(&pool, caller_id, 2, ts(10)).await;
+    seed_message(&pool, long, "user", 0, &long_question).await;
+    seed_message(&pool, long, "assistant", 1, "réponse").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+
+    // updated_at DESC → the long (newer) conversation comes first.
+    let long_title = items[0]["title"].as_str().unwrap();
+    assert!(
+        long_title.ends_with('…'),
+        "title past the limit must be truncated with an ellipsis, got {long_title:?}"
+    );
+    assert!(
+        long_title.chars().count() <= 61,
+        "title must be capped (~60 chars + ellipsis), got {} chars",
+        long_title.chars().count()
+    );
+
+    assert_eq!(
+        items[1]["title"], "Qui est Blowen ?",
+        "short first user message is the title verbatim"
+    );
+}
+
+/// HIST-001 (#245): a conversation with no user message yet yields an empty title,
+/// never a panic or the assistant's text.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist245_list_title_empty_when_no_user_message(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    seed_message(&pool, conv, "assistant", 0, "réponse sans question").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "");
+}
+
 /// A caller with no conversations gets an empty list (not an error).
 #[sqlx::test(migrations = "../migrations")]
 async fn hist001_list_empty_for_new_caller(pool: sqlx::PgPool) {

@@ -14,6 +14,8 @@ export interface ConversationSummary {
   created_at: string;
   updated_at: string;
   message_count: number;
+  /** #245: display title — the start of the first user message (server-derived). */
+  title: string;
 }
 
 /** One message turn as returned by GET /v1/conversations/{id}/messages. */

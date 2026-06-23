@@ -44,7 +44,7 @@ test.beforeEach(async ({ page }) => {
 test("AC1: dépendances affiche les trois services comme opérationnels", async ({
   page,
 }) => {
-  await page.goto("/observability");
+  await page.goto("/metriques");
 
   const card = page.getByRole("article", { name: "Dépendances" });
   await expect(card).toBeVisible();
@@ -71,7 +71,7 @@ test("AC1: dépendances affiche postgres hors service sans ambiguïté", async (
     });
   });
 
-  await page.goto("/observability");
+  await page.goto("/metriques");
 
   const card = page.getByRole("article", { name: "Dépendances" });
   await expect(card).toBeVisible();
@@ -91,7 +91,7 @@ test("AC1: état d'erreur rendu sans ambiguïté quand /api/v1/status échoue", 
     return route.fulfill({ status: 503, body: "" });
   });
 
-  await page.goto("/observability");
+  await page.goto("/metriques");
 
   const card = page.getByRole("article", { name: "Dépendances" });
   await expect(card).toBeVisible();
@@ -103,7 +103,7 @@ test("AC1: état d'erreur rendu sans ambiguïté quand /api/v1/status échoue", 
 test("AC4: la carte dépendances s'intègre dans la grille observabilité", async ({
   page,
 }) => {
-  await page.goto("/observability");
+  await page.goto("/metriques");
 
   // Page heading is present
   await expect(

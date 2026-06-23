@@ -28,7 +28,8 @@
 }
 
 .dotHealthy,
-.dotDown {
+.dotDown,
+.dotDormant {
   width: 0.625rem;
   height: 0.625rem;
   border-radius: 50%;
@@ -41,6 +42,11 @@
 
 .dotDown {
   background: var(--color-error-text);
+}
+
+/* #253: dormant = neutral/grey, never the red of `down`. */
+.dotDormant {
+  background: var(--color-text-muted);
 }
 
 .depLabel {
@@ -58,6 +64,20 @@
   font-size: 0.8rem;
   font-family: var(--font-mono);
   color: var(--color-error-text);
+}
+
+/* #253: neutral label for the dormant Workers state. */
+.statusDormant {
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+/* Keeps the status label and its info tooltip on the same line. */
+.statusWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .loadingText {

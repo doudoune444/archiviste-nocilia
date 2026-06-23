@@ -84,6 +84,44 @@ test("AC1: dépendances affiche postgres hors service sans ambiguïté", async (
   await expect(statusLabels).toHaveCount(2);
 });
 
+// #253: Workers scale-to-zero (Cloud Run Ready=True) → "En veille", neutral, never red.
+const STATUS_WORKERS_DORMANT = {
+  status: "ok",
+  dependencies: {
+    postgres: { status: "ok", latency_ms: 3 },
+    gcs: { status: "ok", latency_ms: 12 },
+    workers: { status: "dormant", latency_ms: 5 },
+  },
+  checked_at: "2026-06-19T10:00:00Z",
+};
+
+test("#253: Workers en veille affiché comme état nominal, pas une panne", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/status", (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(STATUS_WORKERS_DORMANT),
+    });
+  });
+
+  await page.goto("/observability");
+
+  const card = page.getByRole("article", { name: "Dépendances" });
+  await expect(card).toBeVisible();
+
+  // US-2/US-3: "En veille" label present, never "Hors service".
+  await expect(card.getByText("En veille")).toBeVisible();
+  await expect(card.getByText("Hors service")).toHaveCount(0);
+
+  // US-4/US-10: an accessible info trigger explains the cold start on demand.
+  const trigger = card.getByRole("button", { name: /en veille/i });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await expect(page.getByRole("tooltip")).toContainText("à froid");
+});
+
 test("AC1: état d'erreur rendu sans ambiguïté quand /api/v1/status échoue", async ({
   page,
 }) => {

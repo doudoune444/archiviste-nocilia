@@ -112,6 +112,9 @@ pub fn make_test_config(workers_url: &str) -> Config {
         gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
         // SEC-004: no SA private key — signing via IAM signBlob; no field here.
         gcs_bucket: "archiviste-conversations".to_string(),
+        // #253: unreachable by default → workers Cloud Run probe → down in tests
+        // that do not inject a mock. Tests that exercise the probe override this.
+        cloud_run_service_url: "http://127.0.0.1:1".to_string(),
     }
 }
 

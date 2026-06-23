@@ -23,8 +23,9 @@ explicit. For each candidate PRD:
 
 1. Find candidate PRDs:
    - If issue numbers were passed, use them.
-   - Else: `gh issue list --state open --json number,title,body` and keep the ones
-     that are PRDs (by label or by their PRD structure).
+   - Else: `gh issue list --state open --label prd --json number,title,body`. The `prd`
+     label is the authoritative marker of a parent PRD. (Fall back to PRD structure only
+     for legacy PRDs created before the label existed — and relabel those with `prd`.)
 2. For each PRD, apply the safety gate above.
 3. For a PRD that passes the gate: run `/to-issues` against it. It creates the
    vertical-slice issues and labels them `ready-for-agent`.

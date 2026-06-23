@@ -17,10 +17,10 @@ import {
   waitFor,
   act,
 } from "@testing-library/react";
-import { ChatForm } from "@/app/chat/ChatForm";
+import { ChatForm } from "@/components/chat/ChatForm";
 
 // chat.module.css — identity proxy so class names equal their keys in jsdom.
-vi.mock("@/app/chat/chat.module.css", () => ({
+vi.mock("@/components/chat/chat.module.css", () => ({
   default: new Proxy({}, { get: (_t, prop: string) => prop }),
 }));
 

@@ -1,0 +1,8 @@
+.shell {
+  min-height: 100%;
+}
+
+.transcriptError {
+  padding: 1rem;
+  color: var(--color-error-text);
+}

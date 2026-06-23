@@ -128,6 +128,7 @@
   line-height: 1.4;
   font-family: var(--font-sans);
   resize: none;
+  field-sizing: content;
   max-height: 200px;
   overflow-y: auto;
   padding: 0.35rem 0;

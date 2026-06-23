@@ -351,18 +351,8 @@ function AutoGrowTextarea({
   onChange,
   onKeyDown,
 }: AutoGrowTextareaProps) {
-  const ref = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (node === null) return;
-    node.style.height = "auto";
-    node.style.height = `${node.scrollHeight}px`;
-  }, [value]);
-
   return (
     <textarea
-      ref={ref}
       name="question"
       aria-label="Votre question"
       className={styles.textarea}

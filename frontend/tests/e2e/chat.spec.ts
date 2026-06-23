@@ -1,12 +1,11 @@
-// AC: CHAT-002 — streaming chat surface smoke
+// AC: CHAT-002 streaming smoke + #249 welcome state / chips / centered→bottom transition.
 //
-// AC-smoke: sending a question streams a visible answer to the chat surface.
+// Welcome-state assertions (title, centered input, chips) run without a gateway.
+// Stream-dependent assertions (chip-send round-trip, centered→bottom transition)
+// require a live gateway and are skipped unless GATEWAY_URL is set — mirrors the
+// auth.spec.ts pattern so CI without a gateway stays green.
 //
-// NOTE: requires a live gateway (GATEWAY_URL env set and responding).
-// Without a live gateway the BFF API route cannot relay the SSE stream.
-// Skipped in CI unless GATEWAY_URL is set — mirrors the auth.spec.ts pattern.
-//
-// To run locally:
+// To run the gateway-backed cases locally:
 //   GATEWAY_URL=http://localhost:8080 npm run test:e2e -- tests/e2e/chat.spec.ts
 
 import { test, expect } from "@playwright/test";
@@ -42,9 +41,60 @@ test.describe("chat surface (CHAT-002)", () => {
     await expect(page.getByText(question)).toBeVisible();
 
     // AC: an answer eventually appears (streaming completes).
-    // The committed assistant bubble uses data-testid="assistant-answer";
-    // the live streaming placeholder uses data-testid="streaming-answer".
-    // We wait for the committed bubble — it appears once streaming ends.
+    await expect(page.locator('[data-testid="assistant-answer"]')).not.toBeEmpty({
+      timeout: 30_000,
+    });
+  });
+});
+
+test.describe("chat welcome state (#249)", () => {
+  // AC: empty thread shows the welcome title, a centered input, and four chips.
+  test("welcome state shows title, centered input and four suggestion chips", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: /Bienvenue aux archives de Nocilia/i })
+    ).toBeVisible();
+
+    await expect(
+      page.getByRole("textbox", { name: /question/i })
+    ).toBeVisible();
+
+    const surface = page.locator('[data-state="welcome"]');
+    await expect(surface).toBeVisible();
+
+    for (const label of [
+      "Qui est Blowen ?",
+      "Qu'est-ce que le Cérafon ?",
+      "Qui a élu domicile dans les ruines de Periste ?",
+      "Combien font 2+2 ?",
+    ]) {
+      await expect(page.getByRole("button", { name: label })).toBeVisible();
+    }
+  });
+
+  // AC: clicking a chip sends that exact question and switches to conversation
+  // state with the input anchored to the bottom and the thread above.
+  test("clicking a chip sends the question and transitions centered → bottom", async ({
+    page,
+  }) => {
+    test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
+
+    await page.goto("/");
+
+    const chip = "Combien font 2+2 ?";
+    await page.getByRole("button", { name: chip }).click();
+
+    // AC: the exact chip text is echoed as the user message.
+    await expect(page.getByText(chip)).toBeVisible();
+
+    // AC: the surface is now in conversation state (welcome layout is gone).
+    await expect(page.locator('[data-state="conversation"]')).toBeVisible();
+    await expect(page.locator('[data-state="welcome"]')).toHaveCount(0);
+
+    // AC: a streamed answer eventually appears in the thread above the input.
     await expect(page.locator('[data-testid="assistant-answer"]')).not.toBeEmpty({
       timeout: 30_000,
     });

@@ -33,6 +33,7 @@ import {
 } from "./types";
 import { ChatForm } from "@/components/chat/ChatForm";
 import { useRegisterChatSidebar } from "@/components/app-sidebar/SidebarChatContext";
+import styles from "./ChatShell.module.css";
 
 /**
  * Stable empty array reference — passed to ChatForm when no conversation is selected.
@@ -113,9 +114,9 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
   useRegisterChatSidebar({ history, onNewConversation: handleNew });
 
   return (
-    <div style={{ minHeight: "100%" }}>
+    <div className={styles.shell}>
       {transcriptError !== null && (
-        <p role="alert" style={{ padding: "1rem", color: "var(--color-error-text)" }}>
+        <p role="alert" className={styles.transcriptError}>
           {transcriptError}
         </p>
       )}

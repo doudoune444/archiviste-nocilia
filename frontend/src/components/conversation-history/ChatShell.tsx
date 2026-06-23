@@ -27,7 +27,7 @@ import {
   type ConversationSummary,
   type Message,
 } from "./types";
-import { ChatForm } from "@/app/chat/ChatForm";
+import { ChatForm } from "@/components/chat/ChatForm";
 
 /**
  * Stable empty array reference — passed to ChatForm when no conversation is selected.

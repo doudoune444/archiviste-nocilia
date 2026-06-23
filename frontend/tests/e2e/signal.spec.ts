@@ -22,7 +22,7 @@ test.describe("signal form (CHAT-005)", () => {
     async ({ page }) => {
       test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
 
-      await page.goto("/chat");
+      await page.goto("/");
       await page.fill('textarea[name="question"]', "Qui est Nocilia ?");
       await page.click('button[type="submit"]');
 
@@ -44,7 +44,7 @@ test.describe("signal form (CHAT-005)", () => {
     async ({ page }) => {
       test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
 
-      await page.goto("/chat");
+      await page.goto("/");
       await page.fill('textarea[name="question"]', "Qui est Nocilia ?");
       await page.click('button[type="submit"]');
 
@@ -85,7 +85,7 @@ test.describe("signal form (CHAT-005)", () => {
   test("submit button is disabled when claim is empty", async ({ page }) => {
     test.skip(!hasLiveGateway, "GATEWAY_URL not set — requires live gateway");
 
-    await page.goto("/chat");
+    await page.goto("/");
     await page.fill('textarea[name="question"]', "Qui est Nocilia ?");
     await page.click('button[type="submit"]');
 

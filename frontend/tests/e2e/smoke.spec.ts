@@ -1,18 +1,18 @@
-// AC: app loads, layout renders (PLATFORM-001 — Playwright smoke)
+// AC: app loads, the sidebar app-shell renders (PLATFORM-001 + #248).
 import { test, expect } from "@playwright/test";
 
-test("la page d'accueil charge et affiche le layout", async ({ page }) => {
+test("la page d'accueil charge et affiche l'app-shell", async ({ page }) => {
   await page.goto("/");
 
-  // Layout shell is present
-  await expect(page.locator("nav")).toBeVisible();
-  await expect(page.getByText("Archiviste Nocilia").first()).toBeVisible();
-
-  // Home page content renders
+  // #248: the persistent left sidebar replaces the top nav bar.
+  await expect(page.locator("aside")).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Bienvenue aux archives de Nocilia/i })
+    page.getByRole("button", { name: /archiviste nocilia/i })
   ).toBeVisible();
 
-  // Footer is present
-  await expect(page.locator("footer")).toBeVisible();
+  // The chat surface renders directly at the root.
+  await expect(page.getByRole("textbox", { name: /question/i })).toBeVisible();
+
+  // #248: the global footer is removed.
+  await expect(page.locator("footer")).toHaveCount(0);
 });

@@ -194,6 +194,91 @@ async fn hist001_list_empty_for_new_caller(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// #250 — derived history titles (first user message, truncated on UTF-8 boundary)
+// ---------------------------------------------------------------------------
+
+/// A conversation's `title` equals the start of its first user message (minimal
+/// ordinal among `role = 'user'` rows), independent of an earlier non-user turn.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist250_title_is_first_user_message(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 3, ts(30)).await;
+    seed_message(&pool, conv, "user", 0, "Quelle est la capitale ?").await;
+    seed_message(&pool, conv, "assistant", 1, "Paris.").await;
+    seed_message(&pool, conv, "user", 2, "Et le fleuve ?").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "Quelle est la capitale ?");
+}
+
+/// A title longer than the limit is truncated on a UTF-8 boundary with a `…` suffix.
+/// The accented multibyte content must never be split mid-codepoint.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist250_title_truncated_on_utf8_boundary(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    // 70 accented (multibyte) chars — exceeds the ~60 char cap.
+    let long_question: String = "é".repeat(70);
+    seed_message(&pool, conv, "user", 0, &long_question).await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let title = body["conversations"][0]["title"].as_str().unwrap();
+    assert!(title.ends_with('…'), "long title must end with an ellipsis");
+    let visible_chars = title.trim_end_matches('…').chars().count();
+    assert_eq!(visible_chars, 60, "title capped at 60 visible chars");
+    assert!(
+        title.trim_end_matches('…').chars().all(|c| c == 'é'),
+        "truncation must not split a multibyte codepoint"
+    );
+}
+
+/// A conversation with no user message yet yields an empty title (not an error).
+#[sqlx::test(migrations = "../migrations")]
+async fn hist250_title_empty_when_no_user_message(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let conv = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    seed_message(&pool, conv, "assistant", 0, "Bonjour.").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["conversations"][0]["title"], "");
+}
+
+/// Titles are owner-scoped: a caller never sees another owner's conversation title.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist250_title_owner_scoped(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+    let other_id = seed_anon_owner(&pool).await;
+
+    let own = seed_conversation(&pool, caller_id, 1, ts(30)).await;
+    seed_message(&pool, own, "user", 0, "Ma question à moi").await;
+    let foreign = seed_conversation(&pool, other_id, 1, ts(5)).await;
+    seed_message(&pool, foreign, "user", 0, "Secret de l'autre").await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "caller sees only their own conversation");
+    assert_eq!(items[0]["title"], "Ma question à moi");
+}
+
+// ---------------------------------------------------------------------------
 // AC: reopening a conversation returns its turns from the structured store
 // ---------------------------------------------------------------------------
 

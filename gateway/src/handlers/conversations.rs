@@ -42,6 +42,12 @@ const MAX_CONVERSATIONS: i64 = 50;
 /// Max turns returned when reopening a conversation (security.md A04 LIMIT guard).
 const MAX_MESSAGES: i64 = 500;
 
+/// Max visible characters in a derived conversation title before truncation (#250).
+const MAX_TITLE_CHARS: usize = 60;
+
+/// Suffix appended when a title is truncated at `MAX_TITLE_CHARS` (#250).
+const TITLE_ELLIPSIS: char = '…';
+
 // ---------------------------------------------------------------------------
 // Shared visibility predicate
 // ---------------------------------------------------------------------------
@@ -60,13 +66,60 @@ const fn caller_moderates_all(identity: &AnonIdentity) -> bool {
 // GET /v1/conversations — owner-scoped list
 // ---------------------------------------------------------------------------
 
-/// One conversation summary row for the owner-scoped list.
-#[derive(Debug, Serialize, FromRow)]
+/// One conversation summary row as fetched from the owner-scoped list query.
+///
+/// `first_user_message` is the raw content of the conversation's first user turn
+/// (correlated subquery, minimal ordinal among `role = 'user'`), or `None` when the
+/// conversation has no user turn yet. It is truncated into a `title` before serializing.
+#[derive(Debug, FromRow)]
+struct ConversationSummaryRow {
+    id: Uuid,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+    message_count: i32,
+    first_user_message: Option<String>,
+}
+
+/// One conversation summary as serialized into the list response.
+#[derive(Debug, Serialize)]
 struct ConversationSummary {
     id: Uuid,
     created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
     message_count: i32,
+    /// Readable label derived at read time from the first user message, truncated
+    /// on a UTF-8 boundary with a `…` suffix beyond `MAX_TITLE_CHARS` (#250).
+    title: String,
+}
+
+impl From<ConversationSummaryRow> for ConversationSummary {
+    fn from(row: ConversationSummaryRow) -> Self {
+        let title = row
+            .first_user_message
+            .as_deref()
+            .map(truncate_title)
+            .unwrap_or_default();
+        Self {
+            id: row.id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            message_count: row.message_count,
+            title,
+        }
+    }
+}
+
+/// Truncate a title to `MAX_TITLE_CHARS` visible characters, appending `…` when the
+/// source is longer. Counts Unicode scalar values (not bytes) so a multibyte
+/// codepoint is never split (#250).
+fn truncate_title(content: &str) -> String {
+    let mut characters = content.chars();
+    let head: String = characters.by_ref().take(MAX_TITLE_CHARS).collect();
+    if characters.next().is_some() {
+        format!("{head}{TITLE_ELLIPSIS}")
+    } else {
+        head
+    }
 }
 
 /// Response body for `GET /v1/conversations`.
@@ -93,16 +146,22 @@ pub async fn list_conversations(
         .as_ref()
         .ok_or(ApiError::UpstreamUnavailable)?;
 
-    let conversations: Vec<ConversationSummary> = sqlx::query_as(
-        "SELECT id, created_at, updated_at, message_count \
-         FROM conversations WHERE user_id = $1 \
-         ORDER BY updated_at DESC LIMIT $2",
+    let rows: Vec<ConversationSummaryRow> = sqlx::query_as(
+        "SELECT c.id, c.created_at, c.updated_at, c.message_count, \
+                (SELECT cm.content FROM conversation_messages cm \
+                 WHERE cm.conversation_id = c.id AND cm.role = 'user' \
+                 ORDER BY cm.ordinal ASC LIMIT 1) AS first_user_message \
+         FROM conversations c WHERE c.user_id = $1 \
+         ORDER BY c.updated_at DESC LIMIT $2",
     )
     .bind(identity.user_id)
     .bind(MAX_CONVERSATIONS)
     .fetch_all(pool)
     .await
     .map_err(|_| ApiError::UpstreamUnavailable)?;
+
+    let conversations: Vec<ConversationSummary> =
+        rows.into_iter().map(ConversationSummary::from).collect();
 
     tracing::info!(
         event = "conversations.list",

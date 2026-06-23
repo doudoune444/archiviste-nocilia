@@ -40,7 +40,7 @@ export function InfoTooltip({ label, content }: InfoTooltipProps) {
         className={styles.trigger}
         aria-label={label}
         aria-describedby={isOpen ? tooltipId : undefined}
-        onClick={() => setIsOpen((open) => !open)}
+        onClick={() => setIsOpen(true)}
         onMouseEnter={() => setIsOpen(true)}
         onMouseLeave={() => setIsOpen(false)}
         onFocus={() => setIsOpen(true)}

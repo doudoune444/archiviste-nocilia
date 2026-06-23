@@ -94,17 +94,17 @@ function ViewLinks() {
     <ul className={styles.navLinks}>
       <li>
         <Link href="/" className={styles.navLink}>
-          Chat
+          Archiviste
         </Link>
       </li>
       <li>
-        <Link href="/board" className={styles.navLink}>
-          Board
+        <Link href="/lacunes" className={styles.navLink}>
+          Lacunes
         </Link>
       </li>
       <li>
-        <Link href="/observability" className={styles.navLink}>
-          Observabilité
+        <Link href="/metriques" className={styles.navLink}>
+          État &amp; métriques
         </Link>
       </li>
     </ul>

@@ -8,7 +8,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("board category filter (BOARD-003)", () => {
   test("board page loads with filter controls visible", async ({ page }) => {
-    await page.goto("/board");
+    await page.goto("/lacunes");
 
     // Filter controls must be present on the board page.
     const categorySelect = page.getByTestId("category-select");
@@ -19,7 +19,7 @@ test.describe("board category filter (BOARD-003)", () => {
   });
 
   test("selecting a sort option reflects in the URL", async ({ page }) => {
-    await page.goto("/board");
+    await page.goto("/lacunes");
 
     const sortSelect = page.getByTestId("sort-select");
     await sortSelect.selectOption("date");
@@ -31,7 +31,7 @@ test.describe("board category filter (BOARD-003)", () => {
   test("sort=priority is the default and does not appear in the URL", async ({
     page,
   }) => {
-    await page.goto("/board");
+    await page.goto("/lacunes");
 
     // Default state: sort=priority is omitted from the URL (clean URL).
     const url = new URL(page.url());
@@ -42,7 +42,7 @@ test.describe("board category filter (BOARD-003)", () => {
     page,
   }) => {
     // Navigate with a pre-set category param.
-    await page.goto("/board?category=lore");
+    await page.goto("/lacunes?category=lore");
 
     // The clear button should be visible because category is active.
     const clearBtn = page.getByTestId("clear-category");

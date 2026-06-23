@@ -15,7 +15,34 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import React from "react";
 import { ChatShell } from "@/components/conversation-history/ChatShell";
+import { SidebarChatProvider } from "@/components/app-sidebar/SidebarChatContext";
+import { SidebarShell } from "@/components/app-sidebar/SidebarShell";
+
+// next/navigation + next/link — needed by SidebarShell in the integration test.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/",
+}));
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+  }: {
+    href: string;
+    children: React.ReactNode;
+  }) => <a href={href}>{children}</a>,
+}));
+
+/** ChatShell registers into the sidebar context (#248); wrap renders in the provider. */
+function renderChatShell(initialConversations: never[] = []) {
+  return render(
+    <SidebarChatProvider>
+      <ChatShell initialConversations={initialConversations} />
+    </SidebarChatProvider>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -122,7 +149,7 @@ describe("ChatShell B1 — thread not wiped on sidebar refresh", () => {
       );
     vi.stubGlobal("fetch", mockFetch);
 
-    render(<ChatShell initialConversations={[]} />);
+    renderChatShell();
 
     // Act: type a question and submit.
     const textarea = screen.getByRole("textbox", { name: /votre question/i });
@@ -157,22 +184,24 @@ describe("ChatShell B1 — thread not wiped on sidebar refresh", () => {
     expect(mockFetch).toHaveBeenNthCalledWith(2, "/api/v1/conversations");
   });
 
-  // AC CHAT-004: clicking "Nouvelle conversation" while a thread is open clears
-  // the view (key changes from selectedId → "new" → ChatForm remounts to empty).
-  it("clears the thread when 'Nouvelle conversation' is clicked", async () => {
-    // Arrange: mount with a pre-loaded conversation selected so loadedMessages
-    // is non-null, then switch back to new.
-    // For this test we simply check the "Nouvelle conversation" button renders
-    // and that clicking it does not crash (full flow requires fetch stub for
-    // the transcript load — covered by the B1 test above).
-    render(<ChatShell initialConversations={[]} />);
+  // AC #248: the sidebar "Nouvelle conversation" button resets the chat thread
+  // on the chat page via the registered onNewConversation handler.
+  it("clears the thread when the sidebar 'Nouvelle conversation' is clicked", async () => {
+    render(
+      <SidebarChatProvider>
+        <SidebarShell identity={{ tier: "anonymous", email: null }} />
+        <ChatShell initialConversations={[]} />
+      </SidebarChatProvider>
+    );
 
     const newBtn = screen.getByTestId("new-conversation-btn");
     expect(newBtn).toBeInTheDocument();
 
-    // Clicking must not throw and the chat form must still be visible.
+    // Clicking must not throw and the chat form must still be visible (empty thread).
     fireEvent.click(newBtn);
 
-    expect(screen.getByRole("textbox", { name: /votre question/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: /votre question/i })
+    ).toBeInTheDocument();
   });
 });

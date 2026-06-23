@@ -1,9 +1,13 @@
 "use client";
 /**
- * ChatShell — client wrapper that composes ConversationHistory sidebar + ChatForm (CHAT-004).
+ * ChatShell — client wrapper that drives the chat thread (CHAT-004, #248).
  *
  * Receives the initial conversation list as a prop (populated server-side by the page RSC)
  * and manages which conversation is currently open in the chat thread.
+ *
+ * #248: the conversation history list and the "Nouvelle conversation" reset are
+ * registered into the global sidebar app-shell via useRegisterChatSidebar; the
+ * main area renders only the chat thread.
  *
  * "Stays cleared on reload" guarantee (AC):
  *   Default state = empty thread (no selectedId, no messages loaded on mount).
@@ -19,7 +23,7 @@
  * A09: transcript content is never logged.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { ConversationHistory } from "./ConversationHistory";
 import { mapTranscriptToMessages } from "./transcript";
 import {
@@ -28,6 +32,7 @@ import {
   type Message,
 } from "./types";
 import { ChatForm } from "@/components/chat/ChatForm";
+import { useRegisterChatSidebar } from "@/components/app-sidebar/SidebarChatContext";
 
 /**
  * Stable empty array reference — passed to ChatForm when no conversation is selected.
@@ -92,34 +97,41 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
     []
   );
 
-  return (
-    <div style={{ display: "flex", minHeight: "100%" }}>
+  // #248: inject the history list + reset handler into the global sidebar.
+  // The history element is memoized so the registration effect only re-fires
+  // when the data it renders actually changes (not on every render).
+  const history = useMemo(
+    () => (
       <ConversationHistory
         conversations={conversations}
         selectedId={selectedId}
         onSelect={handleSelectConversation}
-        onNew={handleNew}
       />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {transcriptError !== null && (
-          <p role="alert" style={{ padding: "1rem", color: "var(--color-error-text)" }}>
-            {transcriptError}
-          </p>
-        )}
-        {/*
-         * key={selectedId ?? "new"} remounts ChatForm on every conversation
-         * switch (including switching back to the empty "Nouvelle conversation"
-         * state). This is intentional — see B1 fix: remounting is the only
-         * safe way to reset stateful children when the identity of the data
-         * they own changes. It avoids the useEffect-reset bug where a sidebar
-         * refresh caused a new array reference to wipe an in-flight thread.
-         */}
-        <ChatForm
-          key={selectedId ?? "new"}
-          initialMessages={loadedMessages ?? EMPTY_MESSAGES}
-          onConversationListChange={handleConversationStarted}
-        />
-      </div>
+    ),
+    [conversations, selectedId, handleSelectConversation]
+  );
+  useRegisterChatSidebar({ history, onNewConversation: handleNew });
+
+  return (
+    <div style={{ minHeight: "100%" }}>
+      {transcriptError !== null && (
+        <p role="alert" style={{ padding: "1rem", color: "var(--color-error-text)" }}>
+          {transcriptError}
+        </p>
+      )}
+      {/*
+       * key={selectedId ?? "new"} remounts ChatForm on every conversation
+       * switch (including switching back to the empty "Nouvelle conversation"
+       * state). This is intentional — see B1 fix: remounting is the only
+       * safe way to reset stateful children when the identity of the data
+       * they own changes. It avoids the useEffect-reset bug where a sidebar
+       * refresh caused a new array reference to wipe an in-flight thread.
+       */}
+      <ChatForm
+        key={selectedId ?? "new"}
+        initialMessages={loadedMessages ?? EMPTY_MESSAGES}
+        onConversationListChange={handleConversationStarted}
+      />
     </div>
   );
 }

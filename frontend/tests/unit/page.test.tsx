@@ -34,11 +34,15 @@ vi.mock(
 );
 
 import HomePage from "@/app/page";
+import { SidebarChatProvider } from "@/components/app-sidebar/SidebarChatContext";
 
 async function renderHome() {
   // HomePage is an async server component; await it before rendering.
+  // ChatShell registers into the sidebar context (#248), so wrap in the provider.
   const element = await HomePage();
-  render(element as React.ReactElement);
+  render(
+    <SidebarChatProvider>{element as React.ReactElement}</SidebarChatProvider>
+  );
 }
 
 describe("HomePage (/) renders the chat surface", () => {

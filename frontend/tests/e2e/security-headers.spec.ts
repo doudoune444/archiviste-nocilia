@@ -55,9 +55,9 @@ test.describe("security headers (PLATFORM-004 AC-3)", () => {
 
     await page.goto("/");
 
-    // Wait for full hydration — check heading is visible (RSC rendered).
+    // Wait for full hydration — check chat heading is visible (RSC rendered).
     await expect(
-      page.getByRole("heading", { name: /Bienvenue aux archives de Nocilia/i })
+      page.getByRole("heading", { name: /Chat — Archives de Nocilia/i })
     ).toBeVisible();
 
     // No CSP violations during navigation and hydration.

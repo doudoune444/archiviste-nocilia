@@ -4,6 +4,13 @@
   const STORAGE_KEY = "archiviste.conversation_id";
   const ERROR_MESSAGE = "L'archive ne répond pas. Réessayez.";
 
+  // #295: when a /v1/chat is in flight past this delay, the worker is likely
+  // cold-starting; show a reassuring message instead of letting the user think
+  // it hung. Cleared as soon as the response arrives (success or error).
+  const WAKE_INDICATOR_DELAY_MS = 3000;
+  const WAKE_INDICATOR_MESSAGE =
+    "Le service se réveille, ça peut prendre jusqu'à ~1 min…";
+
   // AC-8: read persisted conversation id; may be null if not yet set.
   function loadConversationId() {
     try {
@@ -43,6 +50,31 @@
 
     section.appendChild(article);
     article.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  // #295: render the "réveil en cours" indicator. Written via textContent (never
+  // innerHTML) so it stays an inert-text node. Idempotent: a single indicator
+  // node is reused, so an armed timer never stacks duplicate messages.
+  function showWakeIndicator() {
+    const section = document.getElementById("conversation");
+    let indicator = document.getElementById("wake-indicator");
+    if (!indicator) {
+      indicator = document.createElement("article");
+      indicator.id = "wake-indicator";
+      indicator.dataset.role = "wake";
+      section.appendChild(indicator);
+    }
+    indicator.textContent = WAKE_INDICATOR_MESSAGE;
+    indicator.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  // #295: remove the wake indicator so no stale message lingers once the
+  // response (success or error) has arrived.
+  function hideWakeIndicator() {
+    const indicator = document.getElementById("wake-indicator");
+    if (indicator && indicator.parentNode) {
+      indicator.parentNode.removeChild(indicator);
+    }
   }
 
   // CIT-001: render a "Sources" list under a canon answer.
@@ -343,6 +375,11 @@
     appendArticle("user", query, null);
     input.value = "";
 
+    // #295: a single in-flight request. If it outlasts the delay, the worker is
+    // likely cold-starting → show the wake message. Cleared in `finally` so it
+    // never lingers, and the existing button-state cycle is untouched (no resend).
+    const wakeTimer = setTimeout(showWakeIndicator, WAKE_INDICATOR_DELAY_MS);
+
     try {
       const response = await fetch("/v1/chat", {
         method: "POST",
@@ -385,6 +422,10 @@
     } catch (_) {
       // AC-13: network drop, timeout, or other fetch failure.
       appendArticle("error", ERROR_MESSAGE, null);
+    } finally {
+      // #295: clear the armed timer and drop the wake message on every outcome.
+      clearTimeout(wakeTimer);
+      hideWakeIndicator();
     }
 
     // AC-15: re-enable send button after response (success or error).

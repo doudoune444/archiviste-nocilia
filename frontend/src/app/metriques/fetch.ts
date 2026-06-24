@@ -68,6 +68,13 @@ function isValidCostsBody(body: unknown): body is CostsResponse {
   );
 }
 
+/** Extract a string `request_id` from a parsed error body, if present. */
+function requestIdFromBody(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const value = (body as Record<string, unknown>)["request_id"];
+  return typeof value === "string" ? value : null;
+}
+
 export async function fetchCosts(requestId: string): Promise<CostsResult> {
   const req = new Request("http://internal/v1/costs", {
     headers: { "x-request-id": requestId },
@@ -75,10 +82,12 @@ export async function fetchCosts(requestId: string): Promise<CostsResult> {
   try {
     const res = await forward(req, "/v1/costs");
     const rid = res.headers.get("x-request-id") ?? requestId;
-    if (!res.ok) {
-      return { kind: "error", request_id: rid };
-    }
     const body: unknown = await res.json();
+    if (!res.ok) {
+      // The gateway error envelope carries its own diagnosable request_id in
+      // the body (#277); prefer it over the caller fallback.
+      return { kind: "error", request_id: requestIdFromBody(body) ?? rid };
+    }
     if (!isValidCostsBody(body)) {
       return { kind: "error", request_id: rid };
     }

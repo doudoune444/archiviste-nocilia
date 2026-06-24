@@ -91,4 +91,20 @@ describe("fetchCosts", () => {
     const result = await fetchCosts("rid-6");
     expect(result.kind).toBe("error");
   });
+
+  it("surfaces the request_id from the gateway error body (#277)", async () => {
+    // Gateway error envelope carries the request_id in the JSON body; no
+    // x-request-id header is set on the response. The diagnosable id must be
+    // the gateway's, not the caller's fallback.
+    const res = new Response(
+      JSON.stringify({ error: "cost_config_unavailable", request_id: "gw-req-77" }),
+      { status: 503, headers: { "content-type": "application/json" } }
+    );
+    mockForward.mockResolvedValue(res);
+    const result = await fetchCosts("caller-fallback");
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.request_id).toBe("gw-req-77");
+    }
+  });
 });

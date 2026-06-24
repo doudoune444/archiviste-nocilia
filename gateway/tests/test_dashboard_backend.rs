@@ -45,7 +45,7 @@ fn make_config() -> Config {
         gcs_signing_sa_email: "archiviste-runtime@project.iam.gserviceaccount.com".to_string(),
         gcs_bucket: "archiviste-conversations".to_string(),
         cloud_run_service_url: "http://127.0.0.1:1".to_string(),
-        cost_tariffs: archiviste_gateway::config::CostTariffs::default(),
+        cost_tariffs: Some(archiviste_gateway::config::CostTariffs::default()),
     }
 }
 

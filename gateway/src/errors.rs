@@ -22,6 +22,10 @@ pub enum ApiError {
     ConversationNotFound,
     /// DB or signing backend unreachable (Failure modes). → 503.
     UpstreamUnavailable,
+    /// Cost tariff configuration absent — cannot estimate without inventing an
+    /// amount (#277). → 503. Distinct from `UpstreamUnavailable` so the cause is
+    /// diagnosable from the error code alone.
+    CostConfigUnavailable,
 }
 
 /// Wire format of error responses (`{"error":"<code>","request_id":"<uuid>"}`).
@@ -40,6 +44,9 @@ impl IntoResponse for ApiError {
             Self::AuthorRequired => (StatusCode::FORBIDDEN, "author_required"),
             Self::ConversationNotFound => (StatusCode::NOT_FOUND, "conversation_not_found"),
             Self::UpstreamUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "upstream_unavailable"),
+            Self::CostConfigUnavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, "cost_config_unavailable")
+            }
         };
 
         (

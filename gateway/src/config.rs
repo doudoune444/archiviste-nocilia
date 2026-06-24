@@ -53,9 +53,11 @@ pub struct Config {
     /// Public GCP unit prices (EUR) for the cost estimate (#275).
     ///
     /// Loaded at boot from env vars with no hardcoded default fallback
-    /// (security.md — `getenv(KEY, "default")` forbidden). Gateway refuses to
-    /// start if any tariff is absent or unparsable.
-    pub cost_tariffs: CostTariffs,
+    /// (security.md — `getenv(KEY, "default")` forbidden). `None` when the
+    /// tariff configuration is entirely absent: the gateway still boots, but
+    /// `GET /v1/costs` then returns a sanitized error instead of a fabricated
+    /// amount (#277). A partial or malformed tariff set is still a boot error.
+    pub cost_tariffs: Option<CostTariffs>,
 }
 
 /// Public GCP unit prices in EUR for the cost-estimate model (#275).
@@ -88,6 +90,32 @@ impl CostTariffs {
             gcs_storage_per_gb_eur: read_tariff_var("COST_GCS_STORAGE_PER_GB_EUR")?,
             workers_per_request_eur: read_tariff_var("COST_WORKERS_PER_REQUEST_EUR")?,
         })
+    }
+
+    /// Read the tariff set, tolerating a *fully absent* configuration (#277).
+    ///
+    /// - All four tariff env vars absent → `Ok(None)`: the gateway boots and
+    ///   `GET /v1/costs` returns a sanitized error at request time.
+    /// - All four present and valid → `Ok(Some(_))`.
+    /// - Any present (operator intended to configure costs) but the set is
+    ///   incomplete or unparsable → `Err`: that is a misconfiguration, not an
+    ///   absent feature, so the gateway refuses to start.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a partial or malformed tariff set.
+    pub fn from_env_optional() -> Result<Option<Self>> {
+        const VARS: [&str; 4] = [
+            "COST_POSTGRES_INSTANCE_EUR",
+            "COST_POSTGRES_STORAGE_PER_GB_EUR",
+            "COST_GCS_STORAGE_PER_GB_EUR",
+            "COST_WORKERS_PER_REQUEST_EUR",
+        ];
+        let present_count = VARS.iter().filter(|v| std::env::var(v).is_ok()).count();
+        if present_count == 0 {
+            return Ok(None);
+        }
+        Self::from_env().map(Some)
     }
 }
 
@@ -156,7 +184,7 @@ impl Config {
             gcs_bucket: std::env::var("GCS_BUCKET").context("GCS_BUCKET env var required")?,
             cloud_run_service_url: std::env::var("CLOUD_RUN_SERVICE_URL")
                 .context("CLOUD_RUN_SERVICE_URL env var required")?,
-            cost_tariffs: CostTariffs::from_env()?,
+            cost_tariffs: CostTariffs::from_env_optional()?,
         })
     }
 }

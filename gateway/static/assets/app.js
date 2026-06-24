@@ -3,6 +3,11 @@
 
   const STORAGE_KEY = "archiviste.conversation_id";
   const ERROR_MESSAGE = "L'archive ne répond pas. Réessayez.";
+  // #295: a cold worker can take up to ~1 min to wake. Past this delay the chat
+  // POST is still in flight, so show a reassuring notice rather than dead air.
+  const WAKEUP_DELAY_MS = 3000;
+  const WAKEUP_MESSAGE =
+    "Le service se réveille, ça peut prendre jusqu'à ~1 min…";
 
   // AC-8: read persisted conversation id; may be null if not yet set.
   function loadConversationId() {
@@ -43,6 +48,36 @@
 
     section.appendChild(article);
     article.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  // #295: cold-start wakeup notice. `wakeupTimer` holds the pending arm; the
+  // notice itself is a single transient element so teardown is idempotent.
+  let wakeupTimer = null;
+  const WAKEUP_ELEMENT_ID = "wakeup-notice";
+
+  function showWakeupNotice() {
+    if (document.getElementById(WAKEUP_ELEMENT_ID)) {
+      return;
+    }
+    const section = document.getElementById("conversation");
+    const notice = document.createElement("article");
+    notice.id = WAKEUP_ELEMENT_ID;
+    notice.dataset.role = "wakeup";
+    notice.setAttribute("aria-live", "polite");
+    notice.textContent = WAKEUP_MESSAGE;
+    section.appendChild(notice);
+    notice.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  function clearWakeupNotice() {
+    if (wakeupTimer !== null) {
+      clearTimeout(wakeupTimer);
+      wakeupTimer = null;
+    }
+    const notice = document.getElementById(WAKEUP_ELEMENT_ID);
+    if (notice) {
+      notice.remove();
+    }
   }
 
   // CIT-001: render a "Sources" list under a canon answer.
@@ -343,6 +378,9 @@
     appendArticle("user", query, null);
     input.value = "";
 
+    // #295: arm the wakeup notice; teardown in finally clears it on any settle.
+    wakeupTimer = setTimeout(showWakeupNotice, WAKEUP_DELAY_MS);
+
     try {
       const response = await fetch("/v1/chat", {
         method: "POST",
@@ -385,10 +423,12 @@
     } catch (_) {
       // AC-13: network drop, timeout, or other fetch failure.
       appendArticle("error", ERROR_MESSAGE, null);
+    } finally {
+      // #295: remove the wakeup notice/timer on any settle (success or error).
+      clearWakeupNotice();
+      // AC-15: re-enable send button after response (success or error).
+      sendBtn.disabled = false;
     }
-
-    // AC-15: re-enable send button after response (success or error).
-    sendBtn.disabled = false;
   }
 
   // HIST-001: format an ISO timestamp for a history entry label (locale-aware,

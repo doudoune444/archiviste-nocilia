@@ -66,6 +66,12 @@ export interface Message {
 interface ChatFormProps {
   /** Pre-loaded transcript turns to display (empty array = fresh conversation). */
   initialMessages?: Message[];
+  /**
+   * #291: id of a resumed conversation. When set, it is sent in the body of the
+   * very first message so the answer joins the existing thread. Absent for a
+   * fresh conversation — the id is then captured from the first meta SSE chunk.
+   */
+  initialConversationId?: string;
   /** Called after the first assistant answer so the sidebar can refresh its list. */
   onConversationListChange?: (conversations: ConversationSummary[]) => void;
 }
@@ -89,9 +95,17 @@ async function refreshConversations(
 
 export function ChatForm({
   initialMessages = [],
+  initialConversationId,
   onConversationListChange,
 }: ChatFormProps) {
   const [question, setQuestion] = useState("");
+  // #291: single source of truth for the conversation id across all messages.
+  // Seeded from a resumed conversation, or filled from the first meta SSE chunk
+  // of a fresh one. Server-generated only — never minted client-side (IDOR /
+  // "filenames derived from uuid only, never user-controlled").
+  const [currentConversationId, setCurrentConversationId] = useState<
+    string | undefined
+  >(initialConversationId);
   // AC CHAT-004: initialMessages is the useState initializer only.
   // Conversation switches are handled by key-based remount in ChatShell
   // (key={selectedId ?? "new"}), so this component is always freshly
@@ -141,6 +155,11 @@ export function ChatForm({
         return;
       }
 
+      // #291: persist the server-generated id so the next message reuses it.
+      if (capturedConversationId) {
+        setCurrentConversationId(capturedConversationId);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -173,12 +192,17 @@ export function ChatForm({
       setIsStreaming(true);
 
       const controller = new AbortController();
+      // #291: include the conversation id only once known so the worker appends
+      // to the existing thread instead of minting a fresh uuid each message.
+      const requestBody = currentConversationId
+        ? { query, conversation_id: currentConversationId }
+        : { query };
 
       try {
         const response = await fetch(CHAT_STREAM_PATH, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify(requestBody),
           signal: controller.signal,
         });
 
@@ -197,7 +221,7 @@ export function ChatForm({
         setErrorMessage(ERROR_MESSAGE_FRENCH);
       }
     },
-    [isStreaming, consumeStreamIntoThread]
+    [isStreaming, consumeStreamIntoThread, currentConversationId]
   );
 
   const handleSubmit = useCallback(

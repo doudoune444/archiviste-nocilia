@@ -185,6 +185,70 @@ describe("ChatForm keyboard handling (#249)", () => {
   });
 });
 
+describe("ChatForm conversation_id persistence (#291)", () => {
+  it("keeps the conversation_id from the first meta and sends it in the next message body", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()))
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+
+    fireEvent.change(textarea, { target: { value: "Premier" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    // Message #1: no conversation_id known yet → not in the body.
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/chat/stream",
+      expect.objectContaining({ body: JSON.stringify({ query: "Premier" }) })
+    );
+
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+
+    fireEvent.change(textarea, { target: { value: "Deuxième" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    // Message #2: the conversation_id captured from message #1's meta is sent.
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/chat/stream",
+      expect.objectContaining({
+        body: JSON.stringify({ query: "Deuxième", conversation_id: "c1" }),
+      })
+    );
+  });
+
+  it("sends initialConversationId in the very first message body for a resumed conversation", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm initialConversationId="Y" />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+
+    fireEvent.change(textarea, { target: { value: "Reprise" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/chat/stream",
+      expect.objectContaining({
+        body: JSON.stringify({ query: "Reprise", conversation_id: "Y" }),
+      })
+    );
+  });
+});
+
 describe("ChatForm double-submit guard (#249)", () => {
   it("disables the textarea and ignores Enter while a response is streaming", async () => {
     const mockFetch = vi.fn().mockImplementationOnce(() => makePendingResponse());

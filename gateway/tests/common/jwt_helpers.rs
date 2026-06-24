@@ -109,6 +109,7 @@ pub fn make_test_config(workers_url: &str) -> Config {
         version: "0.1.0".to_string(),
         connect_timeout_ms: 500,
         request_timeout_ms: 35_000,
+        chat_request_timeout_ms: 90_000,
         gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
         // SEC-004: no SA private key — signing via IAM signBlob; no field here.
         gcs_bucket: "archiviste-conversations".to_string(),

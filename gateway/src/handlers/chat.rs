@@ -14,7 +14,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
@@ -182,6 +182,14 @@ async fn forward_to_workers(
     let result = state
         .http
         .post(&url)
+        // #294: per-call timeout override on the chat path only. The global client
+        // keeps its 35 s read ceiling; here we widen to `chat_request_timeout_ms`
+        // (default 90 s) because a worker cold start imports transformers (> 30 s at
+        // boot) before generating, and severing at 35 s turns a cold start into a
+        // spurious 504. This exceeds the 30 s external-call cap in `security.md` by
+        // design — the gap is intentional and flagged in the PR, not a silent
+        // workaround. Every other worker route keeps the global ceiling.
+        .timeout(Duration::from_millis(state.config.chat_request_timeout_ms))
         .header("content-type", "application/json")
         .header("x-request-id", request_id) // AC-4: observational header
         // SEC-001 AC-14: identity propagated via headers only (not JSON body).

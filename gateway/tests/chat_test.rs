@@ -26,15 +26,18 @@ fn make_state(workers_url: &str) -> Arc<AppState> {
     make_app_state(workers_url)
 }
 
-/// Build a state with a tight `request_timeout_ms` for AC-8 timeout tests.
+/// Build a state with a tight timeout for AC-8 timeout tests.
 ///
 /// `connect_timeout_ms` is short (50 ms) so that a loopback-connect never
-/// races with the read-side timeout. `request_timeout_ms` (500 ms) is the
-/// timeout the test actually exercises.
+/// races with the read-side timeout. The chat handler applies a per-call
+/// override (#294), so the timeout the chat path actually exercises is
+/// `chat_request_timeout_ms` (500 ms here) — the global `request_timeout_ms`
+/// is irrelevant on `/v1/chat`. Both are set low to keep AC-8 fast.
 fn make_state_with_short_timeout(workers_url: &str) -> Arc<AppState> {
     let mut config = make_test_config(workers_url);
     config.connect_timeout_ms = 50;
     config.request_timeout_ms = 500;
+    config.chat_request_timeout_ms = 500;
     let id_token_provider = Arc::new(IdTokenProvider::new_stub_always_valid().unwrap());
     Arc::new(AppState::new_with_id_token_provider(config, id_token_provider).unwrap())
 }

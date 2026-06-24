@@ -37,6 +37,16 @@ pub struct Config {
     /// Defaults to 35 000 ms. Override via `REQUEST_TIMEOUT_MS` env var.
     /// In tests, set to a low value (e.g. 200) to test AC-8 without waiting 35 s.
     pub request_timeout_ms: u64,
+    /// Per-call read timeout for the worker call in `POST /v1/chat` (milliseconds).
+    ///
+    /// Applied as a `RequestBuilder::timeout` override ONLY on the chat path
+    /// (#294); the global client and every other worker route keep
+    /// `request_timeout_ms`. Defaults to 90 000 ms — a worst-case upper bound on
+    /// a worker cold start (transformers import > 30 s at boot) plus LLM
+    /// generation, so the call is not severed at the 35 s ceiling and turned into
+    /// a spurious 504. Override via `CHAT_REQUEST_TIMEOUT_MS`; in tests set low to
+    /// exercise the chat timeout without waiting 90 s.
+    pub chat_request_timeout_ms: u64,
     /// Service-account email used as `X-Goog-Credential` in V4 signed URLs (AC-21).
     /// Signing is performed via IAM `signBlob` — no SA private key required (SEC-004 AC-1).
     pub gcs_signing_sa_email: String,
@@ -179,6 +189,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(35_000),
+            chat_request_timeout_ms: std::env::var("CHAT_REQUEST_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(90_000),
             gcs_signing_sa_email: std::env::var("GCS_SIGNING_SA_EMAIL")
                 .context("GCS_SIGNING_SA_EMAIL env var required")?,
             gcs_bucket: std::env::var("GCS_BUCKET").context("GCS_BUCKET env var required")?,

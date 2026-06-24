@@ -1,5 +1,6 @@
 //! Google Cloud Storage helpers used by the gateway.
 
+pub mod delete;
 pub mod sign;
 // SEC-005: TokenProvider relocated to `auth_metadata::token`; re-export here
 // to preserve SEC-004 call sites (`gcs::token::TokenProvider`) without churn.

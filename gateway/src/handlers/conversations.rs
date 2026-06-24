@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Extension, Path, State},
+    http::StatusCode,
     Json,
 };
 use chrono::Utc;
@@ -411,4 +412,155 @@ async fn fetch_gcs_uri_for_caller(
 /// Strip `gs://<bucket>/` prefix from a `gcs_uri`, returning the object path within the bucket.
 fn gcs_uri_to_object_path<'a>(gcs_uri: &'a str, bucket: &str) -> Option<&'a str> {
     gcs_uri.strip_prefix(&format!("gs://{bucket}/"))
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /v1/conversations/{id} — owner-only permanent deletion (#283)
+// ---------------------------------------------------------------------------
+
+/// Handler: `DELETE /v1/conversations/{id}` — permanently delete the caller's own conversation.
+///
+/// Owner-only: the SQL `DELETE` filters by `user_id`, so authors get **no** delete
+/// privilege (deliberate divergence from `caller_moderates_all`). A non-owner or a
+/// nonexistent id collapses to 404 (anti-IDOR — never 403, security.md A01).
+///
+/// The Postgres row delete and the GCS transcript delete are atomic: the row is
+/// deleted inside a transaction, the GCS object is deleted, and the transaction
+/// commits only if GCS succeeds — a GCS failure rolls back so the row survives.
+/// A conversation referenced by a ticket (`tickets.conversation_id ON DELETE RESTRICT`)
+/// returns 409 with no conversation content.
+///
+/// # Errors
+/// `ApiError::UpstreamUnavailable` if no DB pool is configured, the DB query fails,
+/// or the GCS delete fails (the row is rolled back in the last case).
+/// `ApiError::ConversationNotFound` if the conversation is not owned by the caller or
+/// does not exist (404 indistinct).
+/// `ApiError::ConversationReferencedByTicket` if a ticket references it (409).
+pub async fn delete_conversation(
+    Extension(identity): Extension<AnonIdentity>,
+    Extension(req_id): Extension<RequestId>,
+    Path(conversation_id): Path<Uuid>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, ApiError> {
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or(ApiError::UpstreamUnavailable)?;
+    let start = std::time::Instant::now();
+
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
+
+    // Owner-scoped lookup: a non-owner or nonexistent id yields `None` → 404 before any
+    // ticket existence is revealed (anti-IDOR — a non-owner never learns a foreign
+    // ticketed conversation exists, security.md A01).
+    let owned = fetch_owned_conversation_for_delete(&mut transaction, conversation_id, &identity)
+        .await?
+        .ok_or(ApiError::ConversationNotFound)?;
+
+    if owned.has_ticket {
+        log_delete_blocked_ticket(&identity, &req_id, conversation_id, start);
+        return Err(ApiError::ConversationReferencedByTicket);
+    }
+
+    delete_conversation_row(&mut transaction, conversation_id).await?;
+
+    let object_path = gcs_uri_to_object_path(&owned.gcs_uri, &state.config.gcs_bucket)
+        .ok_or(ApiError::UpstreamUnavailable)?;
+
+    state
+        .gcs_object_deleter
+        .delete_object(object_path)
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
+
+    log_conversation_deleted(&identity, &req_id, conversation_id, start);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A caller-owned conversation row resolved for the delete path (#283).
+#[derive(Debug, FromRow)]
+struct OwnedConversationForDelete {
+    gcs_uri: String,
+    has_ticket: bool,
+}
+
+/// Fetch the caller-owned conversation's `gcs_uri` and whether a ticket references it.
+///
+/// Owner-scoped via `WHERE user_id = $2` (no author privilege — deliberate divergence
+/// from `caller_moderates_all`). Returns `None` when the conversation is not owned by
+/// the caller or does not exist (404 indistinct, anti-IDOR). The `has_ticket` flag is
+/// computed in the same query so a non-owner never learns the conversation exists.
+async fn fetch_owned_conversation_for_delete(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conversation_id: Uuid,
+    identity: &AnonIdentity,
+) -> Result<Option<OwnedConversationForDelete>, ApiError> {
+    sqlx::query_as(
+        "SELECT c.gcs_uri, \
+                EXISTS(SELECT 1 FROM tickets t WHERE t.conversation_id = c.id) AS has_ticket \
+         FROM conversations c WHERE c.id = $1 AND c.user_id = $2",
+    )
+    .bind(conversation_id)
+    .bind(identity.user_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|_| ApiError::UpstreamUnavailable)
+}
+
+/// Delete the conversation row; `conversation_messages` follow via `ON DELETE CASCADE`.
+///
+/// Ownership and ticket-absence are already verified by `fetch_owned_conversation_for_delete`
+/// inside the same transaction, so this delete is unconditional on those predicates.
+async fn delete_conversation_row(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conversation_id: Uuid,
+) -> Result<(), ApiError> {
+    sqlx::query("DELETE FROM conversations WHERE id = $1")
+        .bind(conversation_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| ApiError::UpstreamUnavailable)?;
+    Ok(())
+}
+
+/// Emit the success audit log — never carries title or content (#283 logging).
+fn log_conversation_deleted(
+    identity: &AnonIdentity,
+    req_id: &RequestId,
+    conversation_id: Uuid,
+    start: std::time::Instant,
+) {
+    tracing::info!(
+        event = "conversation_deleted",
+        request_id = %req_id.0,
+        user_id = %identity.user_id,
+        conversation_id = %conversation_id,
+        status = 204,
+        latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+    );
+}
+
+/// Emit the 409 audit log — never carries title or content (#283 logging).
+fn log_delete_blocked_ticket(
+    identity: &AnonIdentity,
+    req_id: &RequestId,
+    conversation_id: Uuid,
+    start: std::time::Instant,
+) {
+    tracing::info!(
+        event = "conversation_delete_blocked_ticket",
+        request_id = %req_id.0,
+        user_id = %identity.user_id,
+        conversation_id = %conversation_id,
+        status = 409,
+        latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+    );
 }

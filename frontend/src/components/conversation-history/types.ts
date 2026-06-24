@@ -16,6 +16,11 @@ export interface ConversationSummary {
   message_count: number;
   /** Readable label derived by the gateway from the first user message (#250). */
   title: string;
+  /**
+   * True when a signalement (ticket) references this conversation. The sidebar uses
+   * it to proactively disable the delete icon — deletion is blocked while flagged (#284).
+   */
+  has_ticket: boolean;
 }
 
 /** One message turn as returned by GET /v1/conversations/{id}/messages. */
@@ -41,7 +46,18 @@ export function isConversationList(
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   if (!Array.isArray(obj["conversations"])) return false;
-  return true;
+  return obj["conversations"].every(isConversationSummary);
+}
+
+/** Runtime shape guard for a single summary — only the fields callers depend on. */
+function isConversationSummary(value: unknown): value is ConversationSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj["id"] === "string" &&
+    typeof obj["title"] === "string" &&
+    typeof obj["has_ticket"] === "boolean"
+  );
 }
 
 /** Type guard: does an unknown value look like a ConversationMessagesResponse? */

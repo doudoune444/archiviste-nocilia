@@ -151,6 +151,16 @@ fn ts(secs_ago: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() - chrono::Duration::seconds(secs_ago)
 }
 
+/// Insert an open ticket (signalement) referencing `conv_id` so the conversation is
+/// blocked from deletion (#284 — `has_ticket` surfaced on the list).
+async fn seed_ticket(pool: &sqlx::PgPool, conv_id: Uuid) {
+    sqlx::query("INSERT INTO tickets (conversation_id, question) VALUES ($1, 'signalement')")
+        .bind(conv_id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // AC: a caller lists only their own conversations
 // ---------------------------------------------------------------------------
@@ -192,6 +202,40 @@ async fn hist001_list_empty_for_new_caller(pool: sqlx::PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
     assert_eq!(body["conversations"].as_array().unwrap().len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// #284 — has_ticket on each ConversationSummary (proactive delete-disable)
+// ---------------------------------------------------------------------------
+
+/// A conversation with a ticket reports `has_ticket: true`; one without reports
+/// `false` — both within the same owner-scoped, paginated list query.
+#[sqlx::test(migrations = "../migrations")]
+async fn hist284_has_ticket_reflects_signalement(pool: sqlx::PgPool) {
+    let (caller_id, token) = seed_user_with_session(&pool, UserTier::Member).await;
+
+    let flagged = seed_conversation(&pool, caller_id, 2, ts(10)).await;
+    let clean = seed_conversation(&pool, caller_id, 2, ts(120)).await;
+    seed_ticket(&pool, flagged).await;
+
+    let app = router(make_state_with_pool(pool));
+    let resp = get_with_token(app, "/v1/conversations", Some(&token)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["conversations"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    // ORDER BY updated_at DESC → flagged (newer) first, clean (older) second.
+    assert_eq!(items[0]["id"], flagged.to_string());
+    assert_eq!(
+        items[0]["has_ticket"], true,
+        "conversation with a ticket must report has_ticket: true"
+    );
+    assert_eq!(items[1]["id"], clean.to_string());
+    assert_eq!(
+        items[1]["has_ticket"], false,
+        "conversation without a ticket must report has_ticket: false"
+    );
 }
 
 // ---------------------------------------------------------------------------

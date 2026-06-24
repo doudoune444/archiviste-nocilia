@@ -2,7 +2,9 @@
 .page {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* #273: flex into the full height provided by ChatShell .shell instead of
+     height:100% (which collapsed against a non-definite parent height). */
+  flex: 1;
   min-height: 0;
   width: 100%;
 }

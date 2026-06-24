@@ -133,12 +133,12 @@ fn make_db_config() -> archiviste_gateway::config::Config {
         gcs_signing_sa_email: "test-sa@project.iam.gserviceaccount.com".to_string(),
         gcs_bucket: "archiviste-conversations".to_string(),
         cloud_run_service_url: "http://127.0.0.1:1".to_string(),
-        cost_tariffs: CostTariffs {
+        cost_tariffs: Some(CostTariffs {
             postgres_instance_eur: 8.00,
             postgres_storage_per_gb_eur: 0.20,
             gcs_storage_per_gb_eur: 0.02,
             workers_per_request_eur: 0.0001,
-        },
+        }),
     }
 }
 
@@ -287,4 +287,33 @@ async fn costs_db_unavailable_returns_503() {
     let json = body_json(resp).await;
     assert_eq!(json["error"], "upstream_unavailable");
     assert!(json["request_id"].is_string());
+}
+
+/// #277 AC: tariff config absent → sanitized error envelope with a `request_id`,
+/// never a 0 or fabricated amount, and no internal detail (no host / SQL).
+#[tokio::test]
+async fn costs_config_absent_returns_sanitized_error() {
+    use common::jwt_helpers::make_app_state_without_tariffs;
+    let state = make_app_state_without_tariffs("http://127.0.0.1:1");
+    let app = router(state);
+    let resp = get_anon(app, "/v1/costs").await;
+
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let json = body_json(resp).await;
+    // Carries a request_id and a stable error code — no fabricated figures.
+    assert!(json["request_id"].is_string());
+    assert_eq!(json["error"], "cost_config_unavailable");
+    assert!(
+        json.get("total_eur").is_none(),
+        "must not fabricate a total"
+    );
+    assert!(
+        json.get("services").is_none(),
+        "must not fabricate services"
+    );
+
+    // No internal detail leaked: exactly the two-field error envelope.
+    let obj = json.as_object().expect("error body is an object");
+    assert_eq!(obj.len(), 2, "envelope is exactly {{error, request_id}}");
 }

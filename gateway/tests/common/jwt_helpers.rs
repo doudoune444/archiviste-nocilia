@@ -115,7 +115,7 @@ pub fn make_test_config(workers_url: &str) -> Config {
         // #253: unreachable by default → workers Cloud Run probe → down in tests
         // that do not inject a mock. Tests that exercise the probe override this.
         cloud_run_service_url: "http://127.0.0.1:1".to_string(),
-        cost_tariffs: archiviste_gateway::config::CostTariffs::default(),
+        cost_tariffs: Some(archiviste_gateway::config::CostTariffs::default()),
     }
 }
 
@@ -133,6 +133,27 @@ pub fn make_test_config(workers_url: &str) -> Config {
 #[allow(clippy::expect_used)]
 pub fn make_app_state(workers_url: &str) -> std::sync::Arc<archiviste_gateway::state::AppState> {
     let config = make_test_config(workers_url);
+    let id_token_provider = std::sync::Arc::new(
+        archiviste_gateway::auth_metadata::IdTokenProvider::new_stub_always_valid()
+            .expect("stub IdTokenProvider construction must not fail"),
+    );
+    std::sync::Arc::new(
+        archiviste_gateway::state::AppState::new_with_id_token_provider(config, id_token_provider)
+            .expect("AppState construction must not fail in tests"),
+    )
+}
+
+/// Build an `AppState` whose cost tariff configuration is absent (#277).
+///
+/// Mirrors `make_app_state` but sets `cost_tariffs: None`, so `GET /v1/costs`
+/// exercises the config-absent path. The tariff check runs before the DB check,
+/// so the absent state (no pool) is sufficient.
+#[allow(clippy::expect_used)]
+pub fn make_app_state_without_tariffs(
+    workers_url: &str,
+) -> std::sync::Arc<archiviste_gateway::state::AppState> {
+    let mut config = make_test_config(workers_url);
+    config.cost_tariffs = None;
     let id_token_provider = std::sync::Arc::new(
         archiviste_gateway::auth_metadata::IdTokenProvider::new_stub_always_valid()
             .expect("stub IdTokenProvider construction must not fail"),

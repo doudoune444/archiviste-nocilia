@@ -132,14 +132,25 @@ struct VolumesRow {
 ///
 /// # Errors
 ///
-/// Returns `ApiError::UpstreamUnavailable` (→ 503) when the DB pool is absent
-/// or the volumes query fails. Tariffs are validated at boot (`CostTariffs`).
+/// - `ApiError::CostConfigUnavailable` (→ 503) when the tariff configuration is
+///   absent: no estimate without inventing an amount (#277).
+/// - `ApiError::UpstreamUnavailable` (→ 503) when the DB pool is absent or the
+///   volumes query fails.
+///
+/// The tariff check runs first so the config-absent case never depends on the
+/// DB being reachable.
 pub async fn costs(
     Extension(req_id): Extension<RequestId>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
     let request_id = &req_id.0;
     let start = Instant::now();
+
+    let tariffs = state
+        .config
+        .cost_tariffs
+        .as_ref()
+        .ok_or(ApiError::CostConfigUnavailable)?;
 
     let pool = state
         .db_pool
@@ -163,7 +174,7 @@ pub async fn costs(
         conversation_bytes_stored: row.conversation_bytes_stored,
         request_count_30d: row.request_count_30d,
     };
-    let estimate = estimate_costs(&state.config.cost_tariffs, &volumes);
+    let estimate = estimate_costs(tariffs, &volumes);
 
     let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     tracing::info!(

@@ -50,6 +50,74 @@ pub struct Config {
     /// the `Ready` condition of the latest revision — an out-of-band signal that
     /// does NOT wake the scale-to-zero service.  Injectable for testing.
     pub cloud_run_service_url: String,
+    /// Public GCP unit prices (EUR) for the cost estimate (#275).
+    ///
+    /// Loaded at boot from env vars with no hardcoded default fallback
+    /// (security.md — `getenv(KEY, "default")` forbidden). Gateway refuses to
+    /// start if any tariff is absent or unparsable.
+    pub cost_tariffs: CostTariffs,
+}
+
+/// Public GCP unit prices in EUR for the cost-estimate model (#275).
+///
+/// Faithful to the model: fixed Postgres instance price, Cloud SQL storage
+/// price per GB, GCS storage price per GB, and flat cost per workers request.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct CostTariffs {
+    /// Fixed monthly Cloud SQL instance price (`prix_instance_fixe`).
+    pub postgres_instance_eur: f64,
+    /// Cloud SQL storage price per GB-month (`prix_stockage_Go`).
+    pub postgres_storage_per_gb_eur: f64,
+    /// GCS storage price per GB-month (`prix_stockage_Go`).
+    pub gcs_storage_per_gb_eur: f64,
+    /// Flat cost per workers request (`coût_par_requête`).
+    pub workers_per_request_eur: f64,
+}
+
+impl CostTariffs {
+    /// Read every tariff from its env var as a finite non-negative `f64`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any tariff env var is missing or unparsable. There is
+    /// no default fallback (security.md).
+    pub fn from_env() -> Result<Self> {
+        Ok(Self {
+            postgres_instance_eur: read_tariff_var("COST_POSTGRES_INSTANCE_EUR")?,
+            postgres_storage_per_gb_eur: read_tariff_var("COST_POSTGRES_STORAGE_PER_GB_EUR")?,
+            gcs_storage_per_gb_eur: read_tariff_var("COST_GCS_STORAGE_PER_GB_EUR")?,
+            workers_per_request_eur: read_tariff_var("COST_WORKERS_PER_REQUEST_EUR")?,
+        })
+    }
+}
+
+/// Zero-valued tariffs for tests that do not exercise the cost endpoint.
+///
+/// Only available under the `test-utils` feature — production always loads
+/// real tariffs via [`CostTariffs::from_env`] (no default fallback, security.md).
+#[cfg(feature = "test-utils")]
+impl Default for CostTariffs {
+    fn default() -> Self {
+        Self {
+            postgres_instance_eur: 0.0,
+            postgres_storage_per_gb_eur: 0.0,
+            gcs_storage_per_gb_eur: 0.0,
+            workers_per_request_eur: 0.0,
+        }
+    }
+}
+
+/// Parse one tariff env var as a finite, non-negative `f64`.
+fn read_tariff_var(name: &str) -> Result<f64> {
+    let raw = std::env::var(name).with_context(|| format!("{name} env var required"))?;
+    let value: f64 = raw
+        .parse()
+        .with_context(|| format!("{name} must be a number, got: {raw}"))?;
+    if value.is_finite() && value >= 0.0 {
+        Ok(value)
+    } else {
+        anyhow::bail!("{name} must be a finite non-negative number, got: {raw}")
+    }
 }
 
 impl Config {
@@ -88,6 +156,7 @@ impl Config {
             gcs_bucket: std::env::var("GCS_BUCKET").context("GCS_BUCKET env var required")?,
             cloud_run_service_url: std::env::var("CLOUD_RUN_SERVICE_URL")
                 .context("CLOUD_RUN_SERVICE_URL env var required")?,
+            cost_tariffs: CostTariffs::from_env()?,
         })
     }
 }

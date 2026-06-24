@@ -11,7 +11,13 @@
  * not prevent the other signal from rendering (AC5).
  */
 import { forward } from "@/lib/bff-proxy";
-import type { StatsResult, QualityResult, QualityMetrics } from "@/lib/observability-types";
+import type {
+  StatsResult,
+  QualityResult,
+  QualityMetrics,
+  CostsResult,
+  CostsResponse,
+} from "@/lib/observability-types";
 
 /** Returns true when body carries a finite conversation_count. */
 function isValidStatsBody(body: unknown): body is { conversation_count: number } {
@@ -40,6 +46,46 @@ function isValidQualityMetrics(body: unknown): body is QualityMetrics {
     typeof b["golden_set_version"] === "string" &&
     typeof b["finished_at"] === "string";
   return allScoresFinite && hasStrings;
+}
+
+/** Returns true when value is a finite number. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** Returns true when body carries finite total + three finite service amounts. */
+function isValidCostsBody(body: unknown): body is CostsResponse {
+  if (typeof body !== "object" || body === null) return false;
+  const b = body as Record<string, unknown>;
+  if (!isFiniteNumber(b["total_eur"])) return false;
+  const services = b["services"];
+  if (typeof services !== "object" || services === null) return false;
+  const s = services as Record<string, unknown>;
+  return (
+    isFiniteNumber(s["postgres"]) &&
+    isFiniteNumber(s["gcs"]) &&
+    isFiniteNumber(s["workers"])
+  );
+}
+
+export async function fetchCosts(requestId: string): Promise<CostsResult> {
+  const req = new Request("http://internal/v1/costs", {
+    headers: { "x-request-id": requestId },
+  });
+  try {
+    const res = await forward(req, "/v1/costs");
+    const rid = res.headers.get("x-request-id") ?? requestId;
+    if (!res.ok) {
+      return { kind: "error", request_id: rid };
+    }
+    const body: unknown = await res.json();
+    if (!isValidCostsBody(body)) {
+      return { kind: "error", request_id: rid };
+    }
+    return { kind: "ok", ...body };
+  } catch {
+    return { kind: "error", request_id: requestId };
+  }
 }
 
 export async function fetchStats(requestId: string): Promise<StatsResult> {

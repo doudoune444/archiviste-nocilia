@@ -533,6 +533,7 @@ fn build_api_router() -> Router<Arc<AppState>> {
     let public_api = Router::new()
         .route("/v1/me", get(routes::me::me))
         .route("/v1/stats", get(handlers::stats::stats))
+        .route("/v1/costs", get(handlers::costs::costs))
         .route("/v1/status", get(handlers::status::status))
         .route("/v1/quality", get(handlers::quality::quality))
         .route("/v1/board", get(handlers::board::list_board))

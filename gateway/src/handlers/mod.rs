@@ -8,6 +8,7 @@ pub mod board;
 pub mod chat;
 pub mod chat_stream;
 pub mod conversations;
+pub mod costs;
 pub mod dashboard;
 pub mod health;
 pub mod quality;

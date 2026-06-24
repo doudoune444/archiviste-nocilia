@@ -38,6 +38,23 @@ export function isQualityNoData(r: QualityResponse): r is QualityNoData {
   return (r as QualityNoData).status === "no_data";
 }
 
+/** Per-service amounts in the GET /v1/costs payload (#275). */
+export interface CostServices {
+  postgres: number;
+  gcs: number;
+  workers: number;
+}
+
+/** Raw payload from GET /v1/costs (#275) — the estimated-cost contract. */
+export interface CostsResponse {
+  currency: string;
+  period: string;
+  estimated: boolean;
+  total_eur: number;
+  services: CostServices;
+  computed_at: string;
+}
+
 // --- Result wrappers used by presentational components ---
 // Each card receives one of these; the error shape carries a request id for
 // display (never leaks gateway internals).
@@ -49,4 +66,8 @@ export type StatsResult =
 export type QualityResult =
   | ({ kind: "ok" } & QualityMetrics)
   | { kind: "no_data" }
+  | { kind: "error"; request_id: string };
+
+export type CostsResult =
+  | ({ kind: "ok" } & CostsResponse)
   | { kind: "error"; request_id: string };

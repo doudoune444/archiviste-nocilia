@@ -8,9 +8,10 @@
  * exports from page files); this module only declares the page component.
  */
 import { headers } from "next/headers";
-import { fetchStats, fetchQuality } from "./fetch";
+import { fetchStats, fetchQuality, fetchCosts } from "./fetch";
 import { StatsCard } from "@/components/stats-card/StatsCard";
 import { RagasGauges } from "@/components/ragas-gauges/RagasGauges";
+import { CostsCard } from "@/components/costs-card/CostsCard";
 import { DepHealth } from "@/components/dep-health/DepHealth";
 import styles from "./page.module.css";
 
@@ -18,9 +19,10 @@ export default async function ObservabilityPage() {
   const incomingHeaders = await headers();
   const requestId = incomingHeaders.get("x-request-id") ?? crypto.randomUUID();
 
-  const [stats, quality] = await Promise.all([
+  const [stats, quality, costs] = await Promise.all([
     fetchStats(requestId),
     fetchQuality(requestId),
+    fetchCosts(requestId),
   ]);
 
   return (
@@ -29,6 +31,7 @@ export default async function ObservabilityPage() {
       <div className={styles.grid}>
         <StatsCard stats={stats} />
         <RagasGauges quality={quality} />
+        <CostsCard costs={costs} />
         <DepHealth />
       </div>
     </section>

@@ -128,6 +128,28 @@ resource "google_cloud_run_v2_service" "gateway" {
         name  = "GCS_SIGNING_SA_EMAIL"
         value = google_service_account.archiviste_runtime.email
       }
+
+      # #275: public GCP unit prices (EUR) for GET /v1/costs. Not secrets.
+      # Gateway has no hardcoded default fallback — required at boot.
+      env {
+        name  = "COST_POSTGRES_INSTANCE_EUR"
+        value = var.cost_postgres_instance_eur
+      }
+
+      env {
+        name  = "COST_POSTGRES_STORAGE_PER_GB_EUR"
+        value = var.cost_postgres_storage_per_gb_eur
+      }
+
+      env {
+        name  = "COST_GCS_STORAGE_PER_GB_EUR"
+        value = var.cost_gcs_storage_per_gb_eur
+      }
+
+      env {
+        name  = "COST_WORKERS_PER_REQUEST_EUR"
+        value = var.cost_workers_per_request_eur
+      }
     }
   }
 }

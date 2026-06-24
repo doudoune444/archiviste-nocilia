@@ -131,6 +131,7 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
       <ChatForm
         key={selectedId ?? "new"}
         initialMessages={loadedMessages ?? EMPTY_MESSAGES}
+        initialConversationId={selectedId ?? undefined}
         onConversationListChange={handleConversationStarted}
       />
     </div>

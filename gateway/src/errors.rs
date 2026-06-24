@@ -20,6 +20,9 @@ pub enum ApiError {
     AuthorRequired,
     /// Conversation UUID not found in DB (AC-10 sub-case a). → 404.
     ConversationNotFound,
+    /// Conversation cannot be deleted because a ticket references it (#283). → 409.
+    /// Carries no conversation content — only the error code + `request_id` envelope.
+    ConversationReferencedByTicket,
     /// DB or signing backend unreachable (Failure modes). → 503.
     UpstreamUnavailable,
     /// Cost tariff configuration absent — cannot estimate without inventing an
@@ -43,6 +46,9 @@ impl IntoResponse for ApiError {
             Self::InvalidRequest => (StatusCode::BAD_REQUEST, "invalid_request"),
             Self::AuthorRequired => (StatusCode::FORBIDDEN, "author_required"),
             Self::ConversationNotFound => (StatusCode::NOT_FOUND, "conversation_not_found"),
+            Self::ConversationReferencedByTicket => {
+                (StatusCode::CONFLICT, "conversation_referenced_by_ticket")
+            }
             Self::UpstreamUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "upstream_unavailable"),
             Self::CostConfigUnavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, "cost_config_unavailable")

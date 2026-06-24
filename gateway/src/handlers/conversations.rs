@@ -78,6 +78,7 @@ struct ConversationSummaryRow {
     updated_at: chrono::DateTime<Utc>,
     message_count: i32,
     first_user_message: Option<String>,
+    has_ticket: bool,
 }
 
 /// One conversation summary as serialized into the list response.
@@ -90,6 +91,9 @@ struct ConversationSummary {
     /// Readable label derived at read time from the first user message, truncated
     /// on a UTF-8 boundary with a `…` suffix beyond `MAX_TITLE_CHARS` (#250).
     title: String,
+    /// `true` when a signalement (ticket) references this conversation, so the UI can
+    /// proactively disable the delete action — deletion is blocked while flagged (#284).
+    has_ticket: bool,
 }
 
 impl From<ConversationSummaryRow> for ConversationSummary {
@@ -105,6 +109,7 @@ impl From<ConversationSummaryRow> for ConversationSummary {
             updated_at: row.updated_at,
             message_count: row.message_count,
             title,
+            has_ticket: row.has_ticket,
         }
     }
 }
@@ -150,7 +155,8 @@ pub async fn list_conversations(
         "SELECT c.id, c.created_at, c.updated_at, c.message_count, \
                 (SELECT cm.content FROM conversation_messages cm \
                  WHERE cm.conversation_id = c.id AND cm.role = 'user' \
-                 ORDER BY cm.ordinal ASC LIMIT 1) AS first_user_message \
+                 ORDER BY cm.ordinal ASC LIMIT 1) AS first_user_message, \
+                EXISTS (SELECT 1 FROM tickets t WHERE t.conversation_id = c.id) AS has_ticket \
          FROM conversations c WHERE c.user_id = $1 \
          ORDER BY c.updated_at DESC LIMIT $2",
     )

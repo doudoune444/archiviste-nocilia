@@ -25,6 +25,7 @@ function makeConversation(
     updated_at: "2026-01-02T10:30:00Z",
     message_count: 4,
     title: "Quelle est la capitale ?",
+    has_ticket: false,
     ...overrides,
   };
 }

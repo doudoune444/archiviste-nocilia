@@ -565,7 +565,27 @@
     }
   }
 
+  // #296: fire-and-forget worker pre-warm on the first focus of the query input.
+  // Triggered on focus (not page load — waking every visitor would be needless
+  // cost) and guarded by a session flag so it runs at most once per session: the
+  // worker boots while the visitor types, masking the cold start.
+  let prewarmTriggered = false;
+
+  function prewarmWorker() {
+    if (prewarmTriggered) {
+      return;
+    }
+    prewarmTriggered = true;
+    // Fire-and-forget: a rejected fetch (offline, etc.) must not surface to the
+    // visitor — the pre-warm is best-effort, the chat POST stays the source of
+    // truth for errors.
+    fetch("/v1/wake").catch(function () {});
+  }
+
   document.getElementById("chat-form").addEventListener("submit", handleSubmit);
+  document
+    .getElementById("query-input")
+    .addEventListener("focus", prewarmWorker);
   document
     .getElementById("new-conversation-btn")
     .addEventListener("click", handleNewConversation);

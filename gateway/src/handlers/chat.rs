@@ -33,6 +33,20 @@ use crate::{
 /// Maximum query length in bytes (AC-5).
 const MAX_QUERY_BYTES: usize = 4_096;
 
+/// Per-call timeout override for the workers `/v1/generate` call (#294).
+///
+/// WHY: the workers tier scales to zero on Cloud Run. A cold start imports
+/// `transformers` (observed > 30 s) before any generation, so the global 35 s
+/// HTTP client timeout severs legitimate cold-start requests with a spurious 504.
+/// This override absorbs the worst observed case (cold-start import + LLM
+/// generation). It is applied per-call on the chat `RequestBuilder` only — the
+/// global client timeout and every other worker route keep their 35 s cap.
+///
+/// This 90 s value intentionally exceeds the 30 s external-call cap in
+/// `security.md`; the deviation is justified by the cold-start cost above and is
+/// scoped to this single call. Refine downward once real cold-start metrics allow.
+const CHAT_WORKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -182,6 +196,9 @@ async fn forward_to_workers(
     let result = state
         .http
         .post(&url)
+        // #294: per-call override of the global 35 s client timeout to absorb a
+        // workers cold start (transformers import) followed by LLM generation.
+        .timeout(CHAT_WORKER_TIMEOUT)
         .header("content-type", "application/json")
         .header("x-request-id", request_id) // AC-4: observational header
         // SEC-001 AC-14: identity propagated via headers only (not JSON body).

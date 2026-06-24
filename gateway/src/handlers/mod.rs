@@ -16,6 +16,7 @@ pub mod report_contradiction;
 pub mod stats;
 pub mod status;
 pub mod tickets;
+pub mod wake;
 pub mod workers_proxy;
 
 use axum::{

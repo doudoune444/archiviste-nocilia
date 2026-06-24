@@ -535,6 +535,7 @@ fn build_api_router() -> Router<Arc<AppState>> {
         .route("/v1/stats", get(handlers::stats::stats))
         .route("/v1/costs", get(handlers::costs::costs))
         .route("/v1/status", get(handlers::status::status))
+        .route("/v1/wake", get(handlers::wake::wake))
         .route("/v1/quality", get(handlers::quality::quality))
         .route("/v1/board", get(handlers::board::list_board))
         .route("/board", get(handlers::board::serve_board));

@@ -115,6 +115,7 @@ pub fn make_test_config(workers_url: &str) -> Config {
         // #253: unreachable by default → workers Cloud Run probe → down in tests
         // that do not inject a mock. Tests that exercise the probe override this.
         cloud_run_service_url: "http://127.0.0.1:1".to_string(),
+        cost_tariffs: archiviste_gateway::config::CostTariffs::default(),
     }
 }
 

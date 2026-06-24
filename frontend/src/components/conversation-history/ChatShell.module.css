@@ -12,3 +12,9 @@
   padding: 1rem;
   color: var(--color-error-text);
 }
+
+/* #287: inline error when a delete fails (409 or generic). */
+.deleteError {
+  padding: 1rem;
+  color: var(--color-error-text);
+}

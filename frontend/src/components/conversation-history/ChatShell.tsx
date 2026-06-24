@@ -27,11 +27,13 @@ import { useState, useCallback, useMemo } from "react";
 import { ConversationHistory } from "./ConversationHistory";
 import { mapTranscriptToMessages } from "./transcript";
 import {
+  isConversationList,
   isConversationMessages,
   type ConversationSummary,
   type Message,
 } from "./types";
 import { ChatForm } from "@/components/chat/ChatForm";
+import { ConfirmDialog } from "@/components/confirm-dialog/ConfirmDialog";
 import { useRegisterChatSidebar } from "@/components/app-sidebar/SidebarChatContext";
 import styles from "./ChatShell.module.css";
 
@@ -49,6 +51,42 @@ const EMPTY_MESSAGES: Message[] = [];
 const TRANSCRIPT_LOAD_ERROR =
   "Impossible de charger la conversation. Veuillez réessayer.";
 
+const CONVERSATIONS_PATH = "/api/v1/conversations";
+const DELETE_DIALOG_TITLE = "Supprimer cette conversation ?";
+const DELETE_DANGER_LABEL = "Supprimer";
+const DELETE_CONFLICT_MESSAGE =
+  "Suppression impossible : un signalement est en cours sur cette conversation.";
+const DELETE_GENERIC_ERROR =
+  "La suppression a échoué. Veuillez réessayer.";
+
+const HTTP_CONFLICT = 409;
+
+/** Body of the delete confirmation modal, naming the target conversation. */
+function deleteDialogMessage(title: string): string {
+  return `Cette action est définitive. L'historique de la conversation "${title}" sera supprimé et ne pourra pas être récupéré.`;
+}
+
+/**
+ * Re-fetches the owner's conversation list and reconciles local state.
+ * #287: the deleted row disappears only here — after the server confirmed the
+ * DELETE — so a conversation can never "resurrect" via optimistic removal.
+ * Best-effort: a failed refresh leaves the list untouched (no throw).
+ */
+async function reconcileConversations(
+  setConversations: (conversations: ConversationSummary[]) => void
+): Promise<void> {
+  try {
+    const response = await fetch(CONVERSATIONS_PATH);
+    if (!response.ok) return;
+    const body: unknown = await response.json();
+    if (isConversationList(body)) {
+      setConversations(body.conversations);
+    }
+  } catch {
+    // A09: never log. Reconcile is best-effort.
+  }
+}
+
 interface ChatShellProps {
   initialConversations: ConversationSummary[];
 }
@@ -60,6 +98,10 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedMessages, setLoadedMessages] = useState<Message[] | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  // #287: id pending confirmation (modal open) and id whose DELETE is in flight.
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleSelectConversation = useCallback(async (id: string) => {
     setTranscriptError(null);
@@ -98,6 +140,56 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
     []
   );
 
+  // #287: trash click → open the confirmation modal naming the conversation.
+  const handleRequestDelete = useCallback((id: string) => {
+    setDeleteError(null);
+    setPendingDeleteId(id);
+  }, []);
+
+  const handleCancelDelete = useCallback(() => {
+    setPendingDeleteId(null);
+  }, []);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (pendingDeleteId === null) return;
+    const id = pendingDeleteId;
+    setPendingDeleteId(null);
+    setDeleteError(null);
+    setDeletingId(id);
+    try {
+      const response = await fetch(`${CONVERSATIONS_PATH}/${id}`, {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        await reconcileConversations(setConversations);
+        // AC: deleting the open conversation returns to "Nouvelle conversation";
+        // deleting any other conversation leaves the open thread untouched.
+        if (selectedId === id) {
+          setSelectedId(null);
+          setLoadedMessages(null);
+          setTranscriptError(null);
+        }
+        return;
+      }
+      // AC: never optimistic — the item stays; surface why deletion failed.
+      setDeleteError(
+        response.status === HTTP_CONFLICT
+          ? DELETE_CONFLICT_MESSAGE
+          : DELETE_GENERIC_ERROR
+      );
+    } catch {
+      // A09: never log response content.
+      setDeleteError(DELETE_GENERIC_ERROR);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [pendingDeleteId, selectedId]);
+
+  const pendingConversation = useMemo(
+    () => conversations.find((conv) => conv.id === pendingDeleteId) ?? null,
+    [conversations, pendingDeleteId]
+  );
+
   // #248: inject the history list + reset handler into the global sidebar.
   // The history element is memoized so the registration effect only re-fires
   // when the data it renders actually changes (not on every render).
@@ -107,9 +199,17 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
         conversations={conversations}
         selectedId={selectedId}
         onSelect={handleSelectConversation}
+        onRequestDelete={handleRequestDelete}
+        deletingId={deletingId}
       />
     ),
-    [conversations, selectedId, handleSelectConversation]
+    [
+      conversations,
+      selectedId,
+      handleSelectConversation,
+      handleRequestDelete,
+      deletingId,
+    ]
   );
   useRegisterChatSidebar({ history, onNewConversation: handleNew });
 
@@ -119,6 +219,20 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
         <p role="alert" className={styles.transcriptError}>
           {transcriptError}
         </p>
+      )}
+      {deleteError !== null && (
+        <p role="alert" className={styles.deleteError}>
+          {deleteError}
+        </p>
+      )}
+      {pendingConversation !== null && (
+        <ConfirmDialog
+          title={DELETE_DIALOG_TITLE}
+          message={deleteDialogMessage(pendingConversation.title)}
+          dangerLabel={DELETE_DANGER_LABEL}
+          onConfirm={handleConfirmDelete}
+          onCancel={handleCancelDelete}
+        />
       )}
       {/*
        * key={selectedId ?? "new"} remounts ChatForm on every conversation

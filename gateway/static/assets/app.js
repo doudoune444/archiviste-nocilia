@@ -525,7 +525,24 @@
     }
   }
 
+  // #296: pre-wake the scale-to-zero worker the moment the user is about to type.
+  // On the first focus of the query field we fire a fire-and-forget GET /v1/wake so
+  // the worker cold-starts while the user phrases the question. A session flag keeps
+  // it to a single call (no repeat per focus, no wake on page load) to keep idle cost
+  // near zero. Failures are ignored: this is a best-effort warm-up, not a request.
+  let hasPrewarmed = false;
+  function prewarmWorker() {
+    if (hasPrewarmed) {
+      return;
+    }
+    hasPrewarmed = true;
+    fetch("/v1/wake").catch(function () {});
+  }
+
   document.getElementById("chat-form").addEventListener("submit", handleSubmit);
+  document
+    .getElementById("query-input")
+    .addEventListener("focus", prewarmWorker);
   document
     .getElementById("new-conversation-btn")
     .addEventListener("click", handleNewConversation);

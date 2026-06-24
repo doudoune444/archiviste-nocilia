@@ -550,6 +550,10 @@ fn build_api_router() -> Router<Arc<AppState>> {
             get(handlers::conversations::list_conversations),
         )
         .route(
+            "/v1/conversations/{id}",
+            axum::routing::delete(handlers::conversations::delete_conversation),
+        )
+        .route(
             "/v1/conversations/{id}/messages",
             get(handlers::conversations::conversation_messages),
         )

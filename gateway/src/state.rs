@@ -13,6 +13,7 @@ use crate::{
     },
     auth_metadata::{IdTokenProvider, TokenProvider},
     config::Config,
+    gcs::delete::{GcsApiObjectDeleter, GcsObjectDeleter},
     health_cache::HealthSnapshotCache,
 };
 
@@ -80,6 +81,11 @@ pub struct AppState {
     /// Shared across all requests via `Arc`; TTL 10 s.  Per-replica cache —
     /// multi-instance spread is acceptable phase 1 (D-3).
     pub health_cache: Arc<HealthSnapshotCache>,
+    /// GCS object-deletion seam for `DELETE /v1/conversations/{id}` (#283).
+    ///
+    /// Production uses `GcsApiObjectDeleter` (GCS JSON API + IAM token); tests
+    /// inject a fake recording whether a delete was issued.
+    pub gcs_object_deleter: Arc<dyn GcsObjectDeleter>,
 }
 
 impl AppState {
@@ -103,6 +109,7 @@ impl AppState {
         let workers_id_token_provider =
             Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
         let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
+        let gcs_object_deleter = default_gcs_deleter(&gcs_token_provider, &config.gcs_bucket);
 
         Ok(Self {
             config,
@@ -117,6 +124,7 @@ impl AppState {
             workers_id_token_provider,
             run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
+            gcs_object_deleter,
         })
     }
 
@@ -147,6 +155,7 @@ impl AppState {
         let lookup: Arc<dyn UserLookup> = Arc::new(PgUserLookup(pool.clone()));
         let creator: Arc<dyn SessionCreator> = Arc::new(PgSessionCreator(pool.clone()));
         let revoker: Arc<dyn SessionRevoker> = Arc::new(PgSessionRevoker(pool.clone()));
+        let gcs_object_deleter = default_gcs_deleter(&gcs_token_provider, &config.gcs_bucket);
 
         Ok(Self {
             config,
@@ -161,6 +170,7 @@ impl AppState {
             workers_id_token_provider,
             run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
+            gcs_object_deleter,
         })
     }
 
@@ -246,6 +256,7 @@ impl AppState {
         let workers_id_token_provider =
             Arc::new(IdTokenProvider::with_audience(config.workers_url.clone())?);
         let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
+        let gcs_object_deleter = default_gcs_deleter(&gcs_token_provider, &config.gcs_bucket);
 
         Ok(Self {
             config,
@@ -260,6 +271,7 @@ impl AppState {
             workers_id_token_provider,
             run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
+            gcs_object_deleter,
         })
     }
 
@@ -285,6 +297,7 @@ impl AppState {
         let gcs_token_provider = Arc::new(TokenProvider::for_gcs_signing()?);
         let sql_token_provider = Arc::new(TokenProvider::for_cloud_sql()?);
         let run_token_provider = Arc::new(TokenProvider::for_cloud_run()?);
+        let gcs_object_deleter = default_gcs_deleter(&gcs_token_provider, &config.gcs_bucket);
 
         Ok(Self {
             config,
@@ -299,6 +312,7 @@ impl AppState {
             workers_id_token_provider,
             run_token_provider,
             health_cache: Arc::new(HealthSnapshotCache::new()),
+            gcs_object_deleter,
         })
     }
 
@@ -343,4 +357,34 @@ impl AppState {
         state.session_revoker = Some(revoker);
         Ok(state)
     }
+
+    /// Build state with a pool and an injected GCS object deleter (#283 delete-path tests).
+    ///
+    /// Lets `DELETE /v1/conversations/{id}` tests assert the 204/404/409 DB paths and
+    /// the atomic rollback without a real bucket by recording delete calls in a fake.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be constructed.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_with_pool_and_gcs_deleter(
+        config: Config,
+        pool: PgPool,
+        gcs_object_deleter: Arc<dyn GcsObjectDeleter>,
+    ) -> Result<Self> {
+        let mut state = Self::new_with_pool(config, pool)?;
+        state.gcs_object_deleter = gcs_object_deleter;
+        Ok(state)
+    }
+}
+
+/// Build the production GCS object deleter from a signing token provider and bucket.
+fn default_gcs_deleter(
+    token_provider: &Arc<TokenProvider>,
+    bucket: &str,
+) -> Arc<dyn GcsObjectDeleter> {
+    Arc::new(GcsApiObjectDeleter::new(
+        Arc::clone(token_provider),
+        bucket.to_string(),
+    ))
 }

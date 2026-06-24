@@ -459,25 +459,40 @@ async fn ac11_workers_400_returns_502_not_passthrough() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-8 : request timeout → 504
+// AC-8 / #294 : chat overrides the global request timeout per-call
 // ---------------------------------------------------------------------------
 
-/// AC-8: workers never responds within timeout → 504 `upstream_timeout`.
-/// Uses a TCP listener that accepts but never sends, with a 500ms request timeout
-/// and a 50ms connect timeout (read >> connect guarantees read-side fires).
+/// #294: a worker that responds slowly (past the short global timeout but well
+/// under the per-call override) is NOT cut off on `/v1/chat` — it returns 200.
+///
+/// This supersedes the original AC-8 chat-route 504 assertion: chat intentionally
+/// overrides the global client timeout to absorb a workers cold start, so the
+/// global cut no longer applies here. The generic `is_timeout → 504` mapping (still
+/// unchanged) is exercised on a non-overridden worker route in
+/// `chat_timeout_override_test.rs`.
 #[tokio::test]
-async fn ac8_request_timeout_returns_504() {
+async fn chat_overrides_global_timeout_for_slow_worker() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    // Bind a listener that accepts connections but never writes back.
+    // A worker that accepts, reads the request, waits past the short global
+    // timeout (500 ms), then writes a valid 200 — under the per-call override.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    // Accept in background — never respond.
     tokio::spawn(async move {
-        if let Ok((_socket, _)) = listener.accept().await {
-            // Hold the socket open but never write; drop it when task ends.
-            tokio::time::sleep(std::time::Duration::from_mins(1)).await;
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut scratch = [0u8; 4096];
+            let _ = socket.read(&mut scratch).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+            let body = r#"{"answer":"slow but alive","citations":[]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.flush().await;
         }
     });
 
@@ -485,9 +500,11 @@ async fn ac8_request_timeout_returns_504() {
     let app = router(make_state_with_short_timeout(&workers_url));
     let resp = post_chat(app, r#"{"query":"hello"}"#).await;
 
-    assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
-    let body = body_json(resp).await;
-    assert_error_envelope(&body, "upstream_timeout");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "chat must hold past the global timeout via the per-call override (#294)"
+    );
 }
 
 // ---------------------------------------------------------------------------

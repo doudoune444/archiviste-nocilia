@@ -66,6 +66,12 @@ export interface Message {
 interface ChatFormProps {
   /** Pre-loaded transcript turns to display (empty array = fresh conversation). */
   initialMessages?: Message[];
+  /**
+   * #291: conversation id of a resumed conversation, or undefined for a fresh
+   * one. Source of truth for the id sent in each message body; for a fresh
+   * conversation it is captured server-side from the first meta SSE chunk.
+   */
+  initialConversationId?: string;
   /** Called after the first assistant answer so the sidebar can refresh its list. */
   onConversationListChange?: (conversations: ConversationSummary[]) => void;
 }
@@ -89,9 +95,15 @@ async function refreshConversations(
 
 export function ChatForm({
   initialMessages = [],
+  initialConversationId,
   onConversationListChange,
 }: ChatFormProps) {
   const [question, setQuestion] = useState("");
+  // #291: single source of truth for the conversation id. Seeded from a resumed
+  // conversation, else captured from the first meta SSE chunk (server-generated).
+  const [currentConversationId, setCurrentConversationId] = useState<
+    string | undefined
+  >(initialConversationId);
   // AC CHAT-004: initialMessages is the useState initializer only.
   // Conversation switches are handled by key-based remount in ChatShell
   // (key={selectedId ?? "new"}), so this component is always freshly
@@ -141,6 +153,12 @@ export function ChatForm({
         return;
       }
 
+      // #291: persist the server-generated id so every later message belongs to
+      // the same conversation. Posed only after the stream-failure check.
+      if (capturedConversationId) {
+        setCurrentConversationId(capturedConversationId);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -178,7 +196,11 @@ export function ChatForm({
         const response = await fetch(CHAT_STREAM_PATH, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify(
+            currentConversationId
+              ? { query, conversation_id: currentConversationId }
+              : { query }
+          ),
           signal: controller.signal,
         });
 
@@ -197,7 +219,7 @@ export function ChatForm({
         setErrorMessage(ERROR_MESSAGE_FRENCH);
       }
     },
-    [isStreaming, consumeStreamIntoThread]
+    [isStreaming, consumeStreamIntoThread, currentConversationId]
   );
 
   const handleSubmit = useCallback(

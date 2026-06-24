@@ -185,6 +185,75 @@ describe("ChatForm keyboard handling (#249)", () => {
   });
 });
 
+describe("ChatForm conversation_id persistence (#291)", () => {
+  it("carries the meta conversation_id from message #1 into the body of message #2 (fresh conversation)", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()))
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+
+    fireEvent.change(textarea, { target: { value: "Premier" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    // Message #1 carries no conversation_id (none known yet).
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/chat/stream",
+      expect.objectContaining({ body: JSON.stringify({ query: "Premier" }) })
+    );
+
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+
+    fireEvent.change(textarea, { target: { value: "Deuxième" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    // Message #2 carries the conversation_id captured from message #1's meta.
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/chat/stream",
+      expect.objectContaining({
+        body: JSON.stringify({ query: "Deuxième", conversation_id: "c1" }),
+      })
+    );
+  });
+
+  it("includes initialConversationId in the very first message body (resumed conversation)", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(
+      <ChatForm
+        initialConversationId="Y"
+        initialMessages={[{ role: "user", text: "Bonjour" }]}
+      />
+    );
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+
+    fireEvent.change(textarea, { target: { value: "Suite" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/chat/stream",
+      expect.objectContaining({
+        body: JSON.stringify({ query: "Suite", conversation_id: "Y" }),
+      })
+    );
+  });
+});
+
 describe("ChatForm double-submit guard (#249)", () => {
   it("disables the textarea and ignores Enter while a response is streaming", async () => {
     const mockFetch = vi.fn().mockImplementationOnce(() => makePendingResponse());

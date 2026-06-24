@@ -75,6 +75,29 @@ test.describe("chat welcome state (#249)", () => {
     }
   });
 
+  // AC (#273): on an empty thread the composer is vertically centered in the
+  // available space, not pinned to the top. Regression guard for the broken
+  // page→shell→main height chain that collapsed `.page` to its content height.
+  test("welcome composer is vertically centered, not pinned to the top", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    const composer = page.getByRole("textbox", { name: /question/i });
+    await expect(composer).toBeVisible();
+
+    const box = await composer.boundingBox();
+    const viewport = page.viewportSize();
+    if (box === null || viewport === null) {
+      throw new Error("composer box / viewport unavailable");
+    }
+
+    // A centered composer sits well below the top third; a collapsed-to-content
+    // welcome state would leave it near the page top (< 30% of viewport height).
+    const composerCenterY = box.y + box.height / 2;
+    expect(composerCenterY).toBeGreaterThan(viewport.height * 0.3);
+  });
+
   // AC: clicking a chip sends that exact question and switches to conversation
   // state with the input anchored to the bottom and the thread above.
   test("clicking a chip sends the question and transitions centered → bottom", async ({
@@ -98,5 +121,65 @@ test.describe("chat welcome state (#249)", () => {
     await expect(page.locator('[data-testid="assistant-answer"]')).not.toBeEmpty({
       timeout: 30_000,
     });
+  });
+});
+
+test.describe("chat composer persistence (#273)", () => {
+  // AC (#273): in a conversation the composer must ALWAYS stay visible — the
+  // thread scrolls internally, the page (window) must never scroll the composer
+  // out of the viewport. Uses a mocked long answer so the run is deterministic
+  // and gateway-free; the live-gateway transition test stays gated above.
+  test("composer stays in the viewport when the thread overflows", async ({
+    page,
+  }) => {
+    const longAnswer = Array.from(
+      { length: 200 },
+      (_, i) => `Paragraphe ${i + 1} d'une très longue réponse des archives.`
+    ).join("\n\n");
+    await page.route("**/api/v1/chat/stream", async (route) => {
+      const body =
+        'event: meta\ndata: {"mode":"rag","conversation_id":"long","request_id":"r"}\n\n' +
+        `event: token\ndata: {"text":${JSON.stringify(longAnswer)}}\n\n` +
+        'event: done\ndata: {"citations":[]}\n\n';
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body,
+      });
+    });
+
+    await page.goto("/");
+    await page.fill('textarea[name="question"]', "Raconte une longue histoire.");
+    await page.click('button[type="submit"]');
+
+    await expect(page.locator('[data-state="conversation"]')).toBeVisible();
+    await expect(page.locator('[data-testid="assistant-answer"]')).not.toBeEmpty();
+
+    // Precondition: the answer itself is taller than the viewport (intrinsic to
+    // the content, true in both broken and fixed layouts), so the scroll-away
+    // regression can actually manifest if the height chain is unbounded.
+    const answerBox = await page
+      .locator('[data-testid="assistant-answer"]')
+      .boundingBox();
+    const vp = page.viewportSize();
+    if (answerBox === null || vp === null) {
+      throw new Error("answer box / viewport unavailable");
+    }
+    expect(answerBox.height).toBeGreaterThan(vp.height);
+
+    // Reading back through history must not scroll the composer away: scrolling
+    // the window to the top is a no-op for a viewport-bounded chat surface.
+    await page.evaluate(() => window.scrollTo(0, 0));
+
+    const box = await page
+      .getByRole("textbox", { name: /question/i })
+      .boundingBox();
+    const viewport = page.viewportSize();
+    if (box === null || viewport === null) {
+      throw new Error("composer box / viewport unavailable");
+    }
+
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
   });
 });

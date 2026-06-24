@@ -1,5 +1,11 @@
+/* #273: fill the layout's full-height .main as a flex column so the chat
+   surface (.page) can flex to fill the remaining space below any transcript
+   error banner — restores the broken main → shell → page height chain. */
 .shell {
-  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .transcriptError {

@@ -11,6 +11,14 @@
   max-width: 960px;
   margin: 0 auto;
   padding: 1.5rem 1rem;
+  /* #273: a viewport-bounded full-height flex column. `height` (not min-height)
+     caps the chain so the chat thread scrolls inside its own overflow area and
+     the composer never leaves the viewport; `overflow-y: auto` keeps longer
+     non-chat pages scrollable within main. */
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow-y: auto;
 }
 
 @media (max-width: 600px) {

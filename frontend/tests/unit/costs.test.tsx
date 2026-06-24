@@ -7,9 +7,14 @@
 // Behaviour is verified through the public render output, never internal state.
 
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup, within } from "@testing-library/react";
+import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import { CostsCard } from "@/components/costs-card/CostsCard";
 import type { CostsResult } from "@/lib/observability-types";
+
+const ESTIMATE_BADGE = "Estimation";
+const METHODOLOGY_LABEL = "Méthode d'estimation des coûts";
+const METHODOLOGY_TEXT =
+  "Estimation basée sur les tarifs publics GCP, hors crédits et remises.";
 
 afterEach(() => {
   cleanup();
@@ -58,6 +63,54 @@ describe("CostsCard — fr-FR euro formatting", () => {
   it("never renders a raw dot-decimal amount", () => {
     render(<CostsCard costs={OK_COSTS} />);
     expect(screen.queryByText("12.34")).not.toBeInTheDocument();
+  });
+});
+
+describe("CostsCard — estimate honesty layer (#276)", () => {
+  it("shows an « Estimation » badge", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText(ESTIMATE_BADGE)).toBeInTheDocument();
+  });
+
+  it("renders the methodology info icon as a button with an accessible label", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    const trigger = screen.getByRole("button", { name: METHODOLOGY_LABEL });
+    expect(trigger.tagName).toBe("BUTTON");
+    expect(trigger).toHaveAttribute("aria-label", METHODOLOGY_LABEL);
+  });
+
+  it("keeps the methodology text closed until the icon is activated", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    expect(screen.queryByText(METHODOLOGY_TEXT)).not.toBeInTheDocument();
+  });
+
+  it("opens the methodology text on tap/click and links it via aria-describedby", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    const trigger = screen.getByRole("button", { name: METHODOLOGY_LABEL });
+    fireEvent.click(trigger);
+
+    expect(screen.getByText(METHODOLOGY_TEXT)).toBeInTheDocument();
+    const describedBy = trigger.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const tooltip = document.getElementById(describedBy as string);
+    expect(tooltip).toHaveTextContent(METHODOLOGY_TEXT);
+  });
+
+  it("opens the methodology text on keyboard focus", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    const trigger = screen.getByRole("button", { name: METHODOLOGY_LABEL });
+    fireEvent.focus(trigger);
+    expect(screen.getByText(METHODOLOGY_TEXT)).toBeInTheDocument();
+  });
+
+  it("omits the badge and info icon on error", () => {
+    const costs: CostsResult = { kind: "error", request_id: "req-cost-1" };
+    render(<CostsCard costs={costs} />);
+    expect(screen.queryByText(ESTIMATE_BADGE)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: METHODOLOGY_LABEL })
+    ).not.toBeInTheDocument();
   });
 });
 

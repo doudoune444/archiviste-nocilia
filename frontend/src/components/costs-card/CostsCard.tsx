@@ -5,9 +5,17 @@
  * discriminated union and renders the three service lines (Postgres / GCS /
  * Workers) plus a total. Amounts are formatted in fr-FR euros (« 12,34 € »).
  * All server-returned values rendered as text — never dangerouslySetInnerHTML.
+ *
+ * Honest by construction (#276): an « Estimation » badge plus an InfoTooltip
+ * spell out the methodology, accessibly (tap / keyboard / screen reader).
  */
 import type { CostsResult } from "@/lib/observability-types";
+import { InfoTooltip } from "@/components/info-tooltip/InfoTooltip";
 import styles from "./CostsCard.module.css";
+
+const METHODOLOGY_LABEL = "Méthode d'estimation des coûts";
+const METHODOLOGY_TEXT =
+  "Estimation basée sur les tarifs publics GCP, hors crédits et remises.";
 
 interface CostsCardProps {
   costs: CostsResult;
@@ -43,7 +51,11 @@ export function CostsCard({ costs }: CostsCardProps) {
 
   return (
     <article className={styles.card} aria-label="Coûts">
-      <h2 className={styles.title}>Coûts</h2>
+      <header className={styles.header}>
+        <h2 className={styles.title}>Coûts</h2>
+        <span className={styles.badge}>Estimation</span>
+        <InfoTooltip label={METHODOLOGY_LABEL} content={METHODOLOGY_TEXT} />
+      </header>
       <dl className={styles.dl}>
         {services.map((service) => (
           <div className={styles.line} key={service.label}>

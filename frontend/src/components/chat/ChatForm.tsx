@@ -50,9 +50,13 @@ const SUGGESTION_CHIPS = [
   "Combien font 2+2 ?",
 ] as const;
 
-/** Turn-header identity for assistant turns (#326), per chat-1-filet.html. */
+/** Turn-header identity (#326), per chat-1-filet.html. */
 const ASSISTANT_AVATAR = "🪶";
 const ASSISTANT_LABEL = "Archiviste";
+const USER_LABEL = "Vous";
+
+/** Composer hint, per chat-1-filet.html `.composer-help`. */
+const COMPOSER_HELP = "Entrée pour envoyer · Maj+Entrée pour une nouvelle ligne";
 
 /** French error message shown on any network or backend failure. */
 const ERROR_MESSAGE_FRENCH =
@@ -264,18 +268,29 @@ export function ChatForm({
         <div className={styles.thread}>
           <ThreadMessages messages={messages} />
           {isStreaming && (
-            <p
-              className={styles.messageAssistant}
-              data-testid="streaming-answer"
-              aria-live="polite"
-              aria-label="Réponse en cours"
-            >
-              {hasFirstToken ? (
-                streamingText
-              ) : (
-                <span className={styles.streamingIndicator} aria-hidden="true" />
-              )}
-            </p>
+            <div className={`${styles.turn} ${styles.turnAssistant}`}>
+              <div className={styles.turnInner}>
+                <header className={styles.turnHeader}>
+                  <span className={styles.roleAvatar} aria-hidden="true">
+                    {ASSISTANT_AVATAR}
+                  </span>
+                  <span className={styles.roleLabel}>{ASSISTANT_LABEL}</span>
+                </header>
+                <hr className={styles.turnRule} />
+                <div
+                  className={styles.turnBody}
+                  data-testid="streaming-answer"
+                  aria-live="polite"
+                  aria-label="Réponse en cours"
+                >
+                  {hasFirstToken ? (
+                    streamingText
+                  ) : (
+                    <span className={styles.streamingIndicator} aria-hidden="true" />
+                  )}
+                </div>
+              </div>
+            </div>
           )}
           {errorMessage !== null && (
             <p className={styles.errorMessage} role="alert">
@@ -324,6 +339,7 @@ export function ChatForm({
             ))}
           </ul>
         )}
+        <p className={styles.composerHelp}>{COMPOSER_HELP}</p>
       </form>
     </section>
   );
@@ -338,9 +354,7 @@ function ThreadMessages({ messages }: ThreadMessagesProps) {
     <>
       {messages.map((message, index) =>
         message.role === "user" ? (
-          <p key={index} className={styles.messageUser}>
-            {message.text}
-          </p>
+          <UserTurn key={index} text={message.text} />
         ) : (
           <AssistantTurn key={index} message={message} />
         )
@@ -350,36 +364,56 @@ function ThreadMessages({ messages }: ThreadMessagesProps) {
 }
 
 /**
- * #326: an assistant turn = a header (🪶 avatar + « Archiviste » label + mode
- * chip) separated by a horizontal rule from the body. The header lives in this
- * layout layer; AssistantAnswer remains responsible for the body only.
+ * #326 / chat-1-filet.html: a turn = a full-width band whose background depends
+ * on the speaker (user turns sit on the page bg, assistant turns on a distinct
+ * surface band with top/bottom rules), holding a centered column. Each turn has
+ * a header (avatar + role label) separated from the body by a horizontal rule.
  */
+function UserTurn({ text }: { text: string }) {
+  return (
+    <div className={`${styles.turn} ${styles.turnUser}`}>
+      <div className={styles.turnInner}>
+        <header className={styles.turnHeader} data-testid="turn-header">
+          <span className={styles.roleAvatarUser} aria-hidden="true">
+            <UserIcon />
+          </span>
+          <span className={styles.roleLabel}>{USER_LABEL}</span>
+        </header>
+        <hr className={styles.turnRule} />
+        <div className={styles.turnBody}>{text}</div>
+      </div>
+    </div>
+  );
+}
+
 function AssistantTurn({ message }: { message: Message }) {
   return (
-    <div className={styles.messageAssistant}>
-      <header className={styles.turnHeader} data-testid="turn-header">
-        <span className={styles.roleAvatar} aria-hidden="true">
-          {ASSISTANT_AVATAR}
-        </span>
-        <span className={styles.roleLabel}>
-          {ASSISTANT_LABEL}
-          {message.mode !== undefined && (
-            <span data-testid="mode-chip" className={styles.modeChip}>
-              {message.mode}
-            </span>
-          )}
-        </span>
-      </header>
-      <hr className={styles.turnRule} />
-      {/* CHAT-003: committed assistant answers render as sanitized Markdown.
-          data-testid="assistant-answer" lives on AssistantAnswer's container. */}
-      <AssistantAnswer text={message.text} citations={message.citations} />
-      {message.conversationId !== undefined && (
-        <SignalForm
-          conversationId={message.conversationId}
-          citations={message.citations}
-        />
-      )}
+    <div className={`${styles.turn} ${styles.turnAssistant}`}>
+      <div className={styles.turnInner}>
+        <header className={styles.turnHeader} data-testid="turn-header">
+          <span className={styles.roleAvatar} aria-hidden="true">
+            {ASSISTANT_AVATAR}
+          </span>
+          <span className={styles.roleLabel}>
+            {ASSISTANT_LABEL}
+            {message.mode !== undefined && (
+              <span data-testid="mode-chip" className={styles.modeChip}>
+                {message.mode}
+              </span>
+            )}
+          </span>
+        </header>
+        <hr className={styles.turnRule} />
+        {/* CHAT-003: committed assistant answers render as sanitized Markdown.
+            data-testid="assistant-answer" lives on AssistantAnswer's container. */}
+        <AssistantAnswer text={message.text} citations={message.citations} />
+        {message.conversationId !== undefined && (
+          <SignalForm
+            conversationId={message.conversationId}
+            citations={message.citations}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -430,6 +464,27 @@ function AutoGrowTextarea({
       rows={1}
       placeholder="Posez votre question sur le lore de Nocilia…"
     />
+  );
+}
+
+/** User turn avatar glyph — decorative; the role label carries the meaning. */
+function UserIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
   );
 }
 

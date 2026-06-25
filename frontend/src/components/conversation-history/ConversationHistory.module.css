@@ -66,9 +66,8 @@
   white-space: nowrap;
 }
 
-/* #287: trash icon button. Always visible (subtle by default) so it never
-   "disappears" when the pointer leaves the row — e.g. after a delete, when the
-   pointer sits on the modal. Emphasized on row hover / focus. */
+/* #287: trash icon button. Hidden until the row is hovered or any element in
+   the row gains keyboard focus; always visible on touch (no hover). */
 .trash {
   flex-shrink: 0;
   display: inline-flex;
@@ -80,7 +79,8 @@
   border-radius: 4px;
   color: var(--color-text);
   cursor: pointer;
-  opacity: 0.6;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
 
 .row:hover .trash,
@@ -97,6 +97,17 @@
 .trash:disabled {
   cursor: not-allowed;
   opacity: 0.4;
+}
+
+.row:hover .trash:disabled,
+.row:focus-within .trash:disabled {
+  opacity: 0.4;
+}
+
+@media (hover: none) {
+  .trash {
+    opacity: 1;
+  }
 }
 
 /* #287: in-flight delete spinner inside the greyed row. */

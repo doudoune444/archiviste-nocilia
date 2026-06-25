@@ -36,7 +36,10 @@ describe("ConversationHistory — derived titles (#250)", () => {
       <ConversationHistory
         conversations={[makeConversation()]}
         selectedId={null}
-        onSelect={() => {}}      />
+        onSelect={() => {}}
+        onRequestDelete={() => {}}
+        deletingId={null}
+      />
     );
     expect(screen.getByText("Quelle est la capitale ?")).toBeInTheDocument();
   });
@@ -46,7 +49,10 @@ describe("ConversationHistory — derived titles (#250)", () => {
       <ConversationHistory
         conversations={[makeConversation()]}
         selectedId={null}
-        onSelect={() => {}}      />
+        onSelect={() => {}}
+        onRequestDelete={() => {}}
+        deletingId={null}
+      />
     );
     expect(screen.queryByText(/message/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\d{2}\/\d{2}\/\d{2}/)).not.toBeInTheDocument();
@@ -58,7 +64,10 @@ describe("ConversationHistory — derived titles (#250)", () => {
       <ConversationHistory
         conversations={[makeConversation({ id: "abc" })]}
         selectedId={null}
-        onSelect={onSelect}      />
+        onSelect={onSelect}
+        onRequestDelete={() => {}}
+        deletingId={null}
+      />
     );
     fireEvent.click(screen.getByTestId("conversation-item-abc"));
     expect(onSelect).toHaveBeenCalledWith("abc");
@@ -70,7 +79,10 @@ describe("ConversationHistory — derived titles (#250)", () => {
       <ConversationHistory
         conversations={[makeConversation({ id: "x", title: malicious })]}
         selectedId={null}
-        onSelect={() => {}}      />
+        onSelect={() => {}}
+        onRequestDelete={() => {}}
+        deletingId={null}
+      />
     );
     const item = screen.getByTestId("conversation-item-x");
     expect(item.querySelector("img")).toBeNull();

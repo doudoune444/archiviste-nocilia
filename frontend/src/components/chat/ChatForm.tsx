@@ -29,7 +29,7 @@
  *      Plain streaming text uses pre-wrap — never dangerouslySetInnerHTML.
  */
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { consumeSseStream } from "@/lib/sse-stream";
 import AssistantAnswer from "@/components/assistant-answer/AssistantAnswer";
 import { SignalForm } from "@/components/signal-form/SignalForm";
@@ -366,15 +366,35 @@ interface AutoGrowTextareaProps {
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
 }
 
-/** Auto-growing textarea: height follows content up to a CSS max-height (#249). */
+/**
+ * Max textarea height in px before internal scroll. Aligned with the CSS
+ * `max-height: 200px` (#321); JS is the single source of truth for height.
+ */
+const MAX_HEIGHT = 200;
+
+/**
+ * Auto-growing textarea: JS drives the height from `scrollHeight`, capped at
+ * MAX_HEIGHT then internal scroll (#321). Works on every browser, unlike the
+ * Chromium-only `field-sizing: content`. useLayoutEffect avoids a height flash.
+ */
 function AutoGrowTextarea({
   value,
   disabled,
   onChange,
   onKeyDown,
 }: AutoGrowTextareaProps) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const element = textareaRef.current;
+    if (element === null) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, MAX_HEIGHT)}px`;
+  }, [value]);
+
   return (
     <textarea
+      ref={textareaRef}
       name="question"
       aria-label="Votre question"
       className={styles.textarea}

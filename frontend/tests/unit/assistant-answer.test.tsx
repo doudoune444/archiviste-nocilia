@@ -22,7 +22,6 @@ describe("AssistantAnswer — script tag neutralization", () => {
     render(
       <AssistantAnswer
         text={"Hello <script>alert('xss')</script> world"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -34,7 +33,6 @@ describe("AssistantAnswer — script tag neutralization", () => {
     render(
       <AssistantAnswer
         text={"Before <script>evil()</script> after"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -55,7 +53,6 @@ describe("AssistantAnswer — javascript: link scheme neutralized", () => {
     render(
       <AssistantAnswer
         text={"[click me](javascript:alert(1))"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -74,7 +71,6 @@ describe("AssistantAnswer — javascript: link scheme neutralized", () => {
     render(
       <AssistantAnswer
         text={"[click](vbscript:MsgBox(1))"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -98,7 +94,6 @@ describe("AssistantAnswer — raw HTML injection blocked", () => {
     render(
       <AssistantAnswer
         text={'<img src="x" onerror="alert(1)" />'}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -114,7 +109,6 @@ describe("AssistantAnswer — raw HTML injection blocked", () => {
     render(
       <AssistantAnswer
         text={'<p onclick="steal()">text</p>'}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -148,7 +142,6 @@ describe("AssistantAnswer — schema-pinning: irc: stripped by tightened allowli
     render(
       <AssistantAnswer
         text={"[chat](irc://chat.freenode.net/nocilia)"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -169,7 +162,6 @@ describe("AssistantAnswer — schema-pinning: irc: stripped by tightened allowli
     render(
       <AssistantAnswer
         text={"[contact](xmpp:user@example.com)"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -193,7 +185,6 @@ describe("AssistantAnswer — safe markdown preserved", () => {
     render(
       <AssistantAnswer
         text={"This is **bold** and _italic_."}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -207,7 +198,6 @@ describe("AssistantAnswer — safe markdown preserved", () => {
     render(
       <AssistantAnswer
         text={"- item one\n- item two"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -221,7 +211,6 @@ describe("AssistantAnswer — safe markdown preserved", () => {
     render(
       <AssistantAnswer
         text={"```js\nconsole.log('hello');\n```"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -235,7 +224,6 @@ describe("AssistantAnswer — safe markdown preserved", () => {
     render(
       <AssistantAnswer
         text={"[visit](https://example.com)"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -248,7 +236,6 @@ describe("AssistantAnswer — safe markdown preserved", () => {
     render(
       <AssistantAnswer
         text={"[email](mailto:test@example.com)"}
-        mode={undefined}
         citations={undefined}
       />
     );
@@ -258,34 +245,20 @@ describe("AssistantAnswer — safe markdown preserved", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC: mode chip rendered when provided
+// #326: the mode chip moved to the turn header (ChatForm layout layer).
+// AssistantAnswer is body-only and must never render a mode-chip itself.
 // ---------------------------------------------------------------------------
 
-describe("AssistantAnswer — mode chip", () => {
-  it("renders a mode chip when mode is provided", () => {
-    // AC: mode surfaced where available.
+describe("AssistantAnswer — body only, no mode chip (#326)", () => {
+  it("does not render a mode-chip (it now lives in the turn header)", () => {
     render(
       <AssistantAnswer
         text={"Hello."}
-        mode={"canon"}
         citations={undefined}
       />
     );
-    expect(screen.getByText("canon")).toBeInTheDocument();
-  });
-
-  it("does not render a mode chip when mode is undefined", () => {
-    render(
-      <AssistantAnswer
-        text={"Hello."}
-        mode={undefined}
-        citations={undefined}
-      />
-    );
-    // No chip element should be present
     const container = screen.getByTestId("assistant-answer");
-    const chip = container.querySelector("[data-testid='mode-chip']");
-    expect(chip).toBeNull();
+    expect(container.querySelector("[data-testid='mode-chip']")).toBeNull();
   });
 });
 
@@ -299,7 +272,6 @@ describe("AssistantAnswer — citations", () => {
     render(
       <AssistantAnswer
         text={"Answer with sources."}
-        mode={undefined}
         citations={["source-a.md", "source-b.md"]}
       />
     );
@@ -311,7 +283,6 @@ describe("AssistantAnswer — citations", () => {
     render(
       <AssistantAnswer
         text={"No sources."}
-        mode={undefined}
         citations={[]}
       />
     );

@@ -50,6 +50,10 @@ const SUGGESTION_CHIPS = [
   "Combien font 2+2 ?",
 ] as const;
 
+/** Turn-header identity for assistant turns (#326), per chat-1-filet.html. */
+const ASSISTANT_AVATAR = "🪶";
+const ASSISTANT_LABEL = "Archiviste";
+
 /** French error message shown on any network or backend failure. */
 const ERROR_MESSAGE_FRENCH =
   "Une erreur est survenue. Veuillez réessayer dans quelques instants.";
@@ -338,24 +342,45 @@ function ThreadMessages({ messages }: ThreadMessagesProps) {
             {message.text}
           </p>
         ) : (
-          // CHAT-003: committed assistant answers render as sanitized Markdown.
-          // data-testid="assistant-answer" lives on AssistantAnswer's container div.
-          <div key={index} className={styles.messageAssistant}>
-            <AssistantAnswer
-              text={message.text}
-              mode={message.mode}
-              citations={message.citations}
-            />
-            {message.conversationId !== undefined && (
-              <SignalForm
-                conversationId={message.conversationId}
-                citations={message.citations}
-              />
-            )}
-          </div>
+          <AssistantTurn key={index} message={message} />
         )
       )}
     </>
+  );
+}
+
+/**
+ * #326: an assistant turn = a header (🪶 avatar + « Archiviste » label + mode
+ * chip) separated by a horizontal rule from the body. The header lives in this
+ * layout layer; AssistantAnswer remains responsible for the body only.
+ */
+function AssistantTurn({ message }: { message: Message }) {
+  return (
+    <div className={styles.messageAssistant}>
+      <header className={styles.turnHeader} data-testid="turn-header">
+        <span className={styles.roleAvatar} aria-hidden="true">
+          {ASSISTANT_AVATAR}
+        </span>
+        <span className={styles.roleLabel}>
+          {ASSISTANT_LABEL}
+          {message.mode !== undefined && (
+            <span data-testid="mode-chip" className={styles.modeChip}>
+              {message.mode}
+            </span>
+          )}
+        </span>
+      </header>
+      <hr className={styles.turnRule} />
+      {/* CHAT-003: committed assistant answers render as sanitized Markdown.
+          data-testid="assistant-answer" lives on AssistantAnswer's container. */}
+      <AssistantAnswer text={message.text} citations={message.citations} />
+      {message.conversationId !== undefined && (
+        <SignalForm
+          conversationId={message.conversationId}
+          citations={message.citations}
+        />
+      )}
+    </div>
   );
 }
 

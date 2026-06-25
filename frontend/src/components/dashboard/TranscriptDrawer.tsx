@@ -44,11 +44,7 @@ function TurnItem({ message }: { message: Message }) {
         {label}
       </span>
       <div className={styles.turnContent}>
-        <AssistantAnswer
-          text={message.text}
-          mode={undefined}
-          citations={undefined}
-        />
+        <AssistantAnswer text={message.text} citations={undefined} />
       </div>
     </div>
   );

@@ -18,6 +18,9 @@
 }
 
 .brandButton {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
   width: 100%;
   background: none;
   border: 1px solid var(--color-border);
@@ -25,15 +28,48 @@
   padding: 0.6rem 0.75rem;
   font-size: 1rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--color-accent);
+  color: var(--color-text);
   cursor: pointer;
   text-align: left;
+  font-family: inherit;
 }
 
 .brandButton:hover,
 .brandButton:focus {
   border-color: var(--color-accent);
+}
+
+.brandTile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--color-icon-bg);
+  color: var(--color-icon-ink);
+  font-size: 0.9375rem;
+  line-height: 1;
+}
+
+.brandName {
+  flex: 1;
+  letter-spacing: 0.02em;
+}
+
+.brandChevron {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1;
+}
+
+.popoverIcon {
+  display: inline-flex;
+  width: 1.25rem;
+  flex-shrink: 0;
+  justify-content: center;
+  line-height: 1;
 }
 
 .popover {
@@ -48,6 +84,9 @@
 }
 
 .popoverLink {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   color: var(--color-text);
   font-size: 0.9rem;
   text-decoration: none;

@@ -9,7 +9,7 @@ test.describe("sidebar brand popover navigation (#248)", () => {
   test("navigates to Lacunes from the brand popover", async ({ page }) => {
     await page.goto("/");
 
-    await page.getByRole("button", { name: /archiviste nocilia/i }).click();
+    await page.getByRole("button", { name: /l'archiviste/i }).click();
     await page.getByRole("link", { name: "Lacunes" }).click();
 
     await expect(page).toHaveURL(/\/lacunes$/);
@@ -20,7 +20,7 @@ test.describe("sidebar brand popover navigation (#248)", () => {
   }) => {
     await page.goto("/");
 
-    await page.getByRole("button", { name: /archiviste nocilia/i }).click();
+    await page.getByRole("button", { name: /l'archiviste/i }).click();
     await page.getByRole("link", { name: "État & métriques" }).click();
 
     await expect(page).toHaveURL(/\/metriques$/);

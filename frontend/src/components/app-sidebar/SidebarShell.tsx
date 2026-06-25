@@ -26,19 +26,42 @@ import styles from "./SidebarShell.module.css";
 import type { Identity } from "./identity";
 import { useChatSidebar } from "./SidebarChatContext";
 
-const BRAND_LABEL = "Archiviste Nocilia";
+const BRAND_LABEL = "L'Archiviste";
+const BRAND_ICON = "🪶";
+const BRAND_CHEVRON = "▾";
 const NEW_CONVERSATION_LABEL = "Nouvelle conversation";
 
 interface NavLink {
   href: string;
   label: string;
+  icon: string;
 }
 
 const PRIMARY_NAV_LINKS: readonly NavLink[] = [
-  { href: "/", label: "Archiviste" },
-  { href: "/lacunes", label: "Lacunes" },
-  { href: "/metriques", label: "État & métriques" },
+  { href: "/", label: "Archiviste", icon: "🪶" },
+  { href: "/lacunes", label: "Lacunes", icon: "🔖" },
+  { href: "/metriques", label: "État & métriques", icon: "📊" },
 ];
+
+interface PopoverEntryProps {
+  href: string;
+  label: string;
+  icon: string | null;
+  onNavigate: () => void;
+}
+
+function PopoverEntry({ href, label, icon, onNavigate }: PopoverEntryProps) {
+  return (
+    <Link href={href} className={styles.popoverLink} onClick={onNavigate}>
+      {icon !== null && (
+        <span className={styles.popoverIcon} data-icon={icon} aria-hidden>
+          {icon}
+        </span>
+      )}
+      {label}
+    </Link>
+  );
+}
 
 interface BrandPopoverProps {
   identity: Identity;
@@ -57,29 +80,33 @@ function BrandPopover({ identity, onNavigate }: BrandPopoverProps) {
         aria-expanded={isOpen}
         onClick={() => setIsOpen((open) => !open)}
       >
-        {BRAND_LABEL}
+        <span className={styles.brandTile} data-icon={BRAND_ICON} aria-hidden>
+          {BRAND_ICON}
+        </span>
+        <span className={styles.brandName}>{BRAND_LABEL}</span>
+        <span className={styles.brandChevron} aria-hidden>
+          {BRAND_CHEVRON}
+        </span>
       </button>
 
       {isOpen && (
         <nav className={styles.popover} aria-label="Navigation">
           {PRIMARY_NAV_LINKS.map((link) => (
-            <Link
+            <PopoverEntry
               key={link.href}
               href={link.href}
-              className={styles.popoverLink}
-              onClick={onNavigate}
-            >
-              {link.label}
-            </Link>
+              label={link.label}
+              icon={link.icon}
+              onNavigate={onNavigate}
+            />
           ))}
           {identity.tier === "author" && (
-            <Link
+            <PopoverEntry
               href="/dashboard"
-              className={styles.popoverLink}
-              onClick={onNavigate}
-            >
-              Dashboard
-            </Link>
+              label="Dashboard"
+              icon={null}
+              onNavigate={onNavigate}
+            />
           )}
         </nav>
       )}

@@ -89,6 +89,60 @@ function renderShellWithChat(
 }
 
 // ---------------------------------------------------------------------------
+// Brand button — plume tile + chevron + popover icons (#323)
+// ---------------------------------------------------------------------------
+
+describe("SidebarShell — brand button (#323)", () => {
+  it("labels the brand button « L'Archiviste »", () => {
+    renderShell(ANONYMOUS);
+    expect(
+      screen.getByRole("button", { name: /l'archiviste/i })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps aria-haspopup=menu and aria-expanded on the trigger", () => {
+    renderShell(ANONYMOUS);
+    const brand = screen.getByRole("button", { name: /l'archiviste/i });
+    expect(brand).toHaveAttribute("aria-haspopup", "menu");
+    expect(brand).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(brand);
+    expect(brand).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("shows the plume tile on the brand button", () => {
+    renderShell(ANONYMOUS);
+    const brand = screen.getByRole("button", { name: /l'archiviste/i });
+    expect(brand.querySelector('[data-icon="🪶"]')).not.toBeNull();
+  });
+
+  it("shows an explicit chevron on the brand button", () => {
+    renderShell(ANONYMOUS);
+    const brand = screen.getByRole("button", { name: /l'archiviste/i });
+    expect(brand).toHaveTextContent("▾");
+  });
+
+  it("gives each popover entry its own icon", () => {
+    renderShell(ANONYMOUS);
+    fireEvent.click(screen.getByRole("button", { name: /l'archiviste/i }));
+    expect(
+      screen
+        .getByRole("link", { name: "Archiviste" })
+        .querySelector('[data-icon="🪶"]')
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: "Lacunes" })
+        .querySelector('[data-icon="🔖"]')
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: "État & métriques" })
+        .querySelector('[data-icon="📊"]')
+    ).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Popover navigation
 // ---------------------------------------------------------------------------
 
@@ -102,7 +156,7 @@ describe("SidebarShell — brand popover", () => {
 
   it("opens a popover with Archiviste, Lacunes and État & métriques links", () => {
     renderShell(ANONYMOUS);
-    fireEvent.click(screen.getByRole("button", { name: /archiviste nocilia/i }));
+    fireEvent.click(screen.getByRole("button", { name: /l'archiviste/i }));
 
     expect(screen.getByRole("link", { name: "Archiviste" })).toHaveAttribute(
       "href",
@@ -119,7 +173,7 @@ describe("SidebarShell — brand popover", () => {
 
   it("closes the popover when the brand button is clicked again", () => {
     renderShell(ANONYMOUS);
-    const brand = screen.getByRole("button", { name: /archiviste nocilia/i });
+    const brand = screen.getByRole("button", { name: /l'archiviste/i });
     fireEvent.click(brand);
     expect(screen.getByRole("link", { name: "Lacunes" })).toBeInTheDocument();
     fireEvent.click(brand);
@@ -136,7 +190,7 @@ describe("SidebarShell — brand popover", () => {
 describe("SidebarShell — Dashboard link by tier", () => {
   it("shows the Dashboard link in the popover for the author tier", () => {
     renderShell(AUTHOR);
-    fireEvent.click(screen.getByRole("button", { name: /archiviste nocilia/i }));
+    fireEvent.click(screen.getByRole("button", { name: /l'archiviste/i }));
     expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute(
       "href",
       "/dashboard"
@@ -145,7 +199,7 @@ describe("SidebarShell — Dashboard link by tier", () => {
 
   it("hides the Dashboard link for the member tier", () => {
     renderShell(MEMBER);
-    fireEvent.click(screen.getByRole("button", { name: /archiviste nocilia/i }));
+    fireEvent.click(screen.getByRole("button", { name: /l'archiviste/i }));
     expect(
       screen.queryByRole("link", { name: "Dashboard" })
     ).not.toBeInTheDocument();
@@ -153,7 +207,7 @@ describe("SidebarShell — Dashboard link by tier", () => {
 
   it("hides the Dashboard link for the anonymous tier", () => {
     renderShell(ANONYMOUS);
-    fireEvent.click(screen.getByRole("button", { name: /archiviste nocilia/i }));
+    fireEvent.click(screen.getByRole("button", { name: /l'archiviste/i }));
     expect(
       screen.queryByRole("link", { name: "Dashboard" })
     ).not.toBeInTheDocument();

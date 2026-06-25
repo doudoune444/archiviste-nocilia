@@ -1,16 +1,24 @@
 /* Design tokens — reprises exactes de gateway/static/assets/styles.css */
 :root {
-  --color-bg: #0f0f0f;
-  --color-surface: #1a1a1a;
-  --color-border: #2e2e2e;
-  --color-text: #e8e8e8;
-  --color-text-muted: #888;
-  --color-accent: #8b7355;
-  --color-user-bg: #1e1e2e;
-  --color-assistant-bg: #1a1a1a;
+  --color-bg: #131217;
+  --color-surface: #1c1b22;
+  --color-border: #2c2b34;
+  --color-text: #ececf0;
+  --color-text-muted: #8a8794;
+  --color-accent: #9277e8;
+  --color-user-bg: #1c1b22;
+  --color-assistant-bg: #1c1b22;
   --color-error-bg: #2e1a1a;
-  --color-error-text: #e07070;
+  --color-error-text: #e06666;
   --color-healthy: #4caf50;
+  --color-text-soft: #b6b4c0;
+  --color-line-strong: #3a3845;
+  --color-accent-soft: #272237;
+  --color-accent-ink: #c2b2f5;
+  --color-icon-bg: #5b4baa;
+  --color-icon-ink: #ece8ff;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.28);
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, monospace;
 }

@@ -5,9 +5,9 @@
   width: 100%;
 }
 
-/* Normalize prose spacing for common markdown elements */
+/* Normalize prose spacing for common markdown elements (design: chat-1-filet). */
 .markdown p {
-  margin: 0 0 0.5rem;
+  margin: 0 0 8px;
 }
 
 .markdown p:last-child {
@@ -16,12 +16,28 @@
 
 .markdown ul,
 .markdown ol {
-  margin: 0.25rem 0 0.5rem 1.25rem;
-  padding: 0;
+  margin: 4px 0 8px;
+  padding-left: 20px;
 }
 
 .markdown li {
-  margin-bottom: 0.2rem;
+  margin-bottom: 3px;
+}
+
+.markdown sup.fn {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 0.72em;
+  font-weight: 700;
+  padding: 0 1px;
+}
+
+.markdown a:has(sup.fn) {
+  text-decoration: none;
+}
+
+.markdown a:has(sup.fn):hover sup.fn {
+  text-decoration: underline;
 }
 
 .markdown pre {
@@ -45,14 +61,8 @@
   padding: 0;
 }
 
-.footer {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
 .modeChip {
+  align-self: flex-start;
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -64,8 +74,67 @@
   color: var(--color-accent);
 }
 
-.citations {
-  font-size: 0.75rem;
+/* ===== Sources — collapsible, path-only (design: chat-1-filet) ===== */
+.sources {
+  margin-top: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+.sources > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+  padding: 9px 12px;
+  user-select: none;
+}
+
+.sources > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sources > summary::before {
+  content: "▸";
+  font-size: 11px;
+  color: var(--color-accent);
+}
+
+.sources[open] > summary::before {
+  content: "▾";
+}
+
+.sources > summary:hover {
   color: var(--color-text);
-  opacity: 0.6;
+}
+
+.srcList {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px 12px;
+}
+
+.srcItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--color-border);
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  color: var(--color-text);
+}
+
+.srcItem:first-child {
+  border-top: none;
+}
+
+.srcIcon {
+  color: var(--color-accent);
+  flex-shrink: 0;
+  font-size: 13px;
 }

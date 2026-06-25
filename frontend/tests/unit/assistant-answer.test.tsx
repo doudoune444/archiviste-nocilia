@@ -290,33 +290,203 @@ describe("AssistantAnswer — mode chip", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC: citations count surfaced when provided
+// AC (#327): inline [source_path] markers → superscript citations
 // ---------------------------------------------------------------------------
 
-describe("AssistantAnswer — citations", () => {
-  it("renders citation count when citations array is non-empty", () => {
-    // AC: citations surfaced where available.
+const citation = (sourcePath: string) => ({
+  source_path: sourcePath,
+  chunk_ords: [0],
+});
+
+describe("AssistantAnswer — superscript citations", () => {
+  it("numbers distinct sources by first appearance and reuses the number for repeats", () => {
+    // AC: text "[lore/a.md] ... [lore/b.md] ... [lore/a.md]" with citations=[a,b]
+    // → a=1, b=2; two <sup class="fn"> for a, one for b.
     render(
       <AssistantAnswer
-        text={"Answer with sources."}
+        text={
+          "Intro [lore/a.md] middle [lore/b.md] outro [lore/a.md] end."
+        }
         mode={undefined}
-        citations={["source-a.md", "source-b.md"]}
+        citations={[citation("lore/a.md"), citation("lore/b.md")]}
       />
     );
     const container = screen.getByTestId("assistant-answer");
-    expect(container.textContent).toContain("2");
+    const sups = container.querySelectorAll("sup.fn");
+    const numbers = Array.from(sups).map((s) => s.textContent);
+    expect(numbers).toEqual(["1", "2", "1"]);
   });
 
-  it("does not render citations footer when citations is empty", () => {
+  it("does not render the raw [source_path] marker once converted", () => {
     render(
       <AssistantAnswer
-        text={"No sources."}
+        text={"Fact [lore/a.md] done."}
         mode={undefined}
-        citations={[]}
+        citations={[citation("lore/a.md")]}
       />
     );
     const container = screen.getByTestId("assistant-answer");
-    const footer = container.querySelector("[data-testid='citations-footer']");
-    expect(footer).toBeNull();
+    expect(container.textContent).not.toContain("[lore/a.md]");
+    expect(container.querySelector("sup.fn")).not.toBeNull();
+  });
+
+  it("leaves an unknown [path] absent from citations rendered literally", () => {
+    // AC: a [chemin/inconnu.md] not in citations stays literal — no fake sup.
+    render(
+      <AssistantAnswer
+        text={"Known [lore/a.md] but unknown [chemin/inconnu.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    expect(container.textContent).toContain("[chemin/inconnu.md]");
+    const sups = container.querySelectorAll("sup.fn");
+    expect(sups).toHaveLength(1);
+  });
+
+  it("links each superscript to the internal #src-{n} anchor", () => {
+    // AC: clicking a superscript leads to #src-{n}.
+    render(
+      <AssistantAnswer
+        text={"Fact [lore/a.md] then [lore/b.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md"), citation("lore/b.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const anchors = container.querySelectorAll("a[href='#src-1'] sup.fn");
+    expect(anchors).toHaveLength(1);
+    const anchorsTwo = container.querySelectorAll("a[href='#src-2'] sup.fn");
+    expect(anchorsTwo).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC (#327): collapsible Sources panel (path-only)
+// ---------------------------------------------------------------------------
+
+describe("AssistantAnswer — sources panel", () => {
+  it("renders a <details> with one .src-item per citation and #src-{n} ids", () => {
+    render(
+      <AssistantAnswer
+        text={"Answer [lore/a.md] [lore/b.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md"), citation("lore/b.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    const items = container.querySelectorAll(".src-item");
+    expect(items).toHaveLength(2);
+    expect(container.querySelector("#src-1")).not.toBeNull();
+    expect(container.querySelector("#src-2")).not.toBeNull();
+  });
+
+  it("labels the summary with the source count", () => {
+    render(
+      <AssistantAnswer
+        text={"Answer [lore/a.md] [lore/b.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md"), citation("lore/b.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const summary = container.querySelector("details > summary");
+    expect(summary?.textContent).toContain("Sources");
+    expect(summary?.textContent).toContain("2");
+  });
+
+  it("renders the panel collapsed by default (no open attribute)", () => {
+    render(
+      <AssistantAnswer
+        text={"Answer [lore/a.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details?.hasAttribute("open")).toBe(false);
+  });
+
+  it("shows the source paths verbatim in the panel", () => {
+    render(
+      <AssistantAnswer
+        text={"Answer [lore/a.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    expect(container.querySelector(".src-item")?.textContent).toContain(
+      "lore/a.md"
+    );
+  });
+
+  it("does not render the sources panel when citations is empty", () => {
+    render(
+      <AssistantAnswer text={"No sources."} mode={undefined} citations={[]} />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    expect(container.querySelector("details")).toBeNull();
+  });
+
+  it("no longer renders the legacy citations-footer", () => {
+    render(
+      <AssistantAnswer
+        text={"Answer [lore/a.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    expect(
+      container.querySelector("[data-testid='citations-footer']")
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC (#327): citation conversion is sanitization-safe
+// ---------------------------------------------------------------------------
+
+describe("AssistantAnswer — citation security regression", () => {
+  it("does not turn a [javascript:...] marker into an executable link", () => {
+    // AC: [javascript:alert(1)] must not produce an executable link.
+    render(
+      <AssistantAnswer
+        text={"Danger [javascript:alert(1)] here."}
+        mode={undefined}
+        citations={[citation("lore/a.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const anchors = container.querySelectorAll("a");
+    for (const anchor of anchors) {
+      const href = anchor.getAttribute("href");
+      if (href !== null) {
+        expect(href).not.toMatch(/^javascript:/i);
+      }
+    }
+    // The marker is not in citations → stays literal, no sup produced for it.
+    expect(container.querySelectorAll("sup.fn")).toHaveLength(0);
+  });
+
+  it("keeps anchor hrefs limited to the internal #src fragment", () => {
+    // The only anchors the plugin introduces point at internal fragments.
+    render(
+      <AssistantAnswer
+        text={"Fact [lore/a.md]."}
+        mode={undefined}
+        citations={[citation("lore/a.md")]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const sup = container.querySelector("sup.fn");
+    const anchor = sup?.closest("a");
+    expect(anchor?.getAttribute("href")).toBe("#src-1");
   });
 });

@@ -18,6 +18,11 @@
 import Markdown from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Options as SanitizeSchema } from "rehype-sanitize";
+import {
+  citationNumbering,
+  extractSourcePaths,
+  remarkCitations,
+} from "./remark-citations";
 import styles from "./AssistantAnswer.module.css";
 
 /** Only these three URL schemes are permitted in href/src attributes. */
@@ -27,9 +32,19 @@ const ALLOWED_SCHEMES = ["http", "https", "mailto"];
  * Tightened schema: starts from rehype-sanitize defaultSchema (GitHub-style)
  * and overrides the protocol allowlist to strip every scheme not in
  * ALLOWED_SCHEMES. javascript:, vbscript:, data:, etc. are all rejected.
+ *
+ * Citation extension (#327): allow the <sup> element and a `className` on it so
+ * the remarkCitations-emitted superscript survives sanitisation. No URL scheme
+ * is reopened — the citation anchors are internal fragments (#src-{n}), which
+ * carry no protocol and so pass the unchanged `href` allowlist.
  */
 const SANITIZE_SCHEMA: SanitizeSchema = {
   ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "sup"],
+  attributes: {
+    ...defaultSchema.attributes,
+    sup: ["className"],
+  },
   protocols: {
     ...defaultSchema.protocols,
     href: ALLOWED_SCHEMES,
@@ -50,20 +65,32 @@ interface Props {
 }
 
 /**
- * Renders a committed assistant answer as sanitized Markdown HTML.
- * Surfaces mode chip and citation count when present.
+ * Renders a committed assistant answer as sanitized Markdown HTML, converting
+ * inline `[source_path]` markers to numbered superscript citations and listing
+ * the cited documents (path-only) in a collapsible Sources panel.
  */
 export default function AssistantAnswer({
   text,
   mode,
   citations,
 }: Props): React.ReactElement {
-  const hasCitations = Array.isArray(citations) && citations.length > 0;
+  const sourcePaths = extractSourcePaths(citations);
+  const numbering = citationNumbering(citations);
+  const remarkPlugins: [ReturnType<typeof remarkCitations>][] = [
+    [remarkCitations(numbering)],
+  ];
 
   return (
     <div data-testid="assistant-answer" className={styles.container}>
+      {mode !== undefined && (
+        <span data-testid="mode-chip" className={styles.modeChip}>
+          {mode}
+        </span>
+      )}
+
       <div className={styles.markdown}>
         <Markdown
+          remarkPlugins={remarkPlugins}
           rehypePlugins={REHYPE_PLUGINS}
           skipHtml={true}
         >
@@ -71,23 +98,24 @@ export default function AssistantAnswer({
         </Markdown>
       </div>
 
-      {(mode !== undefined || hasCitations) && (
-        <footer className={styles.footer}>
-          {mode !== undefined && (
-            <span data-testid="mode-chip" className={styles.modeChip}>
-              {mode}
-            </span>
-          )}
-          {hasCitations && (
-            <span
-              data-testid="citations-footer"
-              className={styles.citations}
-            >
-              {(citations as unknown[]).length} source
-              {(citations as unknown[]).length > 1 ? "s" : ""}
-            </span>
-          )}
-        </footer>
+      {sourcePaths.length > 0 && (
+        <details className={styles.sources}>
+          <summary>Sources ({sourcePaths.length})</summary>
+          <ul className={styles.srcList}>
+            {sourcePaths.map((sourcePath, index) => (
+              <li
+                key={sourcePath}
+                id={`src-${index + 1}`}
+                className={`${styles.srcItem} src-item`}
+              >
+                <span className={styles.srcIcon} aria-hidden="true">
+                  🔗
+                </span>
+                <span className={styles.srcPath}>{sourcePath}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   );

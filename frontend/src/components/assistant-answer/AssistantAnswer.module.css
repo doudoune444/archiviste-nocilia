@@ -68,14 +68,14 @@
   text-decoration: underline;
 }
 
-:global(details.sources) {
+.container :global(details.sources) {
   margin-top: 14px;
   border: 1px solid var(--color-line);
   border-radius: 10px;
   background: var(--color-surface);
 }
 
-:global(details.sources) > summary {
+.container :global(details.sources) > summary {
   list-style: none;
   cursor: pointer;
   display: flex;
@@ -88,31 +88,31 @@
   user-select: none;
 }
 
-:global(details.sources) > summary::-webkit-details-marker {
+.container :global(details.sources) > summary::-webkit-details-marker {
   display: none;
 }
 
-:global(details.sources) > summary::before {
+.container :global(details.sources) > summary::before {
   content: "\25B8";
   font-size: 11px;
   color: var(--color-accent);
 }
 
-:global(details.sources[open]) > summary::before {
+.container :global(details.sources[open]) > summary::before {
   content: "\25BE";
 }
 
-:global(details.sources) > summary:hover {
+.container :global(details.sources) > summary:hover {
   opacity: 1;
 }
 
-:global(.src-list) {
+.container :global(.src-list) {
   list-style: none;
   margin: 0;
   padding: 0 12px 10px 12px;
 }
 
-:global(.src-item) {
+.container :global(.src-item) {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -123,16 +123,16 @@
   color: var(--color-text);
 }
 
-:global(.src-item:first-child) {
+.container :global(.src-item:first-child) {
   border-top: none;
 }
 
-:global(.src-icon) {
+.container :global(.src-icon) {
   color: var(--color-accent);
   flex-shrink: 0;
   font-size: 13px;
 }
 
-:global(.src-item:hover) .src-path {
+.container :global(.src-item:hover .src-path) {
   color: var(--color-accent-ink);
 }

@@ -130,7 +130,8 @@
   line-height: 1.4;
   font-family: var(--font-sans);
   resize: none;
-  field-sizing: content;
+  /* #321: JS drives height from scrollHeight (cross-browser). It is the single
+     source of truth; field-sizing is removed to avoid conflict with inline height. */
   max-height: 200px;
   overflow-y: auto;
   padding: 0.35rem 0;

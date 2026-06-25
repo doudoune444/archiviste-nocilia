@@ -254,6 +254,86 @@ describe("ChatForm conversation_id persistence (#291)", () => {
   });
 });
 
+describe("ChatForm assistant turn header (#326)", () => {
+  it("renders a turn header with the 🪶 avatar and the « Archiviste » label for an assistant turn", () => {
+    render(
+      <ChatForm
+        initialMessages={[
+          { role: "assistant", text: "Une réponse.", mode: "canon" },
+        ]}
+      />
+    );
+
+    const header = screen.getByTestId("turn-header");
+    expect(header).toBeInTheDocument();
+    expect(header.textContent).toContain("🪶");
+    expect(header.textContent).toContain("Archiviste");
+  });
+
+  it("moves the mode-chip into the turn header (above the assistant-answer body)", () => {
+    render(
+      <ChatForm
+        initialMessages={[
+          { role: "assistant", text: "Une réponse.", mode: "canon" },
+        ]}
+      />
+    );
+
+    const chip = screen.getByTestId("mode-chip");
+    expect(chip).toHaveTextContent("canon");
+
+    // The chip now lives in the turn header, not inside the answer body.
+    const header = screen.getByTestId("turn-header");
+    expect(header).toContainElement(chip);
+    const answer = screen.getByTestId("assistant-answer");
+    expect(answer).not.toContainElement(chip);
+  });
+
+  it("does not render a mode-chip when the assistant turn has no mode", () => {
+    render(
+      <ChatForm
+        initialMessages={[{ role: "assistant", text: "Sans mode." }]}
+      />
+    );
+
+    expect(screen.queryByTestId("mode-chip")).not.toBeInTheDocument();
+    // Header (avatar + label) is shown regardless of mode.
+    expect(screen.getByTestId("turn-header")).toBeInTheDocument();
+  });
+
+  it("separates the turn header from the body with a horizontal rule", () => {
+    const { container } = render(
+      <ChatForm
+        initialMessages={[
+          { role: "assistant", text: "Une réponse.", mode: "canon" },
+        ]}
+      />
+    );
+
+    expect(container.querySelector("hr")).toBeInTheDocument();
+  });
+
+  it("still renders the assistant-answer body for an assistant turn", () => {
+    render(
+      <ChatForm
+        initialMessages={[
+          { role: "assistant", text: "Une réponse.", mode: "canon" },
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId("assistant-answer")).toBeInTheDocument();
+  });
+
+  it("does not render a turn header for a user turn", () => {
+    render(
+      <ChatForm initialMessages={[{ role: "user", text: "Ma question" }]} />
+    );
+
+    expect(screen.queryByTestId("turn-header")).not.toBeInTheDocument();
+  });
+});
+
 describe("ChatForm double-submit guard (#249)", () => {
   it("disables the textarea and ignores Enter while a response is streaming", async () => {
     const mockFetch = vi.fn().mockImplementationOnce(() => makePendingResponse());

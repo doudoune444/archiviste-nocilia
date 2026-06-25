@@ -45,17 +45,16 @@ const REHYPE_PLUGINS: [typeof rehypeSanitize, SanitizeSchema][] = [
 
 interface Props {
   text: string;
-  mode: string | undefined;
   citations: unknown[] | undefined;
 }
 
 /**
- * Renders a committed assistant answer as sanitized Markdown HTML.
- * Surfaces mode chip and citation count when present.
+ * Renders a committed assistant answer body as sanitized Markdown HTML.
+ * Surfaces the citation count when present. The mode chip now lives in the
+ * turn header (ChatForm layout layer, #326), not in the answer body.
  */
 export default function AssistantAnswer({
   text,
-  mode,
   citations,
 }: Props): React.ReactElement {
   const hasCitations = Array.isArray(citations) && citations.length > 0;
@@ -71,22 +70,12 @@ export default function AssistantAnswer({
         </Markdown>
       </div>
 
-      {(mode !== undefined || hasCitations) && (
+      {hasCitations && (
         <footer className={styles.footer}>
-          {mode !== undefined && (
-            <span data-testid="mode-chip" className={styles.modeChip}>
-              {mode}
-            </span>
-          )}
-          {hasCitations && (
-            <span
-              data-testid="citations-footer"
-              className={styles.citations}
-            >
-              {(citations as unknown[]).length} source
-              {(citations as unknown[]).length > 1 ? "s" : ""}
-            </span>
-          )}
+          <span data-testid="citations-footer" className={styles.citations}>
+            {(citations as unknown[]).length} source
+            {(citations as unknown[]).length > 1 ? "s" : ""}
+          </span>
         </footer>
       )}
     </div>

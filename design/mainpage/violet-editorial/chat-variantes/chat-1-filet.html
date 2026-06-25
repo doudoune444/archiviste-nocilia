@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>L'Archiviste de Nocilia — Graphite Dark (violet)</title>
+<style>
+  :root {
+    --bg: #131217;
+    --paper: #1c1b22;
+    --ink: #ececf0;
+    --ink-soft: #b6b4c0;
+    --ink-faint: #8a8794;
+    --line: #2c2b34;
+    --line-strong: #3a3845;
+    --accent: #9277e8;
+    --accent-soft: #272237;
+    --icon-bg: #5b4baa;
+    --icon-ink: #ece8ff;
+    --accent-ink: #c2b2f5;
+    --red: #e06666;
+    --radius: 8px;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.28);
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    height: 100vh;
+    width: 100%;
+  }
+
+  /* ===== SIDEBAR ===== */
+  .sidebar {
+    background: var(--paper);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    gap: 8px;
+    overflow: hidden;
+  }
+  .brand-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 9px 10px;
+    color: var(--ink);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .brand-btn:hover { border-color: var(--accent); }
+  .brand-mono {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--icon-bg);
+    color: var(--icon-ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  .brand-name { flex: 1; text-align: left; font-weight: 600; font-size: 14px; }
+  .brand-chevron { color: var(--ink-faint); font-size: 13px; }
+
+  .new-conv {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 9px 10px;
+    color: var(--ink-soft);
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .new-conv:hover { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-soft); }
+
+  .section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--accent);
+    padding: 8px 6px 2px;
+  }
+
+  .conv-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .conv-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    color: var(--ink-soft);
+    font-size: 14px;
+    border-left: 2px solid transparent;
+  }
+  .conv-row .conv-title {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-row .trash {
+    opacity: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--ink-faint);
+    flex-shrink: 0;
+    transition: opacity .12s ease, background-color .12s ease, border-color .12s ease, color .12s ease;
+  }
+  .conv-row:hover { background: var(--accent-soft); color: var(--ink); }
+  .conv-row:hover .trash { opacity: 1; }
+  .conv-row .trash:hover {
+    color: var(--ink);
+    border-color: var(--accent);
+  }
+
+  .conv-row.active {
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    font-weight: 600;
+    border-left-color: var(--accent);
+  }
+  /* baked hover state — shows the trash's own hover (border+bg visible) */
+  .conv-row.hovered { background: var(--accent-soft); color: var(--ink); }
+  .conv-row.hovered .trash {
+    opacity: 1;
+    color: var(--ink);
+    border-color: var(--accent);
+  }
+
+  .account {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 8px;
+    border-top: 1px solid var(--line);
+    margin-top: 4px;
+  }
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .account-meta { display: flex; flex-direction: column; line-height: 1.25; }
+  .account-name { font-size: 14px; font-weight: 600; }
+  .account-link { font-size: 12px; color: var(--ink-faint); cursor: pointer; }
+  .account-link:hover { color: var(--accent-ink); text-decoration: underline; }
+
+  /* ===== MAIN ===== */
+  .main {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+  }
+  .thread {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .turn {
+    width: 100%;
+  }
+  .turn.assistant { background: var(--paper); border-block: 1px solid var(--line); }
+  .turn.assistant + .turn.user { margin-top: 0; }
+  .turn-inner {
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 22px 28px;
+    display: flex;
+    flex-direction: column;
+  }
+  .turn-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .role-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .turn.user .role-avatar { background: #33313d; color: #c8c6d2; }
+  .turn.assistant .role-avatar {
+    background: var(--icon-bg);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    font-size: 16px;
+  }
+  .role-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-faint);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .turn-rule {
+    height: 1px;
+    background: var(--line);
+    border: none;
+    margin: 10px 0 12px;
+  }
+  .turn-body { min-width: 0; }
+  .mode-chip {
+    display: inline-block;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-soft);
+    color: var(--accent-ink);
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .turn-text p { margin: 0 0 8px; }
+  .turn-text p:last-child { margin-bottom: 0; }
+  .turn-text ul {
+    margin: 4px 0 8px;
+    padding-left: 20px;
+  }
+  .turn-text li { margin-bottom: 3px; }
+  sup.fn {
+    color: var(--accent);
+    cursor: pointer;
+    font-size: .72em;
+    font-weight: 700;
+    padding: 0 1px;
+  }
+  sup.fn:hover { text-decoration: underline; }
+
+  .followups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .followup {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .followup:hover { border-color: var(--accent); color: var(--accent-ink); }
+
+  /* ===== SOURCES — compact path-only ===== */
+  .sources {
+    margin-top: 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--paper);
+  }
+  .sources > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    padding: 9px 12px;
+    user-select: none;
+  }
+  .sources > summary::-webkit-details-marker { display: none; }
+  .sources > summary::before {
+    content: "▸";
+    font-size: 11px;
+    color: var(--accent);
+  }
+  .sources[open] > summary::before { content: "▾"; }
+  .sources > summary:hover { color: var(--ink); }
+
+  .src-list {
+    list-style: none;
+    padding: 0 12px 10px 12px;
+  }
+  .src-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px dashed var(--line);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink);
+  }
+  .src-item:first-child { border-top: none; }
+  .src-icon { color: var(--accent); flex-shrink: 0; font-size: 13px; }
+  .src-item:hover .src-path { color: var(--accent-ink); }
+
+  /* ===== COMPOSER ===== */
+  .composer-wrap {
+    background: var(--bg);
+    padding: 10px 0 14px;
+  }
+  .composer {
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+  .composer-box {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 8px 8px 8px 16px;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+  }
+  .composer-box:focus-within { border-color: var(--accent); }
+  .composer textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    resize: none;
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1.5;
+    outline: none;
+    padding: 6px 0;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .send-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 17px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .send-btn:hover { filter: brightness(1.08); }
+  .composer-help {
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    text-align: center;
+    margin-top: 8px;
+  }
+
+  /* ===== BADGE ===== */
+  .badge {
+    position: fixed;
+    bottom: 14px;
+    right: 14px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: var(--ink-soft);
+    box-shadow: var(--shadow);
+    z-index: 20;
+  }
+  .badge b { color: var(--accent-ink); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <button class="brand-btn">
+      <span class="brand-mono">🪶</span>
+      <span class="brand-name">L'Archiviste</span>
+      <span class="brand-chevron">▾</span>
+    </button>
+
+    <button class="new-conv"><span>＋</span> Nouvelle conversation</button>
+
+    <div class="section-label">Conversations récentes</div>
+    <ul class="conv-list">
+      <li class="conv-row active">
+        <span class="conv-title">Origines de l'Archiviste</span>
+        <span class="trash"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span>
+      </li>
+      <li class="conv-row hovered">
+        <span class="conv-title">Les Gardiens du Seuil</span>
+        <span class="trash"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span>
+      </li>
+      <li class="conv-row">
+        <span class="conv-title">Cartographie de Nocilia</span>
+        <span class="trash"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span>
+      </li>
+      <li class="conv-row">
+        <span class="conv-title">La Guerre des Brumes</span>
+        <span class="trash"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span>
+      </li>
+      <li class="conv-row">
+        <span class="conv-title">Rituels de la Confrérie</span>
+        <span class="trash"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span>
+      </li>
+      <li class="conv-row">
+        <span class="conv-title">Le Codex perdu</span>
+        <span class="trash"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span>
+      </li>
+    </ul>
+
+    <div class="account">
+      <div class="avatar">B</div>
+      <div class="account-meta">
+        <span class="account-name">baptiste</span>
+        <span class="account-link">Mon compte</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="thread">
+
+      <!-- Turn 1 user -->
+      <div class="turn user">
+        <div class="turn-inner">
+          <div class="turn-header">
+            <div class="role-avatar">B</div>
+            <div class="role-label">Vous</div>
+          </div>
+          <hr class="turn-rule">
+          <div class="turn-body">
+            <div class="turn-text">
+              <p>Qui est l'Archiviste de Nocilia et quel est son rôle ?</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Turn 1 assistant -->
+      <div class="turn assistant">
+        <div class="turn-inner">
+          <div class="turn-header">
+            <div class="role-avatar">🪶</div>
+            <div class="role-label">Archiviste <span class="mode-chip">Canon</span></div>
+          </div>
+          <hr class="turn-rule">
+          <div class="turn-body">
+            <div class="turn-text">
+              <p>L'Archiviste de Nocilia est le gardien des mémoires écrites de la cité<sup class="fn">1</sup>. Son rôle est de conserver, classer et transmettre les récits, traités et chroniques accumulés depuis la fondation<sup class="fn">2</sup>.</p>
+              <ul>
+                <li>préserver les manuscrits originaux contre l'oubli ;</li>
+                <li>répondre aux requêtes sans jamais inventer ce que les archives taisent ;</li>
+                <li>signaler les lacunes pour qu'elles soient comblées.</li>
+              </ul>
+              <p>Les archives restent muettes sur son identité personnelle<sup class="fn">1</sup>.</p>
+            </div>
+
+            <div class="followups">
+              <button class="followup">Comment l'Archiviste a-t-il été désigné ?</button>
+              <button class="followup">Quels documents sont conservés dans les archives ?</button>
+            </div>
+
+            <details class="sources">
+              <summary>Sources (2)</summary>
+              <ul class="src-list">
+                <li class="src-item"><span class="src-icon">🔗</span><span class="src-path">lore/personnages/archiviste.md</span></li>
+                <li class="src-item"><span class="src-icon">🔗</span><span class="src-path">lore/lieux/nocilia.md</span></li>
+              </ul>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      <!-- Turn 2 user -->
+      <div class="turn user">
+        <div class="turn-inner">
+          <div class="turn-header">
+            <div class="role-avatar">B</div>
+            <div class="role-label">Vous</div>
+          </div>
+          <hr class="turn-rule">
+          <div class="turn-body">
+            <div class="turn-text">
+              <p>Et où se trouvent ces archives ?</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Turn 2 assistant -->
+      <div class="turn assistant">
+        <div class="turn-inner">
+          <div class="turn-header">
+            <div class="role-avatar">🪶</div>
+            <div class="role-label">Archiviste</div>
+          </div>
+          <hr class="turn-rule">
+          <div class="turn-body">
+            <div class="turn-text">
+              <p>Les Grandes Archives occupent la tour centrale de Nocilia, au cœur du quartier du Seuil<sup class="fn">1</sup>.</p>
+            </div>
+            <details class="sources">
+              <summary>Sources (1)</summary>
+              <ul class="src-list">
+                <li class="src-item"><span class="src-icon">🔗</span><span class="src-path">lore/lieux/nocilia.md</span></li>
+              </ul>
+            </details>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- COMPOSER -->
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="composer-box">
+          <textarea rows="1" placeholder="Posez votre question sur le lore de Nocilia…">Quelles sont les origines de la Confrérie
+du Seuil, et quel rôle l'Archiviste y
+joue-t-il aujourd'hui ?</textarea>
+          <button class="send-btn" aria-label="Envoyer" title="Envoyer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+        </div>
+        <div class="composer-help">Entrée pour envoyer · Maj+Entrée pour une nouvelle ligne</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="badge"><b>Chat · Filet</b> — header + filet horizontal, contenu pleine largeur</div>
+
+<script>
+  // Démo du vrai fix item-1 : auto-grow JS (scrollHeight), plafonné puis scroll.
+  // Marche partout, contrairement à field-sizing: content (non supporté Firefox/Safari).
+  (function () {
+    var textarea = document.querySelector(".composer textarea");
+    if (!textarea) return;
+    var maxHeight = 200;
+    function autoGrow() {
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + "px";
+    }
+    textarea.addEventListener("input", autoGrow);
+    autoGrow();
+  })();
+</script>
+</body>
+</html>

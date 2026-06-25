@@ -23,7 +23,7 @@
  * A09: transcript content is never logged.
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { ConversationHistory } from "./ConversationHistory";
 import { mapTranscriptToMessages } from "./transcript";
 import {
@@ -102,32 +102,45 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // B2: monotonically-increasing token identifying the latest selection request.
+  // A transcript only applies if its token still matches — so a slow fetch for a
+  // previously-clicked conversation can never overwrite the one now selected, and
+  // "Nouvelle conversation"/delete can cancel an in-flight select by bumping it.
+  const selectionRequestRef = useRef(0);
 
   const handleSelectConversation = useCallback(async (id: string) => {
     setTranscriptError(null);
-    setSelectedId(id);
+    const requestToken = ++selectionRequestRef.current;
 
     try {
       const response = await fetch(`/api/v1/conversations/${id}/messages`);
+      if (selectionRequestRef.current !== requestToken) return;
       if (!response.ok) {
         setTranscriptError(TRANSCRIPT_LOAD_ERROR);
         return;
       }
       const body: unknown = await response.json();
+      if (selectionRequestRef.current !== requestToken) return;
       if (!isConversationMessages(body)) {
         setTranscriptError(TRANSCRIPT_LOAD_ERROR);
         return;
       }
-      // AC: transcript rendered in ordinal order, no phantom messages.
+      // B2: commit transcript AND selection in the same tick (one render) so the
+      // key-based remount of ChatForm carries the freshly-loaded messages — never
+      // the previously-open conversation's transcript. AC: ordinal order, no phantom.
       setLoadedMessages(mapTranscriptToMessages(body.messages));
+      setSelectedId(id);
     } catch {
       // A09: never log response content.
+      if (selectionRequestRef.current !== requestToken) return;
       setTranscriptError(TRANSCRIPT_LOAD_ERROR);
     }
   }, []);
 
   const handleNew = useCallback(() => {
     // AC: "Nouvelle conversation" clears the view. No localStorage. No reload needed.
+    // Bump the token so an in-flight select cannot resurrect a transcript here.
+    selectionRequestRef.current += 1;
     setSelectedId(null);
     setLoadedMessages(null);
     setTranscriptError(null);
@@ -165,6 +178,7 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
         // AC: deleting the open conversation returns to "Nouvelle conversation";
         // deleting any other conversation leaves the open thread untouched.
         if (selectedId === id) {
+          selectionRequestRef.current += 1;
           setSelectedId(null);
           setLoadedMessages(null);
           setTranscriptError(null);

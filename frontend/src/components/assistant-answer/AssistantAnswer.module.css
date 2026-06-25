@@ -5,9 +5,9 @@
   width: 100%;
 }
 
-/* Normalize prose spacing for common markdown elements */
+/* #326 — body spacing scale from chat-1-filet.html (resserré). */
 .markdown p {
-  margin: 0 0 0.5rem;
+  margin: 0 0 8px;
 }
 
 .markdown p:last-child {
@@ -16,12 +16,12 @@
 
 .markdown ul,
 .markdown ol {
-  margin: 0.25rem 0 0.5rem 1.25rem;
-  padding: 0;
+  margin: 4px 0 8px;
+  padding-left: 20px;
 }
 
 .markdown li {
-  margin-bottom: 0.2rem;
+  margin-bottom: 3px;
 }
 
 .markdown pre {
@@ -45,27 +45,94 @@
   padding: 0;
 }
 
-.footer {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
+/* #327 — citation superscript + sources panel.
+   These elements carry semantic global class names (sup.fn, .sources,
+   .src-item…) matching the design reference, so the styles are :global. */
+
+.markdown :global(sup.fn) {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 0.72em;
+  font-weight: 700;
+  padding: 0 1px;
 }
 
-.modeChip {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+.markdown :global(sup.fn a),
+.markdown :global(a sup.fn) {
+  color: inherit;
+  text-decoration: none;
+}
+
+.markdown :global(a:hover) sup.fn,
+.markdown :global(sup.fn:hover) {
+  text-decoration: underline;
+}
+
+.container :global(details.sources) {
+  margin-top: 14px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  padding: 0.15rem 0.45rem;
+}
+
+.container :global(details.sources) > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--color-text);
+  opacity: 0.7;
+  padding: 9px 12px;
+  user-select: none;
+}
+
+.container :global(details.sources) > summary::-webkit-details-marker {
+  display: none;
+}
+
+.container :global(details.sources) > summary::before {
+  content: "\25B8";
+  font-size: 11px;
   color: var(--color-accent);
 }
 
-.citations {
-  font-size: 0.75rem;
+.container :global(details.sources[open]) > summary::before {
+  content: "\25BE";
+}
+
+.container :global(details.sources) > summary:hover {
+  opacity: 1;
+}
+
+.container :global(.src-list) {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px 12px;
+}
+
+.container :global(.src-item) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--color-line);
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
   color: var(--color-text);
-  opacity: 0.6;
+}
+
+.container :global(.src-item:first-child) {
+  border-top: none;
+}
+
+.container :global(.src-icon) {
+  color: var(--color-accent);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.container :global(.src-item:hover .src-path) {
+  color: var(--color-accent-ink);
 }

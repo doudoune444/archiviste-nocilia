@@ -45,15 +45,94 @@
   padding: 0;
 }
 
-.footer {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
+/* #327 — citation superscript + sources panel.
+   These elements carry semantic global class names (sup.fn, .sources,
+   .src-item…) matching the design reference, so the styles are :global. */
+
+.markdown :global(sup.fn) {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 0.72em;
+  font-weight: 700;
+  padding: 0 1px;
 }
 
-.citations {
-  font-size: 0.75rem;
+.markdown :global(sup.fn a),
+.markdown :global(a sup.fn) {
+  color: inherit;
+  text-decoration: none;
+}
+
+.markdown :global(a:hover) sup.fn,
+.markdown :global(sup.fn:hover) {
+  text-decoration: underline;
+}
+
+:global(details.sources) {
+  margin-top: 14px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+:global(details.sources) > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
   color: var(--color-text);
-  opacity: 0.6;
+  opacity: 0.7;
+  padding: 9px 12px;
+  user-select: none;
+}
+
+:global(details.sources) > summary::-webkit-details-marker {
+  display: none;
+}
+
+:global(details.sources) > summary::before {
+  content: "\25B8";
+  font-size: 11px;
+  color: var(--color-accent);
+}
+
+:global(details.sources[open]) > summary::before {
+  content: "\25BE";
+}
+
+:global(details.sources) > summary:hover {
+  opacity: 1;
+}
+
+:global(.src-list) {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px 12px;
+}
+
+:global(.src-item) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--color-line);
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  color: var(--color-text);
+}
+
+:global(.src-item:first-child) {
+  border-top: none;
+}
+
+:global(.src-icon) {
+  color: var(--color-accent);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+:global(.src-item:hover) .src-path {
+  color: var(--color-accent-ink);
 }

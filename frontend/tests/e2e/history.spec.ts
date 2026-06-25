@@ -69,7 +69,7 @@ test.describe("conversation history sidebar (CHAT-004)", () => {
     await page.goto("/");
 
     // The sidebar nav must be present.
-    await expect(page.getByRole("navigation", { name: /historique/i })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: /conversations récentes/i })).toBeVisible();
   });
 
   // AC-load-transcript (gateway-dependent): clicking a conversation renders turns

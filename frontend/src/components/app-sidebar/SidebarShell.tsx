@@ -204,6 +204,9 @@ export function SidebarShell({ identity }: SidebarShellProps) {
           onClick={handleNewConversation}
           data-testid="new-conversation-btn"
         >
+          <span className={styles.newConversationIcon} aria-hidden>
+            ＋
+          </span>
           {NEW_CONVERSATION_LABEL}
         </button>
 

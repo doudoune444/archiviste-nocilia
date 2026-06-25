@@ -23,7 +23,7 @@ import styles from "./ConversationHistory.module.css";
 import { TrashIcon } from "@/components/confirm-dialog/TrashIcon";
 import type { ConversationSummary } from "./types";
 
-const LABEL_HISTORY = "Historique";
+const LABEL_HISTORY = "Conversations récentes";
 const LABEL_EMPTY = "Aucune conversation passée";
 const LABEL_DELETE = "Supprimer la conversation";
 const TOOLTIP_TICKET_BLOCKED =

@@ -325,12 +325,14 @@ describe("ChatForm assistant turn header (#326)", () => {
     expect(screen.getByTestId("assistant-answer")).toBeInTheDocument();
   });
 
-  it("does not render a turn header for a user turn", () => {
+  it("renders a turn header with the « Vous » label for a user turn", () => {
     render(
       <ChatForm initialMessages={[{ role: "user", text: "Ma question" }]} />
     );
 
-    expect(screen.queryByTestId("turn-header")).not.toBeInTheDocument();
+    const header = screen.getByTestId("turn-header");
+    expect(header).toBeInTheDocument();
+    expect(header.textContent).toContain("Vous");
   });
 });
 

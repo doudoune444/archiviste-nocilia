@@ -56,6 +56,7 @@
 
 .brandName {
   flex: 1;
+  font-size: 0.875rem;
   letter-spacing: 0.02em;
 }
 
@@ -82,6 +83,26 @@
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: var(--color-bg);
+  transform-origin: top;
+  animation: popoverReveal 0.14s ease-out;
+}
+
+/* Soft reveal so the nav links don't pop in abruptly when the menu opens. */
+@keyframes popoverReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popover {
+    animation: none;
+  }
 }
 
 .popoverLink {
@@ -101,21 +122,35 @@
   color: var(--color-accent);
 }
 
+/* chat-1-filet `.new-conv`: ghost button (transparent fill, line border, soft
+   text) that warms to the accent tint on hover — not a solid violet fill. */
 .newConversationButton {
-  background: var(--color-accent);
-  color: var(--color-bg);
-  border: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: transparent;
+  color: var(--color-text-soft);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.9rem;
-  font-weight: 600;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.875rem;
+  font-family: inherit;
   cursor: pointer;
   text-align: left;
 }
 
 .newConversationButton:hover,
 .newConversationButton:focus {
-  filter: brightness(1.15);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+}
+
+.newConversationIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 .historySlot {

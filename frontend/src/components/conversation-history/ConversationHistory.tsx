@@ -53,12 +53,16 @@ export function ConversationHistory({
       ) : (
         conversations.map((conv) => {
           const isDeleting = deletingId === conv.id;
+          const isActive = selectedId === conv.id;
+          const itemClassName = isActive
+            ? `${styles.conversationItem} ${styles.active}`
+            : styles.conversationItem;
           return (
             <div key={conv.id} className={styles.row}>
               <button
                 type="button"
-                className={styles.conversationItem}
-                aria-current={selectedId === conv.id ? "true" : undefined}
+                className={itemClassName}
+                aria-current={isActive ? "true" : undefined}
                 aria-busy={isDeleting ? "true" : undefined}
                 disabled={isDeleting}
                 onClick={() => onSelect(conv.id)}

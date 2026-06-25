@@ -7,7 +7,7 @@ test("la page d'accueil charge et affiche l'app-shell", async ({ page }) => {
   // #248: the persistent left sidebar replaces the top nav bar.
   await expect(page.locator("aside")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /archiviste nocilia/i })
+    page.getByRole("button", { name: /l'archiviste/i })
   ).toBeVisible();
 
   // The chat surface renders directly at the root.

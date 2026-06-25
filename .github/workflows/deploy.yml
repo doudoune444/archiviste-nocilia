@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
 
+# Serialize deploys: concurrent merges to main otherwise race on update-traffic,
+# letting an older run's promote finish last and pin traffic to a stale revision.
+# Queue (cancel-in-progress: false) instead of cancel — aborting mid-promote/migrate
+# could leave traffic split or the DB schema half-applied.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
 permissions:
   id-token: write
   contents: read

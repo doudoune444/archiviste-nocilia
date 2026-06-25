@@ -31,24 +31,29 @@
   gap: 0.4rem;
   background: none;
   border: 1px solid transparent;
+  border-left: 2px solid transparent;
   border-radius: 4px;
   padding: 0.4rem 0.6rem;
   font-size: 0.85rem;
   cursor: pointer;
   text-align: left;
-  color: var(--color-text);
+  color: var(--color-text-soft);
   line-height: 1.35;
 }
 
+/* #325: desktop hover/focus → accentuated soft background + full-strength text. */
 .conversationItem:hover,
 .conversationItem:focus {
-  background: var(--color-surface);
-  border-color: var(--color-border);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
 }
 
-.conversationItem[aria-current="true"] {
-  background: var(--color-surface);
-  border-color: var(--color-accent);
+/* #325: active item carries the violet left rail + accent-ink text + weight. */
+.active {
+  background: var(--color-accent-soft);
+  border-left-color: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 600;
 }
 
 /* #287: greyed + non-interactive while its delete is in flight. */
@@ -77,10 +82,10 @@
   background: none;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: var(--color-text);
+  color: var(--color-text-muted);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .row:hover .trash,
@@ -89,9 +94,10 @@
   opacity: 1;
 }
 
+/* #325: trash hover gains an accent border (reconciles #287). */
 .trash:hover:not(:disabled) {
-  background: var(--color-surface);
-  border-color: var(--color-border);
+  color: var(--color-text);
+  border-color: var(--color-accent);
 }
 
 .trash:disabled {
@@ -104,7 +110,9 @@
   opacity: 0.4;
 }
 
-@media (hover: none) {
+/* #325/#282: on touch devices and narrow viewports (<600px) the trash stays
+   visible — there is no hover to reveal it. */
+@media (hover: none), (max-width: 600px) {
   .trash {
     opacity: 1;
   }

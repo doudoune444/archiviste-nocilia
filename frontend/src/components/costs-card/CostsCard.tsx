@@ -1,13 +1,16 @@
 /**
- * CostsCard — presentational component for GET /v1/costs data (#275).
+ * CostsCard — Coûts · 30 j card (#275, reworked for #349 / PRD #346).
  *
- * Pure: no gateway knowledge, no fetch calls. Receives a CostsResult
- * discriminated union and renders the three service lines (Postgres / GCS /
- * Workers) plus a total. Amounts are formatted in fr-FR euros (« 12,34 € »).
- * All server-returned values rendered as text — never dangerouslySetInnerHTML.
+ * Pure presentational server component: no gateway knowledge, no fetch. Receives
+ * a CostsResult discriminated union. Per the v03 mockup it leads with the period
+ * total, then lists the three service lines — « Workers (LLM Mistral) »,
+ * « PostgreSQL », « GCS » — each with a monospace amount and a bar whose width is
+ * proportional to the total. A title InfoTooltip spells out the estimation
+ * methodology, accessibly (hover + keyboard focus).
  *
- * Honest by construction (#276): an « Estimation » badge plus an InfoTooltip
- * spell out the methodology, accessibly (tap / keyboard / screen reader).
+ * Amounts are formatted in fr-FR euros (« 12,34 € »). All server-returned values
+ * render as text — never dangerouslySetInnerHTML. On error the card shows a
+ * request id only, leaking no internals (security.md).
  */
 import type { CostsResult } from "@/lib/observability-types";
 import { InfoTooltip } from "@/components/info-tooltip/InfoTooltip";
@@ -21,6 +24,11 @@ interface CostsCardProps {
   costs: CostsResult;
 }
 
+interface ServiceLine {
+  label: string;
+  amount: number;
+}
+
 const euroFormatter = new Intl.NumberFormat("fr-FR", {
   style: "currency",
   currency: "EUR",
@@ -32,42 +40,73 @@ function formatEur(amount: number): string {
   return euroFormatter.format(amount);
 }
 
+function barWidth(amount: number, total: number): string {
+  if (total <= 0) {
+    return "0%";
+  }
+  const ratio = Math.min(1, Math.max(0, amount / total));
+  return `${Math.round(ratio * 1000) / 10}%`;
+}
+
+function CardShell({ children }: { children: React.ReactNode }) {
+  return (
+    <article className={styles.card} aria-label="Coûts">
+      {children}
+    </article>
+  );
+}
+
+function ServiceRow({ line, total }: { line: ServiceLine; total: number }) {
+  return (
+    <div className={styles.line}>
+      <span className={styles.label}>{line.label}</span>
+      <span className={styles.amount}>{formatEur(line.amount)}</span>
+      <div
+        className={styles.bar}
+        role="meter"
+        aria-label={line.label}
+        aria-valuenow={line.amount}
+        aria-valuemin={0}
+        aria-valuemax={total}
+      >
+        <div
+          className={styles.barFill}
+          style={{ width: barWidth(line.amount, total) }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function CostsCard({ costs }: CostsCardProps) {
   if (costs.kind === "error") {
     return (
-      <article className={styles.card} aria-label="Coûts">
-        <h2 className={styles.title}>Coûts</h2>
+      <CardShell>
+        <h2 className={styles.title}>Coûts · 30 j</h2>
         <p className={styles.errorText}>Impossible de charger les coûts.</p>
         <p className={styles.requestId}>Requête&nbsp;: {costs.request_id}</p>
-      </article>
+      </CardShell>
     );
   }
 
-  const services: Array<{ label: string; amount: number }> = [
-    { label: "Postgres", amount: costs.services.postgres },
+  const services: ServiceLine[] = [
+    { label: "Workers (LLM Mistral)", amount: costs.services.workers },
+    { label: "PostgreSQL", amount: costs.services.postgres },
     { label: "GCS", amount: costs.services.gcs },
-    { label: "Workers", amount: costs.services.workers },
   ];
 
   return (
-    <article className={styles.card} aria-label="Coûts">
+    <CardShell>
       <header className={styles.header}>
-        <h2 className={styles.title}>Coûts</h2>
-        <span className={styles.badge}>Estimation</span>
+        <h2 className={styles.title}>Coûts · 30 j</h2>
         <InfoTooltip label={METHODOLOGY_LABEL} content={METHODOLOGY_TEXT} />
       </header>
-      <dl className={styles.dl}>
-        {services.map((service) => (
-          <div className={styles.line} key={service.label}>
-            <dt className={styles.label}>{service.label}</dt>
-            <dd className={styles.amount}>{formatEur(service.amount)}</dd>
-          </div>
+      <p className={styles.total}>{formatEur(costs.total_eur)}</p>
+      <div className={styles.lines}>
+        {services.map((line) => (
+          <ServiceRow key={line.label} line={line} total={costs.total_eur} />
         ))}
-        <div className={styles.totalLine}>
-          <dt className={styles.totalLabel}>Total estimé</dt>
-          <dd className={styles.totalAmount}>{formatEur(costs.total_eur)}</dd>
-        </div>
-      </dl>
-    </article>
+      </div>
+    </CardShell>
   );
 }

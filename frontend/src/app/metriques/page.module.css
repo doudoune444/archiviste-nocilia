@@ -1,30 +1,111 @@
-/* #343: centered inset, formerly supplied by the layout `.main` (now full-bleed). */
+/*
+ * État et métriques — shell & 2×2 asymmetric band (#347).
+ *
+ * Brand identity (typo + palette) comes from the mirrored prod tokens in
+ * tokens.css; this module never redefines them. The page-scoped overrides
+ * below (functional status colours, 14px card radius, ink-coloured headings)
+ * are the mockup's local deltas and apply only to `/metriques`.
+ */
+
 .page {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
+  /* Functional status colours from the mockup — page-scoped, NOT brand tokens.
+   * They live here (not tokens.css) so they never leak into the rest of the app
+   * and the brand palette stays the single source of truth (#346 precedence). */
+  --status-good: #5cc98a;
+  --status-warn: #e0b150;
+  --status-bad: #e06666;
+  /* Mockup card radius override, scoped to this page. */
+  --metric-card-radius: 14px;
+
   width: 100%;
-  max-width: 960px;
+  max-width: 1120px;
   margin: 0 auto;
-  padding: 2rem 1rem;
+  padding: 3.5rem 1.5rem 5.5rem;
+}
+
+/* Headings on this page use ink (text) colour, overriding the global rule
+ * that paints h1/h2/h3 with the brand accent. Scoped to the page subtree. */
+.page :is(h1, h2, h3) {
+  color: var(--color-text);
+}
+
+.header {
+  margin-bottom: 2.25rem;
+}
+
+.eyebrow {
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  font-weight: 600;
+  margin-bottom: 0.625rem;
 }
 
 .heading {
-  font-size: 1.5rem;
+  font-size: 2.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.grid {
+/* 2×2 asymmetric band: wide left column, narrow right column.
+ * Ragas top-left (wide), Dépendances top-right, Coûts bottom-left,
+ * Conversations bottom-right. */
+.band {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 1.25rem;
+  grid-template-columns: 1fr minmax(250px, 290px);
+  gap: 1rem;
+  margin-bottom: 2.75rem;
+  align-items: stretch;
 }
 
-@media (max-width: 600px) {
-  .page {
-    padding-top: 3rem;
+.slotRagas {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.slotDeps {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.slotCosts {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.slotConversations {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.band > div {
+  min-width: 0;
+}
+
+.band > div > * {
+  height: 100%;
+}
+
+.footer {
+  margin-top: 3.5rem;
+  padding-top: 1.125rem;
+  border-top: 1px solid var(--color-line-strong);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .band {
+    grid-template-columns: 1fr;
   }
 
-  .grid {
-    grid-template-columns: 1fr;
+  .slotRagas,
+  .slotDeps,
+  .slotCosts,
+  .slotConversations {
+    grid-column: 1;
+    grid-row: auto;
   }
 }

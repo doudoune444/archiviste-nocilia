@@ -2,10 +2,11 @@
 //
 // The aesthetic itself (hover/:focus, left rail color) is CSS-only and not
 // unit-testable. The testable contract per the issue is the active-state
-// CLASS: the item with aria-current="true" carries the `active` modifier
-// class so the violet left rail / accent-ink text / font-weight rule can hook
-// onto it, while non-selected items do not. Prop contract (onRequestDelete,
-// deletingId, has_ticket) must keep working.
+// CLASS: the row of the item with aria-current="true" carries the `active`
+// modifier class so the violet left rail / accent-ink text / font-weight rule
+// can hook onto the whole row (title + trash, per chat-1-filet), while
+// non-selected rows do not. Prop contract (onRequestDelete, deletingId,
+// has_ticket) must keep working.
 //
 // The CSS module is mocked with a Proxy returning the prop name as the class,
 // so a className contains the literal "active" iff styles.active was applied.
@@ -68,11 +69,11 @@ describe("ConversationHistory — active item state (#325)", () => {
         deletingId={null}
       />
     );
-    expect(screen.getByTestId("conversation-item-sel").className).toContain(
-      "active"
-    );
     expect(
-      screen.getByTestId("conversation-item-other").className
+      screen.getByTestId("conversation-item-sel").parentElement?.className
+    ).toContain("active");
+    expect(
+      screen.getByTestId("conversation-item-other").parentElement?.className
     ).not.toContain("active");
   });
 
@@ -88,6 +89,6 @@ describe("ConversationHistory — active item state (#325)", () => {
     );
     const item = screen.getByTestId("conversation-item-none");
     expect(item).not.toHaveAttribute("aria-current");
-    expect(item.className).not.toContain("active");
+    expect(item.parentElement?.className).not.toContain("active");
   });
 });

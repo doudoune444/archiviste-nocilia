@@ -49,12 +49,25 @@ function generateNonce(): string {
  *   default-src 'self'; script-src 'self'; style-src 'self';
  *   img-src 'self' data:; object-src 'none'; frame-ancestors 'none';
  *   base-uri 'none'; form-action 'self'
+ *
+ * Dev exception: `next dev` (Fast Refresh / webpack HMR) runs eval() and
+ * injects un-nonced inline scripts the nonce CSP would block — killing
+ * hydration. Dev therefore drops the nonce for 'unsafe-eval'/'unsafe-inline'
+ * (a nonce makes the browser ignore 'unsafe-inline', so it must go). Only the
+ * strict nonce branch ships: `next build` emits no eval and nonces its scripts.
  */
 function buildCsp(nonce: string): string {
+  const isDevelopment = process.env.NODE_ENV !== "production";
+  const scriptSrc = isDevelopment
+    ? "script-src 'self' 'unsafe-eval' 'unsafe-inline'"
+    : `script-src 'self' 'nonce-${nonce}'`;
+  const styleSrc = isDevelopment
+    ? "style-src 'self' 'unsafe-inline'"
+    : `style-src 'self' 'nonce-${nonce}'`;
   return [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}'`,
-    `style-src 'self' 'nonce-${nonce}'`,
+    scriptSrc,
+    styleSrc,
     "img-src 'self' data:",
     "object-src 'none'",
     "frame-ancestors 'none'",
@@ -67,25 +80,15 @@ export function middleware(request: NextRequest): NextResponse {
   const nonce = generateNonce();
   const csp = buildCsp(nonce);
 
-  // Forward both the nonce and the CSP on the *request* headers so Next.js 15
-  // injects its nonce into framework <script>/<style> tags during SSR.
-  // Next only reads the CSP from request headers — the response-side header alone
-  // is insufficient for the documented Next.js CSP-nonce pattern.
-  // WHY set CSP twice: request-side → Next.js nonce injection;
-  //                    response-side → browser enforcement.
-  // Both values use the same nonce string so they are consistent per request.
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", csp);
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
 
-  // AC-3: CSP at gateway parity — no 'unsafe-inline'.
   response.headers.set("Content-Security-Policy", csp);
-  // PLATFORM-001 / security.md A05: static security headers.
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  // security.md A02: HSTS at gateway parity (gateway emits the same value).
   response.headers.set(
     "Strict-Transport-Security",
     "max-age=31536000; includeSubDomains; preload"

@@ -54,14 +54,14 @@ export function ConversationHistory({
         conversations.map((conv) => {
           const isDeleting = deletingId === conv.id;
           const isActive = selectedId === conv.id;
-          const itemClassName = isActive
-            ? `${styles.conversationItem} ${styles.active}`
-            : styles.conversationItem;
+          const rowClassName = isActive
+            ? `${styles.row} ${styles.active}`
+            : styles.row;
           return (
-            <div key={conv.id} className={styles.row}>
+            <div key={conv.id} className={rowClassName}>
               <button
                 type="button"
-                className={itemClassName}
+                className={styles.conversationItem}
                 aria-current={isActive ? "true" : undefined}
                 aria-busy={isDeleting ? "true" : undefined}
                 disabled={isDeleting}

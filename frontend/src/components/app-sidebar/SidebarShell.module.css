@@ -120,6 +120,7 @@
 .popoverLink:focus {
   background: var(--color-surface);
   color: var(--color-accent);
+  text-decoration: none;
 }
 
 /* chat-1-filet `.new-conv`: ghost button (transparent fill, line border, soft

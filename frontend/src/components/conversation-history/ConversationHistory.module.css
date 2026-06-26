@@ -17,14 +17,39 @@
   padding: 0.5rem 0.375rem 0.125rem;
 }
 
-/* #287: the row hosts the select button + the trash button side by side. */
+/* #287: the row hosts the select button + the trash button side by side.
+   chat-1-filet `.conv-row`: the whole row (title + trash) is the hover/active
+   target — soft band, 8px/10px padding, 7px radius, 2px left rail. */
 .row {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 7px;
+  border-left: 2px solid transparent;
+  color: var(--color-text-soft);
+  font-size: 0.875rem;
+  line-height: 1.35;
+  cursor: pointer;
 }
 
+/* chat-1-filet `.conv-row:hover` → soft band + full-strength text. */
+.row:hover,
+.row:focus-within {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+/* chat-1-filet `.conv-row.active` → violet left rail + accent-ink text + weight. */
+.row.active {
+  background: var(--color-accent-soft);
+  border-left-color: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 600;
+}
+
+/* The select button is now a bare hit-area; visuals live on the row. */
 .conversationItem {
   flex: 1;
   min-width: 0;
@@ -32,30 +57,12 @@
   align-items: center;
   gap: 0.4rem;
   background: none;
-  border: 1px solid transparent;
-  border-left: 2px solid transparent;
-  border-radius: 4px;
-  padding: 0.4rem 0.6rem;
-  font-size: 0.85rem;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
   text-align: left;
-  color: var(--color-text-soft);
-  line-height: 1.35;
-}
-
-/* #325: desktop hover/focus → accentuated soft background + full-strength text. */
-.conversationItem:hover,
-.conversationItem:focus {
-  background: var(--color-accent-soft);
-  color: var(--color-text);
-}
-
-/* #325: active item carries the violet left rail + accent-ink text + weight. */
-.active {
-  background: var(--color-accent-soft);
-  border-left-color: var(--color-accent);
-  color: var(--color-accent-ink);
-  font-weight: 600;
 }
 
 /* #287: greyed + non-interactive while its delete is in flight. */

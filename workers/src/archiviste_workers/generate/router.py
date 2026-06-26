@@ -29,7 +29,7 @@ from archiviste_workers.generate.models import (
     Usage,
     is_valid_uuid,
 )
-from archiviste_workers.generate.parser import extract_citations
+from archiviste_workers.generate.parser import extract_citations, extract_followups
 from archiviste_workers.generate.pricing import compute_cost_eur
 from archiviste_workers.generate.prompt import (
     build_lore_gap_messages,
@@ -319,13 +319,17 @@ async def _invoke_and_finalize(
         else llm_ms_raw
     )
 
-    answer = str(ai_message.content) if ai_message.content is not None else ""
+    raw_answer = str(ai_message.content) if ai_message.content is not None else ""
+    # #354: strip the sentinel follow-up block from the emitted body; no marker on canon.
+    answer, followups = extract_followups(raw_answer)
     citations = extract_citations(answer, prepared.visible_chunks)
     if not citations and prepared.visible_chunks:
         logger.warning("llm_no_citation", request_id=parsed.request_id)
 
     usage = _build_usage(ctx, prepared, ai_message)
-    result = GenerationResult(answer=answer, usage=usage, citations=citations, llm_ms=llm_ms)
+    result = GenerationResult(
+        answer=answer, usage=usage, citations=citations, llm_ms=llm_ms, followups=followups
+    )
 
     await finalize_generation(ctx, prepared, result, log_event="generate")
 

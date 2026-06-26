@@ -206,6 +206,49 @@ async def test_stream_canon_meta_tokens_done_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_canon_done_carries_structured_followups() -> None:
+    # #354: the canon `done` event carries the structured follow-up list extracted from
+    # the sentinel block. The marker still streams in the tokens (front masks it — #345-B),
+    # but `done.followups` is structured and the body keeps its citations.
+    chunks = [
+        {"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.80, "access_tier": "public"}
+    ]
+    llm = _FakeStreamLlmClient(
+        tokens=[
+            "L'Archiviste consulte [a/b.md].",
+            "\n---SUIVI---\n",
+            "- Qui a fondé Nocilia ?\n",
+            "- Quand l'Archiviste est-il apparu ?",
+        ]
+    )
+    app, http_clients = _build_stream_app(llm_client=llm, chunks=chunks)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/generate/stream",
+            json=_payload(conversation_id=CONVERSATION_ID),
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    # Marker still streams to the client in token events (front masks it).
+    assert "---SUIVI---" in resp.text
+
+    events = _parse_sse_events(resp.text)
+    done_data = events[-1]["data"]
+    assert done_data["followups"] == [
+        "Qui a fondé Nocilia ?",
+        "Quand l'Archiviste est-il apparu ?",
+    ]
+    # Citations are still parsed from the body (block stripped before extraction).
+    assert done_data["citations"] == [{"source_path": "a/b.md", "chunk_ords": [0]}]
+
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stream_lore_gap_no_ticket_without_db() -> None:
     # AC-3 (partial): lore_gap emits meta -> token* -> done (no db_pool → ticket skipped).
     chunks = [

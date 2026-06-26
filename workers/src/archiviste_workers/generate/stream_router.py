@@ -39,7 +39,7 @@ from archiviste_workers.generate.models import (
     GenerateRequest,
     Usage,
 )
-from archiviste_workers.generate.parser import extract_citations
+from archiviste_workers.generate.parser import extract_citations, extract_followups
 from archiviste_workers.generate.pricing import compute_cost_eur
 from archiviste_workers.generate.prompt import (
     build_lore_gap_messages,
@@ -99,6 +99,7 @@ def _sse_done(
     usage: Usage,
     retrieve_ms: int,
     llm_ms: int,
+    followups: list[str] | None = None,
 ) -> str:
     return _sse_event(
         "done",
@@ -107,6 +108,8 @@ def _sse_done(
             "usage": usage.model_dump(),
             "retrieve_ms": retrieve_ms,
             "llm_ms": llm_ms,
+            # #354: structured follow-ups; empty for off_topic / lore_gap / mystery.
+            "followups": followups or [],
         },
     )
 
@@ -403,10 +406,13 @@ async def _stream_canon(
         return
 
     for part in token_parts:
+        # #354: tokens stream verbatim — the sentinel block reaches the client and the
+        # front masks everything after the marker (#345-B). `done` carries the structured list.
         yield _sse_token(part)
 
     llm_ms = int((time.perf_counter() - llm_started) * 1000)
-    answer = "".join(token_parts)
+    raw_answer = "".join(token_parts)
+    answer, followups = extract_followups(raw_answer)
     citations = extract_citations(answer, visible_chunks)
     if not citations and visible_chunks:
         logger.warning("llm_no_citation", request_id=parsed.request_id)
@@ -421,11 +427,13 @@ async def _stream_canon(
         blocked_count=blocked_count,
         intent_result=intent_result,
     )
-    result = GenerationResult(answer=answer, usage=usage, citations=citations, llm_ms=llm_ms)
+    result = GenerationResult(
+        answer=answer, usage=usage, citations=citations, llm_ms=llm_ms, followups=followups
+    )
     await finalize_generation(
         ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
     )
-    yield _sse_done(citations, usage, retrieve_ms, llm_ms)
+    yield _sse_done(citations, usage, retrieve_ms, llm_ms, followups)
 
 
 async def _stream_mystery(

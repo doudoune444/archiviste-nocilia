@@ -201,6 +201,37 @@ async fn ac1_sse_stream_relayed_verbatim() {
     assert!(text.contains("\"mode\":\"canon\""), "mode field missing");
 }
 
+/// #354: a `done` event carrying structured `followups` is relayed verbatim to the front.
+#[tokio::test]
+async fn done_event_with_followups_relayed_verbatim() {
+    let sse_body = concat!(
+        "event: meta\ndata: {\"mode\":\"canon\",\"conversation_id\":\"44444444-4444-4444-8444-444444444445\",\"request_id\":\"33333333-3333-4333-8333-333333333334\"}\n\n",
+        "event: token\ndata: {\"text\":\"Hello\"}\n\n",
+        "event: done\ndata: {\"citations\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"cost_eur\":null},\"retrieve_ms\":12,\"llm_ms\":100,\"followups\":[\"Qui a fonde Nocilia ?\",\"Quand l'Archiviste est-il apparu ?\"]}\n\n",
+    );
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/generate/stream")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let app = router(make_app_state(&server.url()));
+    let resp = post_chat_stream(app, r#"{"query":"hello"}"#).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_text(resp).await;
+    assert!(text.contains("event: done"), "done event missing");
+    assert!(text.contains("\"followups\""), "followups field missing");
+    assert!(
+        text.contains("Quand l'Archiviste est-il apparu ?"),
+        "follow-up question missing from relayed done event"
+    );
+}
+
 /// AC-3: a workers `error` SSE event flows through verbatim; stream terminates.
 #[tokio::test]
 async fn ac3_worker_error_event_relayed_verbatim() {

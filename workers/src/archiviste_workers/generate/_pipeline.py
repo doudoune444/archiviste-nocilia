@@ -11,7 +11,7 @@ which requires the call site to live there.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
@@ -101,6 +101,9 @@ class GenerationResult:
     # Empty for off_topic / lore_gap / mystery.
     citations: list[Citation]
     llm_ms: int
+    # #354: structured follow-up questions parsed from the canon sentinel block.
+    # Empty for off_topic / lore_gap / mystery (those prompts emit no follow-ups).
+    followups: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -22,11 +22,15 @@ const METHODOLOGY_TEXT =
 
 interface CostsCardProps {
   costs: CostsResult;
+  /** CSP nonce; lets the proportional bar widths ship in a <style> the strict
+   * style-src allows (inline style attributes are blocked in production). */
+  nonce?: string;
 }
 
 interface ServiceLine {
   label: string;
   amount: number;
+  barId: string;
 }
 
 const euroFormatter = new Intl.NumberFormat("fr-FR", {
@@ -69,16 +73,13 @@ function ServiceRow({ line, total }: { line: ServiceLine; total: number }) {
         aria-valuemin={0}
         aria-valuemax={total}
       >
-        <div
-          className={styles.barFill}
-          style={{ width: barWidth(line.amount, total) }}
-        />
+        <div id={line.barId} className={styles.barFill} />
       </div>
     </div>
   );
 }
 
-export function CostsCard({ costs }: CostsCardProps) {
+export function CostsCard({ costs, nonce }: CostsCardProps) {
   if (costs.kind === "error") {
     return (
       <CardShell>
@@ -90,13 +91,18 @@ export function CostsCard({ costs }: CostsCardProps) {
   }
 
   const services: ServiceLine[] = [
-    { label: "Workers (LLM Mistral)", amount: costs.services.workers },
-    { label: "PostgreSQL", amount: costs.services.postgres },
-    { label: "GCS", amount: costs.services.gcs },
+    { label: "Workers (LLM Mistral)", amount: costs.services.workers, barId: "cost-bar-workers" },
+    { label: "PostgreSQL", amount: costs.services.postgres, barId: "cost-bar-postgres" },
+    { label: "GCS", amount: costs.services.gcs, barId: "cost-bar-gcs" },
   ];
+
+  const barCss = services
+    .map((line) => `#${line.barId}{width:${barWidth(line.amount, costs.total_eur)}}`)
+    .join("");
 
   return (
     <CardShell>
+      <style nonce={nonce}>{barCss}</style>
       <header className={styles.header}>
         <h2 className={styles.title}>Coûts · 30 j</h2>
         <InfoTooltip label={METHODOLOGY_LABEL} content={METHODOLOGY_TEXT} />

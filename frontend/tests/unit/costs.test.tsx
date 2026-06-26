@@ -68,7 +68,7 @@ describe("CostsCard — per-service lines (verbatim labels)", () => {
   });
 
   it("draws a per-service bar whose width is proportional to the total", () => {
-    render(<CostsCard costs={OK_COSTS} />);
+    render(<CostsCard costs={OK_COSTS} nonce="test-nonce" />);
     // postgres 8.00 / total 12.34 ≈ 64.8 %
     const bars = screen.getAllByRole("meter");
     expect(bars).toHaveLength(3);
@@ -78,7 +78,21 @@ describe("CostsCard — per-service lines (verbatim labels)", () => {
     expect(postgresBar).toBeDefined();
     expect(postgresBar).toHaveAttribute("aria-valuemax", "12.34");
     const fill = postgresBar?.firstElementChild as HTMLElement;
-    expect(fill.style.width).toBe("64.8%");
+    // Width ships in a CSP-safe <style> (the strict style-src blocks inline style
+    // attributes in production), keyed by the fill's id — never an inline style.
+    expect(fill.id).toBe("cost-bar-postgres");
+    expect(fill.style.width).toBe("");
+    const css = Array.from(document.querySelectorAll("style"))
+      .map((tag) => tag.textContent)
+      .join("");
+    expect(css).toContain("#cost-bar-postgres{width:64.8%}");
+  });
+
+  it("ships the bar widths in a nonce-tagged style element", () => {
+    render(<CostsCard costs={OK_COSTS} nonce="abc123" />);
+    const styleTag = document.querySelector("style");
+    expect(styleTag).not.toBeNull();
+    expect(styleTag).toHaveAttribute("nonce", "abc123");
   });
 });
 

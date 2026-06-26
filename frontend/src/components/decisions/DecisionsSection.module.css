@@ -1,0 +1,168 @@
+/*
+ * Décisions & pistes d'amélioration — section layout (#351).
+ *
+ * Reuses the mirrored prod brand tokens (tokens.css); never redefines them.
+ * Layout, spacing, radii and the functional accent rail follow the validated
+ * mockup (`v6/v03-conv-botright.html`). The 14px card radius and ink-coloured
+ * headings are mockup-local deltas, scoped to this section.
+ */
+
+.section {
+  --decision-card-radius: 14px;
+}
+
+.section :is(h2, h3) {
+  color: var(--color-text);
+}
+
+.head {
+  margin-bottom: 2.25rem;
+  padding-bottom: 1.125rem;
+  border-bottom: 1px solid var(--color-line-strong);
+}
+
+.heading {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin-top: 0.375rem;
+  max-width: 58ch;
+  color: var(--color-text-soft);
+  font-size: 0.9375rem;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.875rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.card {
+  position: relative;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--decision-card-radius);
+  box-shadow: var(--shadow);
+  padding: 1.625rem 2rem 1.75rem 2.25rem;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.card:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 34px rgba(0, 0, 0, 0.34);
+}
+
+/* Floating round numbered badge overlapping the top-left corner. */
+.badge {
+  position: absolute;
+  top: -22px;
+  left: -22px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.5rem;
+  font-family: var(--font-mono);
+}
+
+.card:hover .badge {
+  background: var(--color-accent);
+  color: var(--color-icon-ink);
+}
+
+.headRow {
+  margin-left: 1.5rem;
+  margin-bottom: 0.875rem;
+}
+
+.title {
+  font-size: 1.3125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.kicker {
+  display: inline-block;
+  margin-top: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  font-weight: 400;
+}
+
+.state {
+  font-size: 0.9375rem;
+  color: var(--color-text-soft);
+  max-width: 80ch;
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: 0.78125rem;
+  background: #27262f;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--color-text);
+}
+
+/* Improvement inset with an accent left rail. */
+.improvement {
+  margin-top: 1.125rem;
+  padding: 2px 0 2px 1rem;
+  border-left: 3px solid var(--color-accent);
+  max-width: 78ch;
+}
+
+.improvementLabel {
+  display: block;
+  margin-bottom: 0.1875rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-accent-ink);
+}
+
+.improvement p {
+  font-size: 0.875rem;
+  color: var(--color-text-soft);
+}
+
+.improvement p .code {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+}
+
+/* Decision cards fold legibly below ~640px: tighter padding and the floating
+ * badge tucked closer so it stays on-card on narrow screens. */
+@media (max-width: 640px) {
+  .card {
+    padding: 1.625rem 1.375rem 1.5rem 1.5rem;
+  }
+
+  .badge {
+    left: -16px;
+  }
+
+  .headRow {
+    margin-left: 2.125rem;
+  }
+}

@@ -10,20 +10,31 @@
 //! AC-9: 3 probes run via `tokio::join!` (parallel).
 //! AC-10: result cached via `HealthSnapshotCache` (10 s TTL, in `AppState`).
 //! AC-11: probe error → `down` + `tracing::warn`; no detail in body.
-//! #253: the workers probe reads the Cloud Run Admin `Ready` condition out-of-band
-//!   (`Ready=True → dormant`, `Ready=False → down`); it never calls `{workers}/health`,
-//!   so it cannot wake the scale-to-zero service.
+//! Workers probe (#253 + #346 follow-up): a live `{workers}/health` liveness ping
+//!   first — a `2xx` means the service is serving → `ok` ("Opérationnel"). This
+//!   ping wakes the scale-to-zero service, the accepted trade-off for showing the
+//!   real serving state (it only fires while someone is viewing `/metriques`, and
+//!   the 10 s snapshot cache bounds it). When the ping fails or times out (cold /
+//!   unreachable) we fall back to the out-of-band Cloud Run Admin `Ready` read
+//!   (`Ready=True → dormant` "En veille", `Ready=False → down`), so a cold-starting
+//!   service still reads as healthy rather than down.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{extract::State, response::Response};
+use secrecy::ExposeSecret;
 use serde::Serialize;
 
 use crate::{handlers::json_utf8, state::AppState};
 
 /// Hard per-probe timeout (AC-8 / D-4).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Liveness-ping budget for the workers `/health` call. Short on purpose: a warm
+/// service answers well under this; a cold one exceeds it and we fall back to the
+/// Cloud Run `Ready` read — all within the outer `PROBE_TIMEOUT`.
+const WORKERS_HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Per-dependency health entry (AC-2).
 #[derive(Debug, Clone, Serialize)]
@@ -179,40 +190,24 @@ async fn probe_gcs(state: Arc<AppState>) -> DepStatus {
     .await
 }
 
-/// Probe workers out-of-band via the Cloud Run Admin `Ready` condition (#253).
+/// Probe workers (#253 + #346 follow-up): live `/health` ping first, Cloud Run
+/// `Ready` read as fallback.
 ///
-/// Reads the latest-revision `Ready` condition WITHOUT calling `{workers}/health`,
-/// so the scale-to-zero service is never woken:
-/// - `Ready=True`  → `dormant` (ready to serve, possibly cold — healthy, never red).
-/// - `Ready=False` → `down` (deployment really broken).
-/// - token fetch / request / parse failure → `down` (safe default, no detail leak).
+/// - `{workers}/health` answers `2xx` → `ok` (serving; wakes the service).
+/// - ping fails/times out (cold or unreachable) → read the Cloud Run Admin `Ready`
+///   condition out-of-band: `Ready=True` → `dormant` (ready but cold, healthy),
+///   `Ready=False` or any failure → `down` (safe default, no detail leak).
 async fn probe_workers(state: Arc<AppState>) -> DepStatus {
     let t0 = Instant::now();
-    let Ok((bearer, _)) = state.run_token_provider.get_or_refresh().await else {
-        tracing::warn!(
-            event = "status.probe.down",
-            dep = "workers",
-            reason = "run_token_failed"
-        );
+
+    if workers_health_serving(&state).await {
         return DepStatus {
-            status: "down",
+            status: "ok",
             latency_ms: elapsed_ms(t0),
         };
-    };
+    }
 
-    let Some(body) = fetch_cloud_run_service(&state, &bearer).await else {
-        tracing::warn!(
-            event = "status.probe.down",
-            dep = "workers",
-            reason = "cloud_run_unreachable"
-        );
-        return DepStatus {
-            status: "down",
-            latency_ms: elapsed_ms(t0),
-        };
-    };
-
-    let status = workers_status_from_ready(&body);
+    let status = workers_ready_status(&state).await;
     if status == "down" {
         tracing::warn!(
             event = "status.probe.down",
@@ -224,6 +219,48 @@ async fn probe_workers(state: Arc<AppState>) -> DepStatus {
         status,
         latency_ms: elapsed_ms(t0),
     }
+}
+
+/// Live liveness ping to `{workers}/health`; `true` iff it answers `2xx` in time.
+///
+/// Bounded by `WORKERS_HEALTH_PROBE_TIMEOUT` so a cold service falls through to the
+/// Cloud Run `Ready` read instead of stalling the whole probe. The ID token is
+/// exposed only at the `.bearer_auth(…)` call site (secret-hygiene rule).
+async fn workers_health_serving(state: &AppState) -> bool {
+    let Ok(bearer) = state.workers_id_token_provider.fetch_id_token().await else {
+        return false;
+    };
+    let url = format!("{}/health", state.config.workers_url.trim_end_matches('/'));
+    let request = state
+        .http
+        .get(url)
+        .bearer_auth(bearer.expose_secret())
+        .send();
+    matches!(
+        tokio::time::timeout(WORKERS_HEALTH_PROBE_TIMEOUT, request).await,
+        Ok(Ok(response)) if response.status().is_success()
+    )
+}
+
+/// Out-of-band Cloud Run `Ready` read → `dormant` (Ready=True) / `down` (else).
+async fn workers_ready_status(state: &AppState) -> &'static str {
+    let Ok((bearer, _)) = state.run_token_provider.get_or_refresh().await else {
+        tracing::warn!(
+            event = "status.probe.down",
+            dep = "workers",
+            reason = "run_token_failed"
+        );
+        return "down";
+    };
+    let Some(body) = fetch_cloud_run_service(state, &bearer).await else {
+        tracing::warn!(
+            event = "status.probe.down",
+            dep = "workers",
+            reason = "cloud_run_unreachable"
+        );
+        return "down";
+    };
+    workers_status_from_ready(&body)
 }
 
 /// GET the Cloud Run service descriptor; returns the parsed JSON, or `None` on any failure.

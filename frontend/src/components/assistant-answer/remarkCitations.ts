@@ -11,6 +11,10 @@
  *   superscripts. Any other [token] is left as literal text.
  * - Numbering follows first appearance of *distinct* paths; the same path
  *   reuses its number.
+ * - #345: a single bracket may group sources `[a, b]` (canon grounding makes the
+ *   model do this). The content is split on `,`; each known piece emits its own
+ *   superscript. Unknown pieces are dropped; if none are known the whole bracket
+ *   stays literal.
  * - The superscript is emitted as an mdast `link` to the internal fragment
  *   `#src-{n}` — a same-document anchor with no URL scheme, so it survives
  *   rehype-sanitize without reopening the scheme allowlist. The link carries an
@@ -58,15 +62,19 @@ function splitTextNode(
   let lastIndex = 0;
 
   for (const match of value.matchAll(CITATION_PATTERN)) {
-    const sourcePath = match[1];
-    const citationNumber = numberFor(sourcePath);
-    if (citationNumber === undefined) continue;
+    const citationNumbers = match[1]
+      .split(",")
+      .map((piece) => numberFor(piece.trim()))
+      .filter((number): number is number => number !== undefined);
+    if (citationNumbers.length === 0) continue;
 
     const matchStart = match.index;
     if (matchStart > lastIndex) {
       nodes.push({ type: "text", value: value.slice(lastIndex, matchStart) });
     }
-    nodes.push(buildSuperscript(citationNumber));
+    for (const citationNumber of citationNumbers) {
+      nodes.push(buildSuperscript(citationNumber));
+    }
     lastIndex = matchStart + match[0].length;
   }
 

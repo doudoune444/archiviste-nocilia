@@ -65,25 +65,35 @@ const ERROR_MESSAGE_FRENCH =
 /**
  * #355: sentinel that prefixes the structured follow-up block in the streamed
  * answer. Workers stream tokens verbatim (#354), so this raw block reaches the
- * client; the authoritative list comes from `done.followups`. Kept byte-for-byte
- * in sync with FOLLOWUP_MARKER in workers/.../generate/parser.py.
+ * client; the authoritative list comes from `done.followups`. Kept in sync with
+ * FOLLOWUP_MARKER in workers/.../generate/parser.py.
  */
-const FOLLOWUP_MARKER = "---SUIVI---";
+export const FOLLOWUP_MARKER = "---SUIVI---";
+
+// #345 BUG A: mistral-small emits variants of the sentinel. Match the first whole
+// line that, ignoring surrounding spaces and -/*/_ runs, reduces to the token SUIVI
+// — mirrors _FOLLOWUP_MARKER_RE in parser.py. The whole-line anchor is critical: the
+// French word "suivi" mid-sentence must never trigger a cut.
+const FOLLOWUP_MARKER_LINE = /^[ \t]*[-*_]*[ \t]*SUIVI[ \t]*[-*_]*[ \t]*$/im;
+// A markdown horizontal rule the model may emit just before the marker line.
+const TRAILING_RULE = /\n[ \t]*[-*_]{3,}[ \t]*$/;
+// A partial marker tail still streaming on the last line (e.g. "\n---", "\n--- SUI",
+// "\nSUIV"): every char of SUIVI is optional so any prefix is trimmed pre-emptively.
+const PARTIAL_MARKER_TAIL =
+  /\n[ \t]*[-*_]*[ \t]*(?:S(?:U(?:I(?:V(?:I)?)?)?)?)?[ \t]*[-*_]*[ \t]*$/i;
 
 /**
  * Hides the follow-up sentinel block from the displayed answer. Cuts at the full
- * marker once it has arrived; while streaming, also trims a trailing partial
- * marker prefix so the sentinel never flashes mid-stream.
+ * (tolerant) marker once it has arrived; while streaming, also trims a trailing
+ * partial marker tail so the sentinel never flashes mid-stream.
  */
-function stripFollowupBlock(text: string): string {
-  const markerIndex = text.indexOf(FOLLOWUP_MARKER);
-  if (markerIndex !== -1) return text.slice(0, markerIndex).trimEnd();
-  for (let length = FOLLOWUP_MARKER.length - 1; length > 0; length -= 1) {
-    if (text.endsWith(FOLLOWUP_MARKER.slice(0, length))) {
-      return text.slice(0, text.length - length).trimEnd();
-    }
+export function stripFollowupBlock(text: string): string {
+  const match = FOLLOWUP_MARKER_LINE.exec(text);
+  if (match) {
+    const body = text.slice(0, match.index).trimEnd();
+    return body.replace(TRAILING_RULE, "").trimEnd();
   }
-  return text;
+  return text.replace(PARTIAL_MARKER_TAIL, "").trimEnd();
 }
 
 /** Shared Message type (CHAT-004): role + text are filled here; other fields by parallel tickets. */

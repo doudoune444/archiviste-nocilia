@@ -315,6 +315,62 @@ describe("AssistantAnswer — superscript citations (#327)", () => {
     expect(container.textContent).toContain("[chemin/inconnu.md]");
   });
 
+  it("renders TWO superscripts for a comma-grouped bracket [a, b] (#345)", () => {
+    // AC #345 BUG B: canon grounding makes the model group sources in one bracket.
+    // Both known paths must each get their panel-order superscript ¹².
+    render(
+      <AssistantAnswer
+        text={"affirmation [lore/a.md, lore/b.md]"}
+        citations={[
+          { source_path: "lore/a.md", chunk_ords: [0] },
+          { source_path: "lore/b.md", chunk_ords: [1] },
+        ]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const sups = container.querySelectorAll("sup.fn");
+    expect(Array.from(sups, (s) => s.textContent)).toEqual(["1", "2"]);
+    // The raw grouped bracket must not leak as literal text.
+    expect(container.textContent).not.toContain("[lore/a.md, lore/b.md]");
+  });
+
+  it("renders only the known superscript for a partially-known group [a, unknown] (#345)", () => {
+    // AC #345: unknown pieces inside a group are dropped; only ¹ remains.
+    render(
+      <AssistantAnswer
+        text={"affirmation [lore/a.md, lore/inconnu.md]"}
+        citations={[{ source_path: "lore/a.md", chunk_ords: [0] }]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    const sups = container.querySelectorAll("sup.fn");
+    expect(Array.from(sups, (s) => s.textContent)).toEqual(["1"]);
+  });
+
+  it("leaves a fully-unknown grouped bracket literal (#345)", () => {
+    // AC #345: no known piece → the whole bracket stays as literal text.
+    render(
+      <AssistantAnswer
+        text={"affirmation [x/inconnu.md, y/inconnu.md]"}
+        citations={[{ source_path: "lore/a.md", chunk_ords: [0] }]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    expect(container.querySelectorAll("sup.fn")).toHaveLength(0);
+    expect(container.textContent).toContain("[x/inconnu.md, y/inconnu.md]");
+  });
+
+  it("keeps a single [a] bracket as one superscript (#345 regression)", () => {
+    render(
+      <AssistantAnswer
+        text={"fait [lore/a.md]"}
+        citations={[{ source_path: "lore/a.md", chunk_ords: [0] }]}
+      />
+    );
+    const container = screen.getByTestId("assistant-answer");
+    expect(container.querySelectorAll("sup.fn")).toHaveLength(1);
+  });
+
   it("does not turn a bracketed token into an executable link even when it looks like a scheme", () => {
     // AC (security regression): [javascript:alert(1)] in the text — even if it
     // somehow matched a citation — must never yield an executable link.

@@ -17,7 +17,19 @@ logger = structlog.get_logger()
 # instruction text); extract_followups splits on it here. A test pins the marker into
 # the prompt so the two stay in sync.
 FOLLOWUP_MARKER = "---SUIVI---"
-_FOLLOWUP_LINE_PREFIX = "- "
+
+# #345 BUG A: mistral-small is unreliable about the exact sentinel. Match the FIRST
+# whole line that, ignoring surrounding spaces and -/*/_ runs, reduces to the token
+# SUIVI. The WHOLE-LINE anchor is critical: the French word "suivi" mid-sentence must
+# never trigger a cut.
+_FOLLOWUP_MARKER_RE = re.compile(
+    r"^[ \t]*[-*_]*[ \t]*SUIVI[ \t]*[-*_]*[ \t]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+# A markdown horizontal rule the model may emit just before the marker line.
+_TRAILING_RULE_RE = re.compile(r"\n[ \t]*[-*_]{3,}[ \t]*$")
+# Leading bullet (-, *, •) + spaces on a follow-up line.
+_FOLLOWUP_BULLET_RE = re.compile(r"^[-*•]+[ \t]*")
 
 
 def extract_citations(answer: str, chunks: list[Chunk]) -> list[Citation]:
@@ -28,12 +40,17 @@ def extract_citations(answer: str, chunks: list[Chunk]) -> list[Citation]:
 
     seen: dict[str, list[int]] = {}
     for raw_match in _CITATION_RE.findall(answer):
-        candidate = raw_match.strip()
-        if candidate not in known:
-            logger.warning("citation_unknown_source", source_path=candidate)
-            continue
-        if candidate not in seen:
-            seen[candidate] = list(known[candidate])
+        # #345 BUG B: a single bracket may group sources `[a, b]`; split on comma and
+        # match each piece. Security unchanged — only retrieved paths count.
+        for piece in raw_match.split(","):
+            candidate = piece.strip()
+            if not candidate:
+                continue
+            if candidate not in known:
+                logger.warning("citation_unknown_source", source_path=candidate)
+                continue
+            if candidate not in seen:
+                seen[candidate] = list(known[candidate])
     return [Citation(source_path=p, chunk_ords=ords) for p, ords in seen.items()]
 
 
@@ -42,20 +59,20 @@ def extract_followups(answer: str) -> tuple[str, list[str]]:
 
     Mirror of extract_citations: a post-hoc parse of the LLM output. The canon prompt
     asks the model to end with the marker then one dash-prefixed question per line.
+    Matching is tolerant (#345): the marker is the first whole line reducing to SUIVI.
     When the marker is absent the body is returned unchanged with an empty list.
     """
-    marker_index = answer.find(FOLLOWUP_MARKER)
-    if marker_index == -1:
+    match = _FOLLOWUP_MARKER_RE.search(answer)
+    if match is None:
         return answer, []
 
-    body = answer[:marker_index].rstrip()
-    block = answer[marker_index + len(FOLLOWUP_MARKER) :]
+    body = answer[: match.start()].rstrip()
+    body = _TRAILING_RULE_RE.sub("", body).rstrip()
+    block = answer[match.end() :]
     followups: list[str] = []
     for raw_line in block.splitlines():
-        line = raw_line.strip()
+        line = _FOLLOWUP_BULLET_RE.sub("", raw_line.strip()).strip()
         if not line:
             continue
-        if line.startswith(_FOLLOWUP_LINE_PREFIX):
-            line = line[len(_FOLLOWUP_LINE_PREFIX) :].strip()
         followups.append(line)
     return body, followups

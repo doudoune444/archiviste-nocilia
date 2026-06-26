@@ -208,6 +208,26 @@ describe("Métriques page — Conversations & Dépendances cards (#350)", () => 
   });
 });
 
+describe("Métriques page — Coûts · 30 j card (#349)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asserts the per-service cost lines from the payload", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText("Workers (LLM Mistral)")).toBeInTheDocument();
+    expect(within(card).getByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(card).getByText("GCS")).toBeInTheDocument();
+  });
+
+  it("renders the period total in the card head", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText(/4,82\s*€/)).toBeInTheDocument();
+  });
+});
+
 describe("Métriques page — independent cards (#347 AC indépendance)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

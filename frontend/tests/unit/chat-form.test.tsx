@@ -537,6 +537,86 @@ describe("ChatForm follow-up stream masking (#355)", () => {
   });
 });
 
+describe("ChatForm committed answer — citations + follow-ups together (#345)", () => {
+  it("renders both multi-source superscript citations and follow-up pills", () => {
+    const { container } = render(
+      <ChatForm
+        initialMessages={[
+          {
+            role: "assistant",
+            text: "Une affirmation étayée [lore/a.md, lore/b.md].",
+            citations: [
+              { source_path: "lore/a.md", chunk_ords: [0] },
+              { source_path: "lore/b.md", chunk_ords: [1] },
+            ],
+            followups: ["Et ensuite ?", "Pourquoi ?"],
+          },
+        ]}
+      />
+    );
+
+    // BUG B: the comma-grouped bracket yields two superscripts ¹².
+    const sups = container.querySelectorAll("sup.fn");
+    expect(Array.from(sups, (s) => s.textContent)).toEqual(["1", "2"]);
+
+    // #355 follow-up pills render alongside.
+    expect(
+      screen.getByRole("button", { name: "Et ensuite ?" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Pourquoi ?" })
+    ).toBeInTheDocument();
+  });
+});
+
+describe("ChatForm follow-up tolerant marker masking (#345)", () => {
+  it("masks a tolerant '--- SUIVI ---' variant in the committed answer", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              'event: meta\ndata: {"mode":"canon","conversation_id":"c1","request_id":"r1"}\n\n'
+            )
+          );
+          controller.enqueue(
+            encoder.encode(
+              'event: token\ndata: {"text":"Corps tolérant.\\n--- SUIVI ---\\n- Caché ?"}\n\n'
+            )
+          );
+          controller.enqueue(
+            encoder.encode(
+              'event: done\ndata: {"citations":[],"usage":{},"retrieve_ms":0,"llm_ms":0,"followups":["Caché ?"]}\n\n'
+            )
+          );
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } }
+    );
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(response));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+    fireEvent.change(textarea, { target: { value: "Ma question" } });
+
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-answer")).toBeInTheDocument();
+    });
+    const answer = screen.getByTestId("assistant-answer");
+    expect(answer.textContent).toContain("Corps tolérant.");
+    expect(answer.textContent).not.toContain("SUIVI");
+  });
+});
+
 describe("ChatForm double-submit guard (#249)", () => {
   it("disables the textarea and ignores Enter while a response is streaming", async () => {
     const mockFetch = vi.fn().mockImplementationOnce(() => makePendingResponse());

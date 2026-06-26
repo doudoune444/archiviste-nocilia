@@ -3,6 +3,18 @@
   border: 1px solid var(--color-border);
   border-radius: var(--metric-card-radius, 14px);
   padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The card stretches to the (tall) Ragas row; center the dependency list in the
+ * leftover space below the title, like the Conversations card and the v03 mockup
+ * (.mc-deps .card-body{justify-content:center}) — instead of clinging to an edge. */
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .title {

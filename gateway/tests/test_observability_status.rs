@@ -450,11 +450,14 @@ async fn ac11_probe_error_down_no_detail_in_body() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-12 (#253): workers probe reads the Cloud Run Admin `Ready` condition
-//   Ready=True  → dormant (healthy, scale-to-zero, never red)
-//   Ready=False → down
-//   API unreachable / timeout → down (robust, never panics)
-// The probe NEVER calls {workers}/health, so it cannot wake the service.
+// AC-12 (#253 + #346 follow-up): workers probe — live /health ping, Ready fallback.
+//   {workers}/health 2xx → ok (serving)
+//   ping fails/cold → Cloud Run Admin `Ready` read:
+//     Ready=True  → dormant (healthy, scale-to-zero, never red)
+//     Ready=False → down
+//   token/API unreachable / timeout → down (robust, never panics)
+// The dormant/down cases below keep workers_url at 127.0.0.1:1 (unreachable), so
+// the /health ping fails fast and the probe exercises the Ready fallback.
 // ---------------------------------------------------------------------------
 
 /// OAuth access-token body served by the mocked metadata endpoint (no real secret).
@@ -562,6 +565,33 @@ async fn ac13_cloud_run_unreachable_is_down() {
     assert!(json.as_object().unwrap().contains_key("dependencies"));
     let body_str = json.to_string();
     assert!(!body_str.contains(&server.url()), "no host leak in body");
+}
+
+/// #346 follow-up: a live `{workers}/health` 2xx → workers.status="ok" (Opérationnel).
+///
+/// Points `workers_url` at a mock serving `/health`; the probe's liveness ping
+/// succeeds and short-circuits before the Cloud Run `Ready` fallback.
+#[tokio::test]
+async fn workers_health_2xx_is_ok() {
+    let mut server = mockito::Server::new_async().await;
+    let _health = server
+        .mock("GET", "/health")
+        .with_status(200)
+        .create_async()
+        .await;
+
+    // make_app_state injects a stub (always-valid) workers ID token, so the ping's
+    // bearer fetch succeeds without a metadata server; workers_url = the mock.
+    let state = make_app_state(&server.url());
+    let app = router(state);
+    let resp = get_anon(app, "/v1/status").await;
+    assert_eq!(resp.status(), StatusCode::OK, "must be 200");
+
+    let json = body_json(resp).await;
+    assert_eq!(
+        json["dependencies"]["workers"]["status"], "ok",
+        "workers /health 2xx → ok (Opérationnel)"
+    );
 }
 
 // ---------------------------------------------------------------------------

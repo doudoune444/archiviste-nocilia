@@ -168,12 +168,14 @@ export function DepHealth() {
   return (
     <article className={styles.card} aria-label="Dépendances">
       <h2 className={styles.title}>Dépendances</h2>
-      <div className={styles.deps}>
-        <DepRow label="PostgreSQL" status={result.postgres} />
-        <DepRow label="GCS" status={result.gcs} />
-        <WorkersRow status={result.workers} />
+      <div className={styles.body}>
+        <div className={styles.deps}>
+          <DepRow label="PostgreSQL" status={result.postgres} />
+          <DepRow label="GCS" status={result.gcs} />
+          <WorkersRow status={result.workers} />
+        </div>
+        {isWorkersDormant && <p className={styles.hint}>{SCALE_TO_ZERO_HINT}</p>}
       </div>
-      {isWorkersDormant && <p className={styles.hint}>{SCALE_TO_ZERO_HINT}</p>}
     </article>
   );
 }

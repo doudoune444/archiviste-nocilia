@@ -115,6 +115,34 @@ describe("consumeSseStream()", () => {
     }
   });
 
+  // #355: done chunk exposes the structured follow-ups emitted by #354
+  it("exposes followups from the done chunk", async () => {
+    const doneWithFollowups =
+      'event: done\ndata: {"citations":[],"usage":{},"retrieve_ms":0,"llm_ms":0,"followups":["Question A ?","Question B ?"]}\n\n';
+    const raw = META_EVENT + doneWithFollowups;
+    const stream = makeStream([enc(raw)]);
+    const chunks = await collectChunks(stream);
+
+    const done = chunks[1];
+    expect(done?.kind).toBe("done");
+    if (done?.kind === "done") {
+      expect(done.followups).toEqual(["Question A ?", "Question B ?"]);
+    }
+  });
+
+  // #355: a done chunk without followups defaults to an empty list (no pills)
+  it("defaults followups to an empty array when the field is absent", async () => {
+    const raw = META_EVENT + DONE_EVENT;
+    const stream = makeStream([enc(raw)]);
+    const chunks = await collectChunks(stream);
+
+    const done = chunks[1];
+    expect(done?.kind).toBe("done");
+    if (done?.kind === "done") {
+      expect(done.followups).toEqual([]);
+    }
+  });
+
   // AC-3: error event yields a StreamError chunk (distinct from done)
   it("yields a stream-error chunk on an SSE error event", async () => {
     const raw = META_EVENT + ERROR_EVENT;

@@ -62,6 +62,30 @@ const COMPOSER_HELP = "Entrée pour envoyer · Maj+Entrée pour une nouvelle lig
 const ERROR_MESSAGE_FRENCH =
   "Une erreur est survenue. Veuillez réessayer dans quelques instants.";
 
+/**
+ * #355: sentinel that prefixes the structured follow-up block in the streamed
+ * answer. Workers stream tokens verbatim (#354), so this raw block reaches the
+ * client; the authoritative list comes from `done.followups`. Kept byte-for-byte
+ * in sync with FOLLOWUP_MARKER in workers/.../generate/parser.py.
+ */
+const FOLLOWUP_MARKER = "---SUIVI---";
+
+/**
+ * Hides the follow-up sentinel block from the displayed answer. Cuts at the full
+ * marker once it has arrived; while streaming, also trims a trailing partial
+ * marker prefix so the sentinel never flashes mid-stream.
+ */
+function stripFollowupBlock(text: string): string {
+  const markerIndex = text.indexOf(FOLLOWUP_MARKER);
+  if (markerIndex !== -1) return text.slice(0, markerIndex).trimEnd();
+  for (let length = FOLLOWUP_MARKER.length - 1; length > 0; length -= 1) {
+    if (text.endsWith(FOLLOWUP_MARKER.slice(0, length))) {
+      return text.slice(0, text.length - length).trimEnd();
+    }
+  }
+  return text;
+}
+
 /** Shared Message type (CHAT-004): role + text are filled here; other fields by parallel tickets. */
 export interface Message {
   role: "user" | "assistant";
@@ -69,6 +93,8 @@ export interface Message {
   mode?: string;
   citations?: unknown[];
   conversationId?: string;
+  /** #355: structured follow-up questions rendered as clickable pills. */
+  followups?: string[];
 }
 
 interface ChatFormProps {
@@ -134,6 +160,7 @@ export function ChatForm({
       let capturedMode: string | undefined;
       let capturedCitations: unknown[] | undefined;
       let capturedConversationId: string | undefined;
+      let capturedFollowups: string[] | undefined;
 
       for await (const chunk of consumeSseStream(body)) {
         if (chunk.kind === "meta") {
@@ -149,6 +176,8 @@ export function ChatForm({
           break;
         } else if (chunk.kind === "done") {
           capturedCitations = chunk.citations.length > 0 ? chunk.citations : undefined;
+          capturedFollowups =
+            chunk.followups.length > 0 ? chunk.followups : undefined;
           break;
         }
       }
@@ -167,14 +196,17 @@ export function ChatForm({
         setCurrentConversationId(capturedConversationId);
       }
 
+      const answerBody = stripFollowupBlock(accumulated);
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: accumulated || ERROR_MESSAGE_FRENCH,
+          text: answerBody || ERROR_MESSAGE_FRENCH,
           mode: capturedMode,
           citations: capturedCitations,
           conversationId: capturedConversationId,
+          followups: capturedFollowups,
         },
       ]);
 
@@ -266,7 +298,11 @@ export function ChatForm({
     <section className={styles.page} data-state={formState}>
       {hasConversation ? (
         <div className={styles.thread}>
-          <ThreadMessages messages={messages} />
+          <ThreadMessages
+            messages={messages}
+            onFollowupClick={sendQuery}
+            isStreaming={isStreaming}
+          />
           {isStreaming && (
             <div className={`${styles.turn} ${styles.turnAssistant}`}>
               <div className={styles.turnInner}>
@@ -284,7 +320,7 @@ export function ChatForm({
                   aria-label="Réponse en cours"
                 >
                   {hasFirstToken ? (
-                    streamingText
+                    stripFollowupBlock(streamingText ?? "")
                   ) : (
                     <span className={styles.streamingIndicator} aria-hidden="true" />
                   )}
@@ -347,16 +383,27 @@ export function ChatForm({
 
 interface ThreadMessagesProps {
   messages: Message[];
+  onFollowupClick: (query: string) => Promise<void>;
+  isStreaming: boolean;
 }
 
-function ThreadMessages({ messages }: ThreadMessagesProps) {
+function ThreadMessages({
+  messages,
+  onFollowupClick,
+  isStreaming,
+}: ThreadMessagesProps) {
   return (
     <>
       {messages.map((message, index) =>
         message.role === "user" ? (
           <UserTurn key={index} text={message.text} />
         ) : (
-          <AssistantTurn key={index} message={message} />
+          <AssistantTurn
+            key={index}
+            message={message}
+            onFollowupClick={onFollowupClick}
+            isStreaming={isStreaming}
+          />
         )
       )}
     </>
@@ -386,7 +433,17 @@ function UserTurn({ text }: { text: string }) {
   );
 }
 
-function AssistantTurn({ message }: { message: Message }) {
+interface AssistantTurnProps {
+  message: Message;
+  onFollowupClick: (query: string) => Promise<void>;
+  isStreaming: boolean;
+}
+
+function AssistantTurn({
+  message,
+  onFollowupClick,
+  isStreaming,
+}: AssistantTurnProps) {
   return (
     <div className={`${styles.turn} ${styles.turnAssistant}`}>
       <div className={styles.turnInner}>
@@ -407,6 +464,11 @@ function AssistantTurn({ message }: { message: Message }) {
         {/* CHAT-003: committed assistant answers render as sanitized Markdown.
             data-testid="assistant-answer" lives on AssistantAnswer's container. */}
         <AssistantAnswer text={message.text} citations={message.citations} />
+        <Followups
+          followups={message.followups}
+          onFollowupClick={onFollowupClick}
+          isStreaming={isStreaming}
+        />
         {message.conversationId !== undefined && (
           <SignalForm
             conversationId={message.conversationId}
@@ -415,6 +477,36 @@ function AssistantTurn({ message }: { message: Message }) {
         )}
       </div>
     </div>
+  );
+}
+
+interface FollowupsProps {
+  followups: string[] | undefined;
+  onFollowupClick: (query: string) => Promise<void>;
+  isStreaming: boolean;
+}
+
+/**
+ * #355: dynamic follow-up questions (from `done.followups`) rendered as pills.
+ * A click reuses the single send path `sendQuery` (#249) — no send logic here.
+ */
+function Followups({ followups, onFollowupClick, isStreaming }: FollowupsProps) {
+  if (followups === undefined || followups.length === 0) return null;
+  return (
+    <ul className={styles.followups} aria-label="Questions de suivi">
+      {followups.map((followup) => (
+        <li key={followup}>
+          <button
+            type="button"
+            className={styles.followup}
+            disabled={isStreaming}
+            onClick={() => void onFollowupClick(followup)}
+          >
+            {followup}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

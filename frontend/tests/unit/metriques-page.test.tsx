@@ -10,7 +10,7 @@
  * global `fetch` so it lands in a deterministic rendered state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 
 vi.mock("next/headers", () => ({
@@ -108,6 +108,46 @@ describe("Métriques page shell (#347)", () => {
         /Gateway Rust \(Axum\) · Workers Python \(FastAPI \/ LangChain\) · Persistence Markdown sur GCS/
       )
     ).toBeInTheDocument();
+  });
+});
+
+describe("Métriques page — Qualité · Ragas card (#348)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders the four Ragas indicator labels", async () => {
+    await renderPage();
+    expect(screen.getByText("Fidélité")).toBeInTheDocument();
+    expect(screen.getByText("Pertinence")).toBeInTheDocument();
+    expect(screen.getByText("Précision du contexte")).toBeInTheDocument();
+    expect(screen.getByText("Couverture du contexte")).toBeInTheDocument();
+  });
+
+  it("renders the threshold legend verbatim", async () => {
+    await renderPage();
+    expect(screen.getByText("≥ 0.85 bon")).toBeInTheDocument();
+    expect(screen.getByText("0.70–0.85 correct")).toBeInTheDocument();
+    expect(screen.getByText("< 0.70 faible")).toBeInTheDocument();
+  });
+
+  it("renders the golden set version and last-eval date from the payload", async () => {
+    await renderPage();
+    expect(screen.getByText("v3")).toBeInTheDocument();
+    expect(screen.getByText("24 juin 2026")).toBeInTheDocument();
+  });
+
+  it("exposes an indicator tooltip whose prose names the metric", async () => {
+    await renderPage();
+    const trigger = screen.getByRole("button", { name: /fidélité/i });
+    fireEvent.focus(trigger);
+    const tooltip = document.getElementById(
+      trigger.getAttribute("aria-describedby") as string
+    );
+    expect(tooltip).toHaveTextContent("Fidélité (faithfulness)");
+    expect(tooltip).toHaveTextContent(
+      "La réponse colle-t-elle aux sources récupérées, sans rien inventer ?"
+    );
   });
 });
 

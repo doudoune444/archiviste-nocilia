@@ -1,7 +1,16 @@
+/*
+ * Qualité · Ragas card (#252, reworked for #348).
+ *
+ * Brand tokens come from tokens.css. The functional status colours
+ * (--status-good / --status-warn / --status-bad) are page-scoped overrides
+ * defined on `/metriques` (.page in page.module.css); this card consumes them
+ * via the band→colour mapping below, keyed on the data-band attribute.
+ */
+
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--metric-card-radius, 14px);
   padding: 1.25rem 1.5rem;
 }
 
@@ -9,39 +18,25 @@
   font-size: 1rem;
   font-weight: 600;
   color: var(--color-text-muted);
-  margin-bottom: 0.75rem;
+  margin-bottom: 1rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
-.meta {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  margin-bottom: 1.25rem;
-  font-family: var(--font-mono);
-}
-
-.finishedAt {
-  color: var(--color-text-muted);
-}
-
-.gauges {
+.rows {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 
-.gauge {
+.row {
   display: grid;
-  grid-template-columns: 10rem 1fr 3.5rem;
+  grid-template-columns: 12rem 3.5rem 1fr;
   align-items: center;
   gap: 0.75rem;
 }
 
-.gaugeLabel {
+.rowName {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -49,25 +44,86 @@
   color: var(--color-text);
 }
 
-.gaugeBar {
+.rowValue {
+  font-size: 0.875rem;
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--band-color);
+}
+
+.rowBar {
   height: 0.5rem;
   background: var(--color-border);
   border-radius: 4px;
   overflow: hidden;
 }
 
-.gaugeFill {
+.rowBarFill {
   height: 100%;
-  background: var(--color-accent);
   border-radius: 4px;
+  background: var(--band-color);
   transition: width 0.3s ease;
 }
 
-.gaugeValue {
-  font-size: 0.875rem;
-  font-family: var(--font-mono);
+/* band → functional status colour (page-scoped overrides) */
+.rowValue[data-band="good"],
+.rowBarFill[data-band="good"],
+.legendSwatch[data-band="good"] {
+  --band-color: var(--status-good);
+}
+.rowValue[data-band="fair"],
+.rowBarFill[data-band="fair"],
+.legendSwatch[data-band="fair"] {
+  --band-color: var(--status-warn);
+}
+.rowValue[data-band="weak"],
+.rowBarFill[data-band="weak"],
+.legendSwatch[data-band="weak"] {
+  --band-color: var(--status-bad);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.legendEntry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legendSwatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  display: inline-block;
+  background: var(--band-color);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.5rem;
+  margin-top: 1.25rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.metaLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.metaValue {
   color: var(--color-text);
-  text-align: right;
+  font-weight: 600;
+  font-family: var(--font-mono);
 }
 
 .emptyState {
@@ -89,12 +145,16 @@
 }
 
 @media (max-width: 600px) {
-  .gauge {
+  .row {
     grid-template-columns: 1fr 3rem;
     grid-template-rows: auto auto;
   }
 
-  .gaugeLabel {
+  .rowName {
+    grid-column: 1 / -1;
+  }
+
+  .rowBar {
     grid-column: 1 / -1;
   }
 }

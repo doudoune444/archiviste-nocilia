@@ -108,12 +108,9 @@ describe("RagasGauges — readable French date", () => {
   });
 });
 
-describe("RagasGauges — version hash removed", () => {
-  it("never renders the golden_set_version hash", () => {
-    render(<RagasGauges quality={OK_QUALITY} />);
-    expect(screen.queryByText(/v1\.2\.3/)).not.toBeInTheDocument();
-  });
-});
+// NOTE: issue #348 reintroduces the golden-set version in the card meta (the
+// #252 "version hash removed" requirement no longer holds). Its presence is now
+// asserted in ragas-card.test.tsx; the removed block lived here.
 
 describe("RagasGauges — info tooltips", () => {
   it("exposes an info tooltip trigger for each indicator and the date", () => {

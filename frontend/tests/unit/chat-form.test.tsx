@@ -58,6 +58,39 @@ function makePendingResponse(): Promise<Response> {
   });
 }
 
+/**
+ * SSE response whose token stream carries the raw `---SUIVI---` sentinel block
+ * (workers stream tokens verbatim, #354) and whose done event carries the
+ * structured followups. Mirrors the real worker wire output.
+ */
+function makeSseResponseWithFollowups(): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          'event: meta\ndata: {"mode":"canon","conversation_id":"c1","request_id":"r1"}\n\n'
+        )
+      );
+      controller.enqueue(
+        encoder.encode(
+          'event: token\ndata: {"text":"Corps de réponse.\\n---SUIVI---\\n- Suite A ?\\n- Suite B ?"}\n\n'
+        )
+      );
+      controller.enqueue(
+        encoder.encode(
+          'event: done\ndata: {"citations":[],"usage":{},"retrieve_ms":0,"llm_ms":0,"followups":["Suite A ?","Suite B ?"]}\n\n'
+        )
+      );
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -333,6 +366,174 @@ describe("ChatForm assistant turn header (#326)", () => {
     const header = screen.getByTestId("turn-header");
     expect(header).toBeInTheDocument();
     expect(header.textContent).toContain("Vous");
+  });
+});
+
+describe("ChatForm follow-up pills (#355)", () => {
+  it("renders followups as buttons under the assistant turn", () => {
+    render(
+      <ChatForm
+        initialMessages={[
+          {
+            role: "assistant",
+            text: "Une réponse.",
+            followups: ["Comment ça marche ?", "Et après ?"],
+          },
+        ]}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Comment ça marche ?" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Et après ?" })
+    ).toBeInTheDocument();
+  });
+
+  it("does not render any follow-up pill when followups is empty or absent", () => {
+    render(
+      <ChatForm
+        initialMessages={[
+          { role: "assistant", text: "Sans suivi.", followups: [] },
+          { role: "assistant", text: "Pas de champ." },
+        ]}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /\?$/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it("relaunches a query through the chat stream path when a follow-up is clicked", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(makeSseResponse()));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(
+      <ChatForm
+        initialMessages={[
+          {
+            role: "assistant",
+            text: "Une réponse.",
+            followups: ["Et après ?"],
+          },
+        ]}
+      />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Et après ?" }));
+    });
+
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/chat/stream",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "Et après ?" }),
+      })
+    );
+  });
+});
+
+describe("ChatForm follow-up streaming consumption (#355)", () => {
+  it("attaches done.followups to the committed assistant turn as pills", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        Promise.resolve(makeSseResponseWithFollowups())
+      );
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+    fireEvent.change(textarea, { target: { value: "Ma question" } });
+
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Suite A ?" })
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Suite B ?" })
+    ).toBeInTheDocument();
+  });
+
+  it("never shows the ---SUIVI--- marker or its block in the committed answer", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        Promise.resolve(makeSseResponseWithFollowups())
+      );
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+    fireEvent.change(textarea, { target: { value: "Ma question" } });
+
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-answer")).toBeInTheDocument();
+    });
+    const answer = screen.getByTestId("assistant-answer");
+    expect(answer.textContent).toContain("Corps de réponse.");
+    expect(answer.textContent).not.toContain("---SUIVI---");
+    expect(answer.textContent).not.toContain("Suite A ?");
+  });
+});
+
+describe("ChatForm follow-up stream masking (#355)", () => {
+  it("masks the ---SUIVI--- block in the live streaming view before done arrives", async () => {
+    const encoder = new TextEncoder();
+    // Open stream: emits meta + a token carrying the raw sentinel block, then
+    // stays open (no done) so the assertion observes the mid-stream view.
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              'event: meta\ndata: {"mode":"canon","conversation_id":"c1","request_id":"r1"}\n\n'
+            )
+          );
+          controller.enqueue(
+            encoder.encode(
+              'event: token\ndata: {"text":"Texte visible.\\n---SUIVI---\\n- Caché ?"}\n\n'
+            )
+          );
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } }
+    );
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(response));
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(<ChatForm />);
+    const textarea = screen.getByRole("textbox", { name: /votre question/i });
+    fireEvent.change(textarea, { target: { value: "Ma question" } });
+
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    await waitFor(() => {
+      const streaming = screen.getByTestId("streaming-answer");
+      expect(streaming.textContent).toContain("Texte visible.");
+    });
+    const streaming = screen.getByTestId("streaming-answer");
+    expect(streaming.textContent).not.toContain("---SUIVI---");
+    expect(streaming.textContent).not.toContain("Caché ?");
   });
 });
 

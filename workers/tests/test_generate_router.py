@@ -166,6 +166,41 @@ async def test_nominal_response_shape() -> None:
 
 
 @pytest.mark.asyncio
+async def test_canon_answer_strips_sentinel_followup_block() -> None:
+    # #354: blocking canon path removes the sentinel block from the emitted body; the
+    # body keeps its inline citation, while the sentinel block no longer leaks into answer.
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.72}]
+    message = AIMessage(
+        content=(
+            "L'Archiviste consulte ses parchemins. [a/b.md]\n"
+            "---SUIVI---\n"
+            "- Qui a fondé Nocilia ?\n"
+            "- Quand l'Archiviste est-il apparu ?"
+        ),
+        usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+    )
+    llm = _FakeLlmClient(message=message)
+    app, http_clients = _build_app(
+        retrieve_handler=_retrieve_handler_factory(chunks=chunks),
+        conversation_handler=_conversation_handler,
+        llm_client=llm,
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/generate", json=_payload(conversation_id=CONVERSATION_ID), headers=_headers()
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "canon"
+    assert "---SUIVI---" not in body["answer"]
+    assert body["answer"] == "L'Archiviste consulte ses parchemins. [a/b.md]"
+    assert body["citations"] == [{"source_path": "a/b.md", "chunk_ords": [0]}]
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_timings_consistent_with_query_log_latency(db_pool: asyncpg.Pool) -> None:
     # AC-24: retrieve_ms + llm_ms <= latency_ms persisted in query_log.
     # GEN-004: score >= 0.45 keeps canon path.

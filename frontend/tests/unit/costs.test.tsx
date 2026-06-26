@@ -1,8 +1,10 @@
-// Render tests for the Coûts card (#275).
+// Render tests for the Coûts · 30 j card (#275, reshaped for #349 / PRD #346).
 //
-// The card mirrors StatsCard: presentational, no fetch. It renders the three
-// service lines (Postgres / GCS / Workers) plus a total, all formatted in
-// fr-FR euros (« 12,34 € »). Error state shows a request id, no amounts.
+// The card is presentational, no fetch. Per the v03 mockup it leads with the
+// period total then lists three service lines — « Workers (LLM Mistral) »,
+// « PostgreSQL », « GCS » — each with a monospace amount (fr-FR euros) and a
+// bar proportional to the total. An accessible info tooltip on the card title
+// spells out the estimation methodology. Error state shows only a request id.
 //
 // Behaviour is verified through the public render output, never internal state.
 
@@ -11,10 +13,13 @@ import { render, screen, cleanup, within, fireEvent } from "@testing-library/rea
 import { CostsCard } from "@/components/costs-card/CostsCard";
 import type { CostsResult } from "@/lib/observability-types";
 
-const ESTIMATE_BADGE = "Estimation";
 const METHODOLOGY_LABEL = "Méthode d'estimation des coûts";
 const METHODOLOGY_TEXT =
   "Estimation basée sur les tarifs publics GCP, hors crédits et remises.";
+
+const WORKERS_LABEL = "Workers (LLM Mistral)";
+const POSTGRES_LABEL = "PostgreSQL";
+const GCS_LABEL = "GCS";
 
 afterEach(() => {
   cleanup();
@@ -25,54 +30,70 @@ const OK_COSTS: CostsResult = {
   currency: "EUR",
   period: "rolling_30d",
   estimated: true,
-  total_eur: 12.34,
-  services: { postgres: 8.0, gcs: 0.5, workers: 3.84 },
+  total_eur: 4.82,
+  services: { postgres: 2.1, gcs: 0.47, workers: 2.25 },
   computed_at: "2026-06-24T10:00:00+00:00",
 };
 
-describe("CostsCard — service lines", () => {
-  it("renders the three service labels", () => {
+describe("CostsCard — period total in head", () => {
+  it("leads with the period total formatted as fr-FR euros", () => {
     render(<CostsCard costs={OK_COSTS} />);
-    expect(screen.getByText("Postgres")).toBeInTheDocument();
-    expect(screen.getByText("GCS")).toBeInTheDocument();
-    expect(screen.getByText("Workers")).toBeInTheDocument();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText(/4,82\s*€/)).toBeInTheDocument();
   });
 
-  it("renders a total line", () => {
+  it("labels the total as « total période » verbatim", () => {
     render(<CostsCard costs={OK_COSTS} />);
-    expect(screen.getByText(/total/i)).toBeInTheDocument();
+    expect(screen.getByText("total période")).toBeInTheDocument();
   });
 });
 
-describe("CostsCard — fr-FR euro formatting", () => {
-  it("formats the total as fr-FR euros", () => {
+describe("CostsCard — service lines (verbatim labels)", () => {
+  it("renders the three service labels verbatim from the mockup", () => {
     render(<CostsCard costs={OK_COSTS} />);
-    // fr-FR: comma decimal separator, € suffix. NBSP between number and symbol.
-    const card = screen.getByLabelText("Coûts");
-    expect(within(card).getByText(/12,34\s*€/)).toBeInTheDocument();
+    expect(screen.getByText(WORKERS_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(POSTGRES_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(GCS_LABEL)).toBeInTheDocument();
   });
 
   it("formats each service amount as fr-FR euros", () => {
     render(<CostsCard costs={OK_COSTS} />);
     const card = screen.getByLabelText("Coûts");
-    expect(within(card).getByText(/8,00\s*€/)).toBeInTheDocument();
-    expect(within(card).getByText(/0,50\s*€/)).toBeInTheDocument();
-    expect(within(card).getByText(/3,84\s*€/)).toBeInTheDocument();
+    expect(within(card).getByText(/2,10\s*€/)).toBeInTheDocument();
+    expect(within(card).getByText(/0,47\s*€/)).toBeInTheDocument();
+    expect(within(card).getByText(/2,25\s*€/)).toBeInTheDocument();
   });
 
   it("never renders a raw dot-decimal amount", () => {
     render(<CostsCard costs={OK_COSTS} />);
-    expect(screen.queryByText("12.34")).not.toBeInTheDocument();
+    expect(screen.queryByText("4.82")).not.toBeInTheDocument();
+  });
+
+  it("renders a bar per service whose width is proportional to the total", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    const card = screen.getByLabelText("Coûts");
+    // Bars are exposed via progressbar role with value relative to the total.
+    const bars = within(card).getAllByRole("progressbar");
+    expect(bars).toHaveLength(3);
+
+    const widthFor = (label: string) =>
+      bars.find((bar) => bar.getAttribute("aria-label")?.includes(label));
+
+    const workersBar = widthFor(WORKERS_LABEL);
+    const postgresBar = widthFor(POSTGRES_LABEL);
+    const gcsBar = widthFor(GCS_LABEL);
+    expect(workersBar).toBeTruthy();
+    expect(postgresBar).toBeTruthy();
+    expect(gcsBar).toBeTruthy();
+
+    // 2.25 / 4.82 ≈ 46.7 % of the total.
+    expect(workersBar).toHaveAttribute("aria-valuemax", "4.82");
+    expect(workersBar).toHaveAttribute("aria-valuenow", "2.25");
+    expect(gcsBar).toHaveAttribute("aria-valuenow", "0.47");
   });
 });
 
-describe("CostsCard — estimate honesty layer (#276)", () => {
-  it("shows an « Estimation » badge", () => {
-    render(<CostsCard costs={OK_COSTS} />);
-    const card = screen.getByLabelText("Coûts");
-    expect(within(card).getByText(ESTIMATE_BADGE)).toBeInTheDocument();
-  });
-
+describe("CostsCard — estimation methodology tooltip (#349)", () => {
   it("renders the methodology info icon as a button with an accessible label", () => {
     render(<CostsCard costs={OK_COSTS} />);
     const trigger = screen.getByRole("button", { name: METHODOLOGY_LABEL });
@@ -85,10 +106,10 @@ describe("CostsCard — estimate honesty layer (#276)", () => {
     expect(screen.queryByText(METHODOLOGY_TEXT)).not.toBeInTheDocument();
   });
 
-  it("opens the methodology text on tap/click and links it via aria-describedby", () => {
+  it("opens the methodology text on hover and links it via aria-describedby", () => {
     render(<CostsCard costs={OK_COSTS} />);
     const trigger = screen.getByRole("button", { name: METHODOLOGY_LABEL });
-    fireEvent.click(trigger);
+    fireEvent.mouseEnter(trigger);
 
     expect(screen.getByText(METHODOLOGY_TEXT)).toBeInTheDocument();
     const describedBy = trigger.getAttribute("aria-describedby");
@@ -104,10 +125,9 @@ describe("CostsCard — estimate honesty layer (#276)", () => {
     expect(screen.getByText(METHODOLOGY_TEXT)).toBeInTheDocument();
   });
 
-  it("omits the badge and info icon on error", () => {
+  it("omits the info icon on error", () => {
     const costs: CostsResult = { kind: "error", request_id: "req-cost-1" };
     render(<CostsCard costs={costs} />);
-    expect(screen.queryByText(ESTIMATE_BADGE)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: METHODOLOGY_LABEL })
     ).not.toBeInTheDocument();
@@ -115,10 +135,11 @@ describe("CostsCard — estimate honesty layer (#276)", () => {
 });
 
 describe("CostsCard — error state", () => {
-  it("renders the request id and no amounts on error", () => {
+  it("renders only a request id and no amounts on error", () => {
     const costs: CostsResult = { kind: "error", request_id: "req-cost-9" };
     render(<CostsCard costs={costs} />);
     expect(screen.getByText(/req-cost-9/)).toBeInTheDocument();
     expect(screen.queryByText(/€/)).not.toBeInTheDocument();
+    expect(screen.queryByText("total période")).not.toBeInTheDocument();
   });
 });

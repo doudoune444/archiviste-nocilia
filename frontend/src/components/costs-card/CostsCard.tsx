@@ -1,13 +1,15 @@
 /**
- * CostsCard — presentational component for GET /v1/costs data (#275).
+ * CostsCard — presentational component for GET /v1/costs data (#275, #349).
  *
  * Pure: no gateway knowledge, no fetch calls. Receives a CostsResult
- * discriminated union and renders the three service lines (Postgres / GCS /
- * Workers) plus a total. Amounts are formatted in fr-FR euros (« 12,34 € »).
- * All server-returned values rendered as text — never dangerouslySetInnerHTML.
+ * discriminated union. Per the v03 mockup it leads with the rolling-period
+ * total, then lists three service lines — « Workers (LLM Mistral) »,
+ * « PostgreSQL », « GCS » — each with a monospace amount (fr-FR euros) and a
+ * progress bar whose width is proportional to the total.
  *
- * Honest by construction (#276): an « Estimation » badge plus an InfoTooltip
- * spell out the methodology, accessibly (tap / keyboard / screen reader).
+ * All server-returned values rendered as text — never dangerouslySetInnerHTML.
+ * An InfoTooltip on the title spells out the estimation methodology, accessibly
+ * (hover / keyboard focus / screen reader). Error state shows only a request id.
  */
 import type { CostsResult } from "@/lib/observability-types";
 import { InfoTooltip } from "@/components/info-tooltip/InfoTooltip";
@@ -21,6 +23,11 @@ interface CostsCardProps {
   costs: CostsResult;
 }
 
+interface ServiceLine {
+  label: string;
+  amount: number;
+}
+
 const euroFormatter = new Intl.NumberFormat("fr-FR", {
   style: "currency",
   currency: "EUR",
@@ -32,41 +39,61 @@ function formatEur(amount: number): string {
   return euroFormatter.format(amount);
 }
 
+/** Bar fill as a percentage of the period total; clamped to [0, 100]. */
+function fillPercent(amount: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min(100, Math.max(0, (amount / total) * 100));
+}
+
 export function CostsCard({ costs }: CostsCardProps) {
   if (costs.kind === "error") {
     return (
       <article className={styles.card} aria-label="Coûts">
-        <h2 className={styles.title}>Coûts</h2>
+        <h2 className={styles.title}>Coûts · 30 j</h2>
         <p className={styles.errorText}>Impossible de charger les coûts.</p>
         <p className={styles.requestId}>Requête&nbsp;: {costs.request_id}</p>
       </article>
     );
   }
 
-  const services: Array<{ label: string; amount: number }> = [
-    { label: "Postgres", amount: costs.services.postgres },
+  const services: ServiceLine[] = [
+    { label: "Workers (LLM Mistral)", amount: costs.services.workers },
+    { label: "PostgreSQL", amount: costs.services.postgres },
     { label: "GCS", amount: costs.services.gcs },
-    { label: "Workers", amount: costs.services.workers },
   ];
 
   return (
     <article className={styles.card} aria-label="Coûts">
       <header className={styles.header}>
-        <h2 className={styles.title}>Coûts</h2>
-        <span className={styles.badge}>Estimation</span>
+        <h2 className={styles.title}>Coûts · 30 j</h2>
         <InfoTooltip label={METHODOLOGY_LABEL} content={METHODOLOGY_TEXT} />
       </header>
-      <dl className={styles.dl}>
+
+      <div className={styles.total}>
+        <span className={styles.totalAmount}>{formatEur(costs.total_eur)}</span>
+        <span className={styles.totalLabel}>total période</span>
+      </div>
+
+      <dl className={styles.lines}>
         {services.map((service) => (
           <div className={styles.line} key={service.label}>
             <dt className={styles.label}>{service.label}</dt>
             <dd className={styles.amount}>{formatEur(service.amount)}</dd>
+            <div
+              className={styles.bar}
+              role="progressbar"
+              aria-label={`Part de ${service.label} dans le total`}
+              aria-valuemin={0}
+              aria-valuemax={costs.total_eur}
+              aria-valuenow={service.amount}
+            >
+              <span
+                className={styles.barFill}
+                style={{ width: `${fillPercent(service.amount, costs.total_eur)}%` }}
+              />
+            </div>
           </div>
         ))}
-        <div className={styles.totalLine}>
-          <dt className={styles.totalLabel}>Total estimé</dt>
-          <dd className={styles.totalAmount}>{formatEur(costs.total_eur)}</dd>
-        </div>
       </dl>
     </article>
   );

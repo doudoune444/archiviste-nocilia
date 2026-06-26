@@ -10,7 +10,7 @@
  * global `fetch` so it lands in a deterministic rendered state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import React from "react";
 
 vi.mock("next/headers", () => ({
@@ -108,6 +108,15 @@ describe("Métriques page shell (#347)", () => {
         /Gateway Rust \(Axum\) · Workers Python \(FastAPI \/ LangChain\) · Persistence Markdown sur GCS/
       )
     ).toBeInTheDocument();
+  });
+
+  it("asserts the per-service cost lines in the Coûts card (#349)", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText("Workers (LLM Mistral)")).toBeInTheDocument();
+    expect(within(card).getByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(card).getByText("GCS")).toBeInTheDocument();
+    expect(within(card).getByText("total période")).toBeInTheDocument();
   });
 });
 

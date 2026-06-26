@@ -266,6 +266,38 @@
   cursor: not-allowed;
 }
 
+/* #355: follow-up pills under an assistant answer (chat-1-filet.html `.followups`).
+   Dynamic continuations from the LLM — same pill affordance as the welcome chips. */
+.followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.followup {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  padding: 0.375rem 0.875rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.followup:hover:not(:disabled),
+.followup:focus-visible:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.followup:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* chat-1-filet.html `.composer-help` — keyboard hint under the input. */
 .composerHelp {
   font-size: 0.71875rem;

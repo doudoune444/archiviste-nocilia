@@ -10,7 +10,7 @@
  * Event types:
  *   meta  → { mode, conversation_id, request_id }
  *   token → { text }
- *   done  → { citations, usage, retrieve_ms, llm_ms }
+ *   done  → { citations, usage, retrieve_ms, llm_ms, followups }
  *   error → { error: <code> }
  *
  * Invariant: partial events are buffered across chunk boundaries so no
@@ -39,6 +39,8 @@ export interface DoneChunk {
   usage: Record<string, unknown>;
   retrieve_ms: number;
   llm_ms: number;
+  /** #355: structured follow-up questions (#354); empty when none were emitted. */
+  followups: string[];
 }
 
 export interface StreamErrorChunk {
@@ -116,6 +118,9 @@ function toChunk(sseEvent: SseEvent): SseChunk | null {
             : {},
         retrieve_ms: typeof p["retrieve_ms"] === "number" ? p["retrieve_ms"] : 0,
         llm_ms: typeof p["llm_ms"] === "number" ? p["llm_ms"] : 0,
+        followups: Array.isArray(p["followups"])
+          ? p["followups"].filter((item): item is string => typeof item === "string")
+          : [],
       };
     }
     case "error": {

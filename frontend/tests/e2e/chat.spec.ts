@@ -124,6 +124,59 @@ test.describe("chat welcome state (#249)", () => {
   });
 });
 
+test.describe("chat follow-up pills (#355)", () => {
+  // AC (#355): done.followups render as clickable pills under the assistant
+  // answer; the raw ---SUIVI--- sentinel block never appears; a click relaunches
+  // a query through the same send path (the followup text is echoed as the user
+  // message). Gateway-free: the stream is mocked deterministically.
+  const followupA = "Comment l'Archiviste a-t-il été désigné ?";
+  const followupB = "Quels documents sont conservés dans les archives ?";
+
+  async function mockFollowupStream(page: import("@playwright/test").Page) {
+    await page.route("**/api/v1/chat/stream", async (route) => {
+      const answer = `Voici la réponse des archives.\n---SUIVI---\n- ${followupA}\n- ${followupB}`;
+      const followups = JSON.stringify([followupA, followupB]);
+      const body =
+        'event: meta\ndata: {"mode":"canon","conversation_id":"f1","request_id":"r"}\n\n' +
+        `event: token\ndata: {"text":${JSON.stringify(answer)}}\n\n` +
+        `event: done\ndata: {"citations":[],"usage":{},"retrieve_ms":0,"llm_ms":0,"followups":${followups}}\n\n`;
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body,
+      });
+    });
+  }
+
+  test("renders followups as pills, hides the sentinel, and a click relaunches the query", async ({
+    page,
+  }) => {
+    await mockFollowupStream(page);
+
+    await page.goto("/");
+    await page.fill('textarea[name="question"]', "Qui est l'Archiviste ?");
+    await page.click('button[type="submit"]');
+
+    // AC: the answer body is visible and the raw sentinel block is not.
+    const answer = page.locator('[data-testid="assistant-answer"]');
+    await expect(answer).toContainText("Voici la réponse des archives.");
+    await expect(answer).not.toContainText("---SUIVI---");
+
+    // AC: both follow-ups render as buttons.
+    const pillA = page.getByRole("button", { name: followupA });
+    const pillB = page.getByRole("button", { name: followupB });
+    await expect(pillA).toBeVisible();
+    await expect(pillB).toBeVisible();
+
+    // AC: clicking a pill relaunches the query through the same send path — a
+    // second assistant turn is streamed in response.
+    await pillA.click();
+    await expect(
+      page.locator('[data-testid="assistant-answer"]')
+    ).toHaveCount(2);
+  });
+});
+
 test.describe("chat composer persistence (#273)", () => {
   // AC (#273): in a conversation the composer must ALWAYS stay visible — the
   // thread scrolls internally, the page (window) must never scroll the composer

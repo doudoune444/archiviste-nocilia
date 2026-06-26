@@ -7,11 +7,10 @@
 .main {
   flex: 1;
   min-width: 0;
-  width: 100%;
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem;
-  /* #273: a viewport-bounded full-height flex column. `height` (not min-height)
+  /* #343: full-bleed shell so the chat surface (full-width tinted turn bands,
+     per chat-1-filet) reaches the viewport edge. Non-chat pages re-establish
+     their own centered max-width + inset via their `.page` container.
+     #273: a viewport-bounded full-height flex column. `height` (not min-height)
      caps the chain so the chat thread scrolls inside its own overflow area and
      the composer never leaves the viewport; `overflow-y: auto` keeps longer
      non-chat pages scrollable within main. */
@@ -24,9 +23,5 @@
 @media (max-width: 600px) {
   .shell {
     flex-direction: column;
-  }
-
-  .main {
-    padding: 3rem 0.75rem 1rem;
   }
 }

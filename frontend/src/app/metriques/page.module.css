@@ -1,8 +1,12 @@
+/* #343: centered inset, formerly supplied by the layout `.main` (now full-bleed). */
 .page {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-  padding: 2rem 0;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
 }
 
 .heading {
@@ -16,6 +20,10 @@
 }
 
 @media (max-width: 600px) {
+  .page {
+    padding-top: 3rem;
+  }
+
   .grid {
     grid-template-columns: 1fr;
   }

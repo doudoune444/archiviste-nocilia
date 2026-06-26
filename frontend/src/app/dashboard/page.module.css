@@ -5,6 +5,9 @@
   /* DASH-001: optimised for laptop viewport */
   max-width: 1200px;
   width: 100%;
+  /* #343: centered inset, formerly supplied by the layout `.main` (now full-bleed). */
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
 }
 
 .heading {
@@ -39,5 +42,11 @@
 @media (max-width: 900px) {
   .heading {
     font-size: 1.25rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding-top: 3rem;
   }
 }

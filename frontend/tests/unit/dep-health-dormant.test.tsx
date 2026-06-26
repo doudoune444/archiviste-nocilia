@@ -87,6 +87,22 @@ describe("DepHealth Workers tri-state (#253)", () => {
     expect(within(tooltip).getByText(/à froid/i)).toBeInTheDocument();
   });
 
+  it("renders the scale-to-zero hint beneath the dependency list (#350)", async () => {
+    stubFetch("dormant");
+    render(<DepHealth />);
+
+    await screen.findByText("En veille");
+    // #350: verbatim hint from the v03 mockup (« scale-to-zero » is emphasised,
+    // so match the whole text content across the inline <b>).
+    const hint = screen.getByText((_content, element) => {
+      return (
+        element?.textContent ===
+        "Workers en scale-to-zero : démarrage à froid à la demande."
+      );
+    });
+    expect(hint).toBeInTheDocument();
+  });
+
   it("still renders 'Opérationnel' when workers is ok (non-regression)", async () => {
     stubFetch("ok");
     render(<DepHealth />);

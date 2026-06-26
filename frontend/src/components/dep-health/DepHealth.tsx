@@ -25,6 +25,25 @@ import styles from "./DepHealth.module.css";
 /** Explanation shown in the "En veille" info tooltip (#253). */
 const DORMANT_EXPLANATION = "S'active automatiquement à la demande, à froid.";
 
+/** Scale-to-zero hint beneath the dependency list — verbatim from the v03 mockup (#350). */
+function ScaleToZeroHint() {
+  return (
+    <p className={styles.hint}>
+      Workers en <b>scale-to-zero</b> : démarrage à froid à la demande.
+    </p>
+  );
+}
+
+/** Card header with the band-label dot — shared across every DepHealth state (#350). */
+function CardHeader() {
+  return (
+    <div className={styles.bandLabel}>
+      <span className={styles.dot} aria-hidden="true" />
+      <span>Dépendances</span>
+    </div>
+  );
+}
+
 /** Named constant — no magic number (clean-code.md). Exported for test import. */
 export const POLL_INTERVAL_MS = 60_000;
 
@@ -66,10 +85,6 @@ function DepRow({ label, status }: DepRowProps) {
   const isHealthy = status === "ok";
   return (
     <div className={styles.depRow}>
-      <span
-        className={isHealthy ? styles.dotHealthy : styles.dotDown}
-        aria-hidden="true"
-      />
       <span className={styles.depLabel}>{label}</span>
       <span
         className={isHealthy ? styles.statusHealthy : styles.statusDown}
@@ -90,10 +105,10 @@ function WorkersRow({ status }: { status: WorkersStatusValue }) {
   if (status === "dormant") {
     return (
       <div className={styles.depRow}>
-        <span className={styles.dotDormant} aria-hidden="true" />
         <span className={styles.depLabel}>Workers</span>
         <span className={styles.statusWrap}>
           <span className={styles.statusDormant} aria-label="Workers en veille">
+            <span className={styles.dotDormant} aria-hidden="true" />
             En veille
           </span>
           <InfoTooltip
@@ -140,7 +155,7 @@ export function DepHealth() {
   if (state.phase === "loading") {
     return (
       <article className={styles.card} aria-label="Dépendances">
-        <h2 className={styles.title}>Dépendances</h2>
+        <CardHeader />
         <p className={styles.loadingText}>Chargement…</p>
       </article>
     );
@@ -149,7 +164,7 @@ export function DepHealth() {
   if (state.phase === "error" || state.result.kind === "error") {
     return (
       <article className={styles.card} aria-label="Dépendances">
-        <h2 className={styles.title}>Dépendances</h2>
+        <CardHeader />
         <p className={styles.errorText}>
           Impossible de vérifier l&apos;état des dépendances.
         </p>
@@ -161,12 +176,13 @@ export function DepHealth() {
 
   return (
     <article className={styles.card} aria-label="Dépendances">
-      <h2 className={styles.title}>Dépendances</h2>
+      <CardHeader />
       <div className={styles.deps}>
         <DepRow label="PostgreSQL" status={result.postgres} />
         <DepRow label="GCS" status={result.gcs} />
         <WorkersRow status={result.workers} />
       </div>
+      <ScaleToZeroHint />
     </article>
   );
 }

@@ -10,7 +10,7 @@
  * global `fetch` so it lands in a deterministic rendered state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import React from "react";
 
 vi.mock("next/headers", () => ({
@@ -56,13 +56,23 @@ vi.mock("@/components/info-tooltip/InfoTooltip.module.css", () => ({
 
 const { default: MetriquesPage } = await import("@/app/metriques/page");
 
-async function renderPage() {
+function statusBody(workersStatus: string) {
+  return {
+    status: "ok",
+    dependencies: {
+      postgres: { status: "ok", latency_ms: 3 },
+      gcs: { status: "ok", latency_ms: 12 },
+      workers: { status: workersStatus, latency_ms: 8 },
+    },
+    checked_at: "2026-06-24T10:00:00Z",
+  };
+}
+
+async function renderPage(workersStatus = "dormant") {
   // DepHealth island fetches /api/v1/status on mount.
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () =>
-      jsonResponse({ postgres: "ok", gcs: "ok", workers: "ok" })
-    )
+    vi.fn(async () => jsonResponse(statusBody(workersStatus)))
   );
   const element = await MetriquesPage();
   render(element);
@@ -97,7 +107,7 @@ describe("Métriques page shell (#347)", () => {
     // Cards are identified by their stable accessible labels, not CSS.
     expect(screen.getByLabelText("Qualité RAG")).toBeInTheDocument();
     expect(screen.getByLabelText("Coûts")).toBeInTheDocument();
-    expect(screen.getByLabelText("Statistiques")).toBeInTheDocument();
+    expect(screen.getByLabelText("Conversations")).toBeInTheDocument();
     expect(screen.getByLabelText("Dépendances")).toBeInTheDocument();
   });
 
@@ -108,6 +118,38 @@ describe("Métriques page shell (#347)", () => {
         /Gateway Rust \(Axum\) · Workers Python \(FastAPI \/ LangChain\) · Persistence Markdown sur GCS/
       )
     ).toBeInTheDocument();
+  });
+});
+
+describe("Métriques page — Conversations & Dépendances cards (#350)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders the conversation count and the « traitées au total » legend", async () => {
+    await renderPage();
+    expect(await screen.findByText("1247")).toBeInTheDocument();
+    expect(screen.getByText("traitées au total")).toBeInTheDocument();
+  });
+
+  it("renders the dependency rows for PostgreSQL, GCS and Workers", async () => {
+    await renderPage("ok");
+    await screen.findByText("PostgreSQL");
+    // « GCS » also appears in the footer; scope to the Dépendances card.
+    const card = screen.getByLabelText("Dépendances");
+    expect(within(card).getByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(card).getByText("GCS")).toBeInTheDocument();
+    expect(within(card).getByText("Workers")).toBeInTheDocument();
+    // All three operational → three « Opérationnel » status labels.
+    expect(within(card).getAllByText("Opérationnel")).toHaveLength(3);
+  });
+
+  it("shows the dormant Workers state as « En veille » with the scale-to-zero hint", async () => {
+    await renderPage("dormant");
+    expect(await screen.findByText("En veille")).toBeInTheDocument();
+    expect(screen.getByText(/démarrage à froid à la demande/)).toBeInTheDocument();
+    // « En veille » is never the red down label.
+    expect(screen.queryByText("Hors service")).not.toBeInTheDocument();
   });
 });
 

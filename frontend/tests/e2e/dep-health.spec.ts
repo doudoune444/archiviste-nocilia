@@ -143,17 +143,18 @@ test("AC4: la carte dépendances s'intègre dans la grille observabilité", asyn
 }) => {
   await page.goto("/metriques");
 
-  // Page heading is present
+  // Page heading is present (renamed by #347)
   await expect(
-    page.getByRole("heading", { name: "Observabilité" })
+    page.getByRole("heading", { name: "État et métriques" })
   ).toBeVisible();
 
   // The dep-health card is in the grid alongside the other signal cards
   const card = page.getByRole("article", { name: "Dépendances" });
   await expect(card).toBeVisible();
 
-  // Other existing cards still render (AC4: no regression)
+  // Other existing cards still render (AC4: no regression); the Conversations
+  // card was renamed from « Statistiques » by #350.
   await expect(
-    page.getByRole("article", { name: "Statistiques" })
+    page.getByRole("article", { name: "Conversations" })
   ).toBeVisible();
 });

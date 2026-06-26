@@ -57,11 +57,20 @@ vi.mock("@/components/info-tooltip/InfoTooltip.module.css", () => ({
 const { default: MetriquesPage } = await import("@/app/metriques/page");
 
 async function renderPage() {
-  // DepHealth island fetches /api/v1/status on mount.
+  // DepHealth island fetches /api/v1/status on mount; the gateway body nests
+  // the three dependencies (parse-status.ts contract).
   vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
-      jsonResponse({ postgres: "ok", gcs: "ok", workers: "ok" })
+      jsonResponse({
+        status: "ok",
+        dependencies: {
+          postgres: { status: "ok", latency_ms: 3 },
+          gcs: { status: "ok", latency_ms: 12 },
+          workers: { status: "ok", latency_ms: 8 },
+        },
+        checked_at: "2026-06-24T03:12:00+00:00",
+      })
     )
   );
   const element = await MetriquesPage();
@@ -97,7 +106,7 @@ describe("Métriques page shell (#347)", () => {
     // Cards are identified by their stable accessible labels, not CSS.
     expect(screen.getByLabelText("Qualité RAG")).toBeInTheDocument();
     expect(screen.getByLabelText("Coûts")).toBeInTheDocument();
-    expect(screen.getByLabelText("Statistiques")).toBeInTheDocument();
+    expect(screen.getByLabelText("Conversations")).toBeInTheDocument();
     expect(screen.getByLabelText("Dépendances")).toBeInTheDocument();
   });
 
@@ -148,6 +157,54 @@ describe("Métriques page — Qualité · Ragas card (#348)", () => {
     expect(tooltip).toHaveTextContent(
       "La réponse colle-t-elle aux sources récupérées, sans rien inventer ?"
     );
+  });
+});
+
+describe("Métriques page — Conversations & Dépendances cards (#350)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asserts the conversations count and the dependency rows at the page seam", async () => {
+    await renderPage();
+    // Conversations hero number from /v1/stats.
+    expect(screen.getByText("1247")).toBeInTheDocument();
+    expect(screen.getByText("traitées au total")).toBeInTheDocument();
+    // Dependency rows from the polled /api/v1/status island, scoped to the
+    // Dépendances card (PostgreSQL/GCS labels also appear in the Coûts card).
+    const depsCard = screen.getByLabelText("Dépendances");
+    expect(await within(depsCard).findByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(depsCard).getByText("GCS")).toBeInTheDocument();
+    expect(within(depsCard).getByText("Workers")).toBeInTheDocument();
+  });
+
+  it("renders the dormant Workers hint and a healthy (non-red) accessible label", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          status: "ok",
+          dependencies: {
+            postgres: { status: "ok", latency_ms: 3 },
+            gcs: { status: "ok", latency_ms: 12 },
+            workers: { status: "dormant", latency_ms: 8 },
+          },
+          checked_at: "2026-06-24T03:12:00+00:00",
+        })
+      )
+    );
+    const element = await MetriquesPage();
+    render(element);
+
+    expect(await screen.findByLabelText("Workers en veille")).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(/workers hors service/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Workers en scale-to-zero : démarrage à froid à la demande."
+      )
+    ).toBeInTheDocument();
   });
 });
 

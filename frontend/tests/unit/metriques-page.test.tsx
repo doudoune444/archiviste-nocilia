@@ -10,7 +10,7 @@
  * global `fetch` so it lands in a deterministic rendered state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import React from "react";
 
 vi.mock("next/headers", () => ({
@@ -148,6 +148,26 @@ describe("Métriques page — Qualité · Ragas card (#348)", () => {
     expect(tooltip).toHaveTextContent(
       "La réponse colle-t-elle aux sources récupérées, sans rien inventer ?"
     );
+  });
+});
+
+describe("Métriques page — Coûts · 30 j card (#349)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asserts the per-service cost lines from the payload", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText("Workers (LLM Mistral)")).toBeInTheDocument();
+    expect(within(card).getByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(card).getByText("GCS")).toBeInTheDocument();
+  });
+
+  it("renders the period total in the card head", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText(/4,82\s*€/)).toBeInTheDocument();
   });
 });
 

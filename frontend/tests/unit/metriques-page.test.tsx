@@ -120,6 +120,40 @@ describe("Métriques page shell (#347)", () => {
   });
 });
 
+describe("Métriques page — Décisions section (#351)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders the « Décisions & pistes d'amélioration » heading and subtitle", async () => {
+    await renderPage();
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Décisions & pistes d'amélioration",
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Les décisions sont adaptées à mon besoin et à mes contraintes ; de meilleures solutions restent envisageables."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders the five decision cards with their prose and improvement insets", async () => {
+    await renderPage();
+    const cards = screen.getAllByRole("listitem");
+    expect(cards).toHaveLength(5);
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Deux appels LLM en série" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Chaque requête passe par deux appels au même modèle/)
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Piste d'amélioration")).toHaveLength(5);
+  });
+});
+
 describe("Métriques page — Qualité · Ragas card (#348)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

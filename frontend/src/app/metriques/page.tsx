@@ -18,6 +18,7 @@ import { StatsCard } from "@/components/stats-card/StatsCard";
 import { RagasGauges } from "@/components/ragas-gauges/RagasGauges";
 import { CostsCard } from "@/components/costs-card/CostsCard";
 import { DepHealth } from "@/components/dep-health/DepHealth";
+import { DecisionsSection } from "@/components/decisions/DecisionsSection";
 import styles from "./page.module.css";
 
 const FOOTER_STACK =
@@ -54,6 +55,8 @@ export default async function MetriquesPage() {
           <StatsCard stats={stats} />
         </div>
       </div>
+
+      <DecisionsSection />
 
       <footer className={styles.footer}>{FOOTER_STACK}</footer>
     </div>

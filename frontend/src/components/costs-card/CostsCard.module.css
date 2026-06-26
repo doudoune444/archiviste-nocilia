@@ -74,7 +74,11 @@
   overflow: hidden;
 }
 
+/* width is set by the nonce-tagged <style> the card renders (id selector, higher
+ * specificity than this class). Default 0 so a missing/blocked rule degrades to
+ * an empty bar — never a misleading full bar (the CSP failure mode this fixes). */
 .barFill {
+  width: 0;
   height: 100%;
   border-radius: 4px;
   background: var(--color-accent);

@@ -68,6 +68,17 @@ describe("Ragas card — four rows with name, value and bar", () => {
     expect(meters).toHaveLength(4);
     expect(meters[0]).toHaveAttribute("aria-valuenow", "0.91");
   });
+
+  it("ships each bar width in a nonce-tagged style, never an inline attribute", () => {
+    render(<RagasGauges quality={OK_QUALITY} nonce="ragas-nonce" />);
+    const fill = screen
+      .getAllByRole("meter")[0]
+      .firstElementChild as HTMLElement;
+    expect(fill.style.width).toBe("");
+    const styleTag = document.querySelector("style");
+    expect(styleTag).toHaveAttribute("nonce", "ragas-nonce");
+    expect(styleTag?.textContent).toContain(`#${fill.id}{width:91%}`);
+  });
 });
 
 describe("Ragas card — value/bar carry the quality band", () => {

@@ -22,8 +22,13 @@ import {
 import { InfoTooltip } from "@/components/info-tooltip/InfoTooltip";
 import styles from "./DepHealth.module.css";
 
-/** Explanation shown in the "En veille" info tooltip (#253). */
-const DORMANT_EXPLANATION = "S'active automatiquement à la demande, à froid.";
+/** Explanation shown in the "En veille" info tooltip (#253 / #350, scale-to-zero). */
+const DORMANT_EXPLANATION =
+  "Les Workers tournent en scale-to-zero : ils s'éteignent au repos et redémarrent à froid à la demande.";
+
+/** Verbatim scale-to-zero hint shown under the dormant Workers row (#350). */
+const SCALE_TO_ZERO_HINT =
+  "Workers en scale-to-zero : démarrage à froid à la demande.";
 
 /** Named constant — no magic number (clean-code.md). Exported for test import. */
 export const POLL_INTERVAL_MS = 60_000;
@@ -158,6 +163,7 @@ export function DepHealth() {
   }
 
   const { result } = state;
+  const isWorkersDormant = result.workers === "dormant";
 
   return (
     <article className={styles.card} aria-label="Dépendances">
@@ -167,6 +173,7 @@ export function DepHealth() {
         <DepRow label="GCS" status={result.gcs} />
         <WorkersRow status={result.workers} />
       </div>
+      {isWorkersDormant && <p className={styles.hint}>{SCALE_TO_ZERO_HINT}</p>}
     </article>
   );
 }

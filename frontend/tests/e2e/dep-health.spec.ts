@@ -115,6 +115,13 @@ test("#253: Workers en veille affiché comme état nominal, pas une panne", asyn
   await expect(card.getByText("En veille")).toBeVisible();
   await expect(card.getByText("Hors service")).toHaveCount(0);
 
+  // #350: the verbatim scale-to-zero hint is shown under the row.
+  await expect(
+    card.getByText(
+      "Workers en scale-to-zero : démarrage à froid à la demande."
+    )
+  ).toBeVisible();
+
   // US-4/US-10: an accessible info trigger explains the cold start on demand.
   const trigger = card.getByRole("button", { name: /en veille/i });
   await expect(trigger).toBeVisible();
@@ -138,22 +145,23 @@ test("AC1: état d'erreur rendu sans ambiguïté quand /api/v1/status échoue", 
   ).toBeVisible();
 });
 
-test("AC4: la carte dépendances s'intègre dans la grille observabilité", async ({
+test("AC4: la carte dépendances s'intègre dans le bandeau métriques", async ({
   page,
 }) => {
   await page.goto("/metriques");
 
-  // Page heading is present
+  // Page heading is present (renamed shell, #347)
   await expect(
-    page.getByRole("heading", { name: "Observabilité" })
+    page.getByRole("heading", { name: "État et métriques" })
   ).toBeVisible();
 
-  // The dep-health card is in the grid alongside the other signal cards
+  // The dep-health card is in the band alongside the other signal cards
   const card = page.getByRole("article", { name: "Dépendances" });
   await expect(card).toBeVisible();
 
-  // Other existing cards still render (AC4: no regression)
+  // Other existing cards still render (AC4: no regression). The Conversations
+  // card is the renamed former « Statistiques » card (#350).
   await expect(
-    page.getByRole("article", { name: "Statistiques" })
+    page.getByRole("article", { name: "Conversations" })
   ).toBeVisible();
 });

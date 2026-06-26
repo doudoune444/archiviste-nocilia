@@ -10,7 +10,7 @@
  * global `fetch` so it lands in a deterministic rendered state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import React from "react";
 
 vi.mock("next/headers", () => ({
@@ -57,11 +57,20 @@ vi.mock("@/components/info-tooltip/InfoTooltip.module.css", () => ({
 const { default: MetriquesPage } = await import("@/app/metriques/page");
 
 async function renderPage() {
-  // DepHealth island fetches /api/v1/status on mount.
+  // DepHealth island fetches /api/v1/status on mount; the gateway body nests
+  // the three dependencies (parse-status.ts contract).
   vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
-      jsonResponse({ postgres: "ok", gcs: "ok", workers: "ok" })
+      jsonResponse({
+        status: "ok",
+        dependencies: {
+          postgres: { status: "ok", latency_ms: 3 },
+          gcs: { status: "ok", latency_ms: 12 },
+          workers: { status: "ok", latency_ms: 8 },
+        },
+        checked_at: "2026-06-24T03:12:00+00:00",
+      })
     )
   );
   const element = await MetriquesPage();
@@ -97,7 +106,7 @@ describe("Métriques page shell (#347)", () => {
     // Cards are identified by their stable accessible labels, not CSS.
     expect(screen.getByLabelText("Qualité RAG")).toBeInTheDocument();
     expect(screen.getByLabelText("Coûts")).toBeInTheDocument();
-    expect(screen.getByLabelText("Statistiques")).toBeInTheDocument();
+    expect(screen.getByLabelText("Conversations")).toBeInTheDocument();
     expect(screen.getByLabelText("Dépendances")).toBeInTheDocument();
   });
 
@@ -142,6 +151,114 @@ describe("Métriques page — Décisions section (#351)", () => {
       screen.getByText(/Chaque requête passe par deux appels au même modèle/)
     ).toBeInTheDocument();
     expect(screen.getAllByText("Piste d'amélioration")).toHaveLength(5);
+  });
+});
+
+describe("Métriques page — Qualité · Ragas card (#348)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders the four Ragas indicator labels", async () => {
+    await renderPage();
+    expect(screen.getByText("Fidélité")).toBeInTheDocument();
+    expect(screen.getByText("Pertinence")).toBeInTheDocument();
+    expect(screen.getByText("Précision du contexte")).toBeInTheDocument();
+    expect(screen.getByText("Couverture du contexte")).toBeInTheDocument();
+  });
+
+  it("renders the threshold legend verbatim", async () => {
+    await renderPage();
+    expect(screen.getByText("≥ 0.85 bon")).toBeInTheDocument();
+    expect(screen.getByText("0.70–0.85 correct")).toBeInTheDocument();
+    expect(screen.getByText("< 0.70 faible")).toBeInTheDocument();
+  });
+
+  it("renders the golden set version and last-eval date from the payload", async () => {
+    await renderPage();
+    expect(screen.getByText("v3")).toBeInTheDocument();
+    expect(screen.getByText("24 juin 2026")).toBeInTheDocument();
+  });
+
+  it("exposes an indicator tooltip whose prose names the metric", async () => {
+    await renderPage();
+    const trigger = screen.getByRole("button", { name: /fidélité/i });
+    fireEvent.focus(trigger);
+    const tooltip = document.getElementById(
+      trigger.getAttribute("aria-describedby") as string
+    );
+    expect(tooltip).toHaveTextContent("Fidélité (faithfulness)");
+    expect(tooltip).toHaveTextContent(
+      "La réponse colle-t-elle aux sources récupérées, sans rien inventer ?"
+    );
+  });
+});
+
+describe("Métriques page — Conversations & Dépendances cards (#350)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asserts the conversations count and the dependency rows at the page seam", async () => {
+    await renderPage();
+    // Conversations hero number from /v1/stats.
+    expect(screen.getByText("1247")).toBeInTheDocument();
+    expect(screen.getByText("traitées au total")).toBeInTheDocument();
+    // Dependency rows from the polled /api/v1/status island, scoped to the
+    // Dépendances card (PostgreSQL/GCS labels also appear in the Coûts card).
+    const depsCard = screen.getByLabelText("Dépendances");
+    expect(await within(depsCard).findByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(depsCard).getByText("GCS")).toBeInTheDocument();
+    expect(within(depsCard).getByText("Workers")).toBeInTheDocument();
+  });
+
+  it("renders the dormant Workers hint and a healthy (non-red) accessible label", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          status: "ok",
+          dependencies: {
+            postgres: { status: "ok", latency_ms: 3 },
+            gcs: { status: "ok", latency_ms: 12 },
+            workers: { status: "dormant", latency_ms: 8 },
+          },
+          checked_at: "2026-06-24T03:12:00+00:00",
+        })
+      )
+    );
+    const element = await MetriquesPage();
+    render(element);
+
+    expect(await screen.findByLabelText("Workers en veille")).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(/workers hors service/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Workers en scale-to-zero : démarrage à froid à la demande."
+      )
+    ).toBeInTheDocument();
+  });
+});
+
+describe("Métriques page — Coûts · 30 j card (#349)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asserts the per-service cost lines from the payload", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText("Workers (LLM Mistral)")).toBeInTheDocument();
+    expect(within(card).getByText("PostgreSQL")).toBeInTheDocument();
+    expect(within(card).getByText("GCS")).toBeInTheDocument();
+  });
+
+  it("renders the period total in the card head", async () => {
+    await renderPage();
+    const card = screen.getByLabelText("Coûts");
+    expect(within(card).getByText(/4,82\s*€/)).toBeInTheDocument();
   });
 });
 

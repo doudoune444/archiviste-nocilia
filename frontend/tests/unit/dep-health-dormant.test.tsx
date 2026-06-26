@@ -87,6 +87,39 @@ describe("DepHealth Workers tri-state (#253)", () => {
     expect(within(tooltip).getByText(/à froid/i)).toBeInTheDocument();
   });
 
+  it("shows the scale-to-zero hint verbatim when workers is dormant (#350)", async () => {
+    stubFetch("dormant");
+    render(<DepHealth />);
+
+    expect(
+      await screen.findByText(
+        "Workers en scale-to-zero : démarrage à froid à la demande."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the scale-to-zero hint when workers is ok (#350)", async () => {
+    stubFetch("ok");
+    render(<DepHealth />);
+
+    await screen.findAllByText("Opérationnel");
+    expect(
+      screen.queryByText(
+        "Workers en scale-to-zero : démarrage à froid à la demande."
+      )
+    ).not.toBeInTheDocument();
+  });
+
+  it("reveals the dormant tooltip describing scale-to-zero on focus (#350)", async () => {
+    stubFetch("dormant");
+    render(<DepHealth />);
+
+    const trigger = await screen.findByRole("button", { name: /en veille/i });
+    fireEvent.focus(trigger);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(within(tooltip).getByText(/scale-to-zero/i)).toBeInTheDocument();
+  });
+
   it("still renders 'Opérationnel' when workers is ok (non-regression)", async () => {
     stubFetch("ok");
     render(<DepHealth />);

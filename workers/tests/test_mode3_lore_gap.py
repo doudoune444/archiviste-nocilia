@@ -640,8 +640,8 @@ def test_lore_gap_system_prompt_required_clauses() -> None:
     # AC-4: LORE_GAP_SYSTEM_PROMPT — concis, sans role-play, sans invention.
     prompt = LORE_GAP_SYSTEM_PROMPT
     assert "Archiviste" in prompt
-    assert re.search(r"archives.{0,20}(muet|lacun)", prompt, re.IGNORECASE)
+    assert re.search(r"archives ne contiennent pas encore", prompt, re.IGNORECASE)
     assert "sans inventer" in prompt
-    assert re.search(r"(not|archives)", prompt, re.IGNORECASE)
+    assert re.search(r"(prise en compte|enrichissements|archives)", prompt, re.IGNORECASE)
     assert "sans jeu de rôle" in prompt
     assert "langue de la question" in prompt

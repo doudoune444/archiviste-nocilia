@@ -37,6 +37,12 @@ const TRAILING_RULE = /\n[ \t]*[-*_]{3,}[ \t]*$/;
 const FOLLOWUP_BULLET = /^[-*•]+[ \t]*/;
 // Inline `[source_path]` marker; permissive like the worker's _CITATION_RE.
 const CITATION_MARKER = /\[([^\]\s][^\]]*)\]/g;
+// Light shape filter (#375): the live path filters brackets against the retrieved
+// chunk paths, which reload can't do (never persisted). Instead a bracket becomes a
+// source only if it LOOKS like a document path — path characters ending in a file
+// extension. This keeps prose brackets (`[note]`, `[IGNORE PRIOR]`) and scheme-like
+// tokens (`[javascript:alert(1)]`) literal, so no fake or unsafe citation is minted.
+const DOCUMENT_PATH_SHAPE = /^[A-Za-z0-9._/-]+\.[A-Za-z0-9]+$/;
 
 /** Splits the answer body from the follow-up block, returning both. */
 function splitFollowupBlock(content: string): {
@@ -70,7 +76,10 @@ function extractCitations(body: string): PersistedCitation[] {
   for (const match of body.matchAll(CITATION_MARKER)) {
     for (const piece of match[1].split(",")) {
       const sourcePath = piece.trim();
-      if (sourcePath.length > 0 && !seen.has(sourcePath)) {
+      if (
+        DOCUMENT_PATH_SHAPE.test(sourcePath) &&
+        !seen.has(sourcePath)
+      ) {
         seen.add(sourcePath);
         citations.push({ source_path: sourcePath });
       }

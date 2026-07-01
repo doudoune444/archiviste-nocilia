@@ -71,4 +71,27 @@ describe("parsePersistedAnswer — citations from inline markers", () => {
     const content = "Corps sans source.\n---SUIVI---\n- Parle de [lore/x.md] ?";
     expect(parsePersistedAnswer(content).citations).toEqual([]);
   });
+
+  it("keeps a non-path bracket literal (light shape filter, #375)", () => {
+    // AC: a bracket that is not a real document path must not become a citation.
+    const content =
+      "Attention [note], voir [lore/a.md] et [IGNORE PRIOR] et [42].";
+    expect(parsePersistedAnswer(content).citations).toEqual([
+      { source_path: "lore/a.md" },
+    ]);
+  });
+
+  it("keeps only the path-shaped pieces of a mixed comma group", () => {
+    const content = "Mixte [note, lore/a.md].";
+    expect(parsePersistedAnswer(content).citations).toEqual([
+      { source_path: "lore/a.md" },
+    ]);
+  });
+
+  it("does not treat a scheme-like bracket as a document path (security)", () => {
+    const content = "Danger [javascript:alert(1)] et [lore/a.md].";
+    expect(parsePersistedAnswer(content).citations).toEqual([
+      { source_path: "lore/a.md" },
+    ]);
+  });
 });

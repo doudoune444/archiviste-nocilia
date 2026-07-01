@@ -128,7 +128,9 @@ export function ChatShell({ initialConversations }: ChatShellProps) {
       // B2: commit transcript AND selection in the same tick (one render) so the
       // key-based remount of ChatForm carries the freshly-loaded messages — never
       // the previously-open conversation's transcript. AC: ordinal order, no phantom.
-      setLoadedMessages(mapTranscriptToMessages(body.messages));
+      setLoadedMessages(
+        mapTranscriptToMessages(body.messages, body.conversation_id)
+      );
       setSelectedId(id);
     } catch {
       // A09: never log response content.

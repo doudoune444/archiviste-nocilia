@@ -249,6 +249,51 @@ async def test_stream_canon_done_carries_structured_followups() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_canon_persists_answer_with_followup_block() -> None:
+    # #374: the streaming canon path persists the LLM answer as-is — the ---SUIVI--- block
+    # and inline [chemin] markers stay in the stored content so the .md is the single source
+    # of truth for reload rendering. The direct SSE path is unchanged (tokens verbatim).
+    chunks = [
+        {"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.80, "access_tier": "public"}
+    ]
+    tokens = [
+        "L'Archiviste consulte [a/b.md].",
+        "\n---SUIVI---\n",
+        "- Qui a fondé Nocilia ?\n",
+        "- Quand l'Archiviste est-il apparu ?",
+    ]
+    llm = _FakeStreamLlmClient(tokens=tokens)
+    fake_convo = AsyncMock()
+    fake_convo.append_message = AsyncMock(return_value=MagicMock(ok=True))
+
+    app, http_clients = _build_stream_app(llm_client=llm, chunks=chunks)
+    app.state.conversation_client = fake_convo
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/generate/stream",
+            json=_payload(conversation_id=CONVERSATION_ID),
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    assistant_calls = [
+        call
+        for call in fake_convo.append_message.call_args_list
+        if call.kwargs["role"] == "assistant"
+    ]
+    assert len(assistant_calls) == 1
+    persisted = assistant_calls[0].kwargs["content"]
+    assert persisted == "".join(tokens)
+    assert "---SUIVI---" in persisted
+    assert "[a/b.md]" in persisted
+
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stream_lore_gap_no_ticket_without_db() -> None:
     # AC-3 (partial): lore_gap emits meta -> token* -> done (no db_pool → ticket skipped).
     chunks = [

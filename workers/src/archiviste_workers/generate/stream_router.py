@@ -428,7 +428,11 @@ async def _stream_canon(
         intent_result=intent_result,
     )
     result = GenerationResult(
-        answer=answer, usage=usage, citations=citations, llm_ms=llm_ms, followups=followups
+        persisted_content=raw_answer,
+        usage=usage,
+        citations=citations,
+        llm_ms=llm_ms,
+        followups=followups,
     )
     await finalize_generation(
         ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
@@ -494,7 +498,7 @@ async def _stream_mystery(
         blocked_count=blocked_count,
         intent_result=intent_result,
     )
-    result = GenerationResult(answer=answer, usage=usage, citations=[], llm_ms=llm_ms)
+    result = GenerationResult(persisted_content=answer, usage=usage, citations=[], llm_ms=llm_ms)
     await finalize_generation(
         ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
     )
@@ -568,7 +572,7 @@ async def _stream_lore_gap(
         blocked_count=0,
         intent_result=intent_result,
     )
-    result = GenerationResult(answer=answer, usage=usage, citations=[], llm_ms=llm_ms)
+    result = GenerationResult(persisted_content=answer, usage=usage, citations=[], llm_ms=llm_ms)
     await finalize_generation(
         ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
     )
@@ -639,7 +643,7 @@ async def _stream_off_topic(
         blocked_count=0,
         intent_result=intent_result,
     )
-    result = GenerationResult(answer=answer, usage=usage, citations=[], llm_ms=llm_ms)
+    result = GenerationResult(persisted_content=answer, usage=usage, citations=[], llm_ms=llm_ms)
     await finalize_generation(
         ctx, prepared, result, log_event="generate_stream", ticket_creator=create_or_increment
     )

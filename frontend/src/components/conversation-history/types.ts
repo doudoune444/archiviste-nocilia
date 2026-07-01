@@ -37,6 +37,8 @@ export interface Message {
   mode?: string;
   citations?: unknown[];
   conversationId?: string;
+  /** #355/#375: structured follow-up questions rendered as clickable pills. */
+  followups?: string[];
 }
 
 /** Type guard: does an unknown value look like a ConversationSummary array? */

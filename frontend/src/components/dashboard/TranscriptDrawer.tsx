@@ -156,6 +156,6 @@ export async function fetchTranscript(
 
   return {
     ok: true,
-    messages: mapTranscriptToMessages(body.messages),
+    messages: mapTranscriptToMessages(body.messages, body.conversation_id),
   };
 }

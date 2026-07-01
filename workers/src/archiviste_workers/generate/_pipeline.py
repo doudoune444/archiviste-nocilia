@@ -96,7 +96,10 @@ class PreparedMode:
 class GenerationResult:
     """Caller-computed result after the LLM call."""
 
-    answer: str
+    # #374: persisted verbatim as the assistant turn — the LLM answer as-is (body +
+    # inline `[chemin]` markers + `---SUIVI---` block). The stored `.md` is the single
+    # source of truth for reload rendering; the direct path emits a stripped body instead.
+    persisted_content: str
     usage: Usage
     # Empty for off_topic / lore_gap / mystery.
     citations: list[Citation]
@@ -158,7 +161,7 @@ async def finalize_generation(
     asst_append = await ctx.conversation_client.append_message(
         conversation_id=ctx.conversation_id,
         role="assistant",
-        content=result.answer,
+        content=result.persisted_content,
         timestamp=datetime.now(UTC),
         user_id=parsed.user_id,
     )

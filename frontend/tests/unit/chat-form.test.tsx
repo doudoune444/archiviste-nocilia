@@ -18,6 +18,8 @@ import {
   act,
 } from "@testing-library/react";
 import { ChatForm } from "@/components/chat/ChatForm";
+import { mapTranscriptToMessages } from "@/components/conversation-history/transcript";
+import type { ConversationMessage } from "@/components/conversation-history/types";
 
 // chat.module.css — identity proxy so class names equal their keys in jsdom.
 vi.mock("@/components/chat/chat.module.css", () => ({
@@ -614,6 +616,69 @@ describe("ChatForm follow-up tolerant marker masking (#345)", () => {
     const answer = screen.getByTestId("assistant-answer");
     expect(answer.textContent).toContain("Corps tolérant.");
     expect(answer.textContent).not.toContain("SUIVI");
+  });
+});
+
+describe("ChatForm re-hydration from history (#375)", () => {
+  // AC #375: a conversation reloaded from history renders the SAME rich turn as
+  // when it was streamed — pills, superscript citations, sources panel and the
+  // per-answer signal form — with no raw sentinel or bracket markers leaking.
+  const CONVERSATION_ID = "conv-reload";
+  const rows: ConversationMessage[] = [
+    { role: "user", ordinal: 0, content: "Qui est Blowen ?" },
+    {
+      role: "assistant",
+      ordinal: 1,
+      content:
+        "Blowen vécut à Periste [lore/blowen.md, lore/periste.md].\n---SUIVI---\n- Où est Periste ?\n- Qui d'autre y vécut ?",
+    },
+  ];
+
+  function renderReloaded() {
+    return render(
+      <ChatForm
+        initialMessages={mapTranscriptToMessages(rows, CONVERSATION_ID)}
+        initialConversationId={CONVERSATION_ID}
+      />
+    );
+  }
+
+  it("renders the persisted follow-up block as clickable pills", () => {
+    renderReloaded();
+    expect(
+      screen.getByRole("button", { name: "Où est Periste ?" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Qui d'autre y vécut ?" })
+    ).toBeInTheDocument();
+  });
+
+  it("re-hydrates inline markers into numbered superscript citations", () => {
+    const { container } = renderReloaded();
+    const sups = container.querySelectorAll("sup.fn");
+    expect(Array.from(sups, (s) => s.textContent)).toEqual(["1", "2"]);
+  });
+
+  it("re-hydrates the sources panel from the inline markers", () => {
+    renderReloaded();
+    const summary = document.querySelector("details.sources summary");
+    expect(summary?.textContent).toContain("Sources (2)");
+  });
+
+  it("re-attaches the per-answer signal form via the conversation id", () => {
+    renderReloaded();
+    expect(
+      screen.getByRole("button", { name: /signaler une incohérence/i })
+    ).toBeInTheDocument();
+  });
+
+  it("never leaks the raw ---SUIVI--- block or bracket markers into the body", () => {
+    renderReloaded();
+    const answer = screen.getByTestId("assistant-answer");
+    expect(answer.textContent).toContain("Blowen vécut à Periste");
+    expect(answer.textContent).not.toContain("SUIVI");
+    expect(answer.textContent).not.toContain("[lore/blowen.md");
+    expect(answer.textContent).not.toContain("Où est Periste ?");
   });
 });
 

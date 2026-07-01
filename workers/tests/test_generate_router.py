@@ -8,7 +8,7 @@ LLM is stubbed via a fake LlmClient. /v1/retrieve is stubbed via httpx.MockTrans
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg
 import httpx
@@ -196,6 +196,57 @@ async def test_canon_answer_strips_sentinel_followup_block() -> None:
     assert "---SUIVI---" not in body["answer"]
     assert body["answer"] == "L'Archiviste consulte ses parchemins. [a/b.md]"
     assert body["citations"] == [{"source_path": "a/b.md", "chunk_ords": [0]}]
+    for http in http_clients:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_canon_persists_answer_with_followup_block() -> None:
+    # #374: persistence keeps the ---SUIVI--- block and inline [chemin] markers so the
+    # stored .md is the single source of truth for reload rendering. The emitted response
+    # body stays stripped (non-regression of the direct path).
+    chunks = [{"source_path": "a/b.md", "ord": 0, "text": "alpha", "score": 0.72}]
+    raw_answer = (
+        "L'Archiviste consulte ses parchemins. [a/b.md]\n"
+        "---SUIVI---\n"
+        "- Qui a fondé Nocilia ?\n"
+        "- Quand l'Archiviste est-il apparu ?"
+    )
+    message = AIMessage(
+        content=raw_answer,
+        usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+    )
+    llm = _FakeLlmClient(message=message)
+    app, http_clients = _build_app(
+        retrieve_handler=_retrieve_handler_factory(chunks=chunks),
+        conversation_handler=_conversation_handler,
+        llm_client=llm,
+    )
+    fake_convo = AsyncMock()
+    fake_convo.append_message = AsyncMock(return_value=MagicMock(ok=True))
+    app.state.conversation_client = fake_convo
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/generate", json=_payload(conversation_id=CONVERSATION_ID), headers=_headers()
+        )
+
+    assert r.status_code == 200
+    assistant_calls = [
+        call
+        for call in fake_convo.append_message.call_args_list
+        if call.kwargs["role"] == "assistant"
+    ]
+    assert len(assistant_calls) == 1
+    persisted = assistant_calls[0].kwargs["content"]
+    assert persisted == raw_answer
+    assert "---SUIVI---" in persisted
+    assert "[a/b.md]" in persisted
+
+    # Non-regression: the direct response body stays stripped of the sentinel block.
+    assert "---SUIVI---" not in r.json()["answer"]
+
     for http in http_clients:
         await http.aclose()
 

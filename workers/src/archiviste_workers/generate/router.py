@@ -328,7 +328,11 @@ async def _invoke_and_finalize(
 
     usage = _build_usage(ctx, prepared, ai_message)
     result = GenerationResult(
-        answer=answer, usage=usage, citations=citations, llm_ms=llm_ms, followups=followups
+        persisted_content=raw_answer,
+        usage=usage,
+        citations=citations,
+        llm_ms=llm_ms,
+        followups=followups,
     )
 
     await finalize_generation(ctx, prepared, result, log_event="generate")

@@ -21,9 +21,6 @@ import styles from "./RagasGauges.module.css";
 
 interface RagasGaugesProps {
   quality: QualityResult;
-  /** CSP nonce; lets the data-driven bar widths ship in a <style> the strict
-   * style-src allows (inline style attributes are blocked in production). */
-  nonce?: string;
 }
 
 interface IndicatorDescriptor {
@@ -82,16 +79,13 @@ function tooltipContent(descriptor: IndicatorDescriptor): string {
   return `${descriptor.label} (${descriptor.technicalName}) — ${descriptor.explanation}`;
 }
 
-function barId(descriptor: IndicatorDescriptor): string {
-  return `ragas-bar-${descriptor.technicalName.replace(/\s+/g, "-")}`;
-}
-
 function barPercent(value: number): number {
   return Math.round(Math.min(1, Math.max(0, value)) * 100);
 }
 
 function ScoreRow({ descriptor, value }: { descriptor: IndicatorDescriptor; value: number }) {
   const band = classifyRagasScore(value);
+  const fillClassName = `${styles.rowBarFill} ${styles[`w${barPercent(value)}`]}`;
   return (
     <div className={styles.row}>
       <span className={styles.rowName}>
@@ -109,7 +103,7 @@ function ScoreRow({ descriptor, value }: { descriptor: IndicatorDescriptor; valu
         aria-valuemin={0}
         aria-valuemax={1}
       >
-        <div id={barId(descriptor)} className={styles.rowBarFill} data-band={band} />
+        <div className={fillClassName} data-band={band} />
       </div>
     </div>
   );
@@ -137,7 +131,7 @@ function CardShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function RagasGauges({ quality, nonce }: RagasGaugesProps) {
+export function RagasGauges({ quality }: RagasGaugesProps) {
   if (quality.kind === "error") {
     return (
       <CardShell>
@@ -159,13 +153,8 @@ export function RagasGauges({ quality, nonce }: RagasGaugesProps) {
     );
   }
 
-  const barCss = INDICATORS.map(
-    (descriptor) => `#${barId(descriptor)}{width:${barPercent(descriptor.score(quality))}%}`
-  ).join("");
-
   return (
     <CardShell>
-      <style nonce={nonce}>{barCss}</style>
       <div className={styles.rows}>
         {INDICATORS.map((descriptor) => (
           <ScoreRow

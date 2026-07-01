@@ -22,15 +22,11 @@ const METHODOLOGY_TEXT =
 
 interface CostsCardProps {
   costs: CostsResult;
-  /** CSP nonce; lets the proportional bar widths ship in a <style> the strict
-   * style-src allows (inline style attributes are blocked in production). */
-  nonce?: string;
 }
 
 interface ServiceLine {
   label: string;
   amount: number;
-  barId: string;
 }
 
 const euroFormatter = new Intl.NumberFormat("fr-FR", {
@@ -44,12 +40,12 @@ function formatEur(amount: number): string {
   return euroFormatter.format(amount);
 }
 
-function barWidth(amount: number, total: number): string {
+function barPercent(amount: number, total: number): number {
   if (total <= 0) {
-    return "0%";
+    return 0;
   }
   const ratio = Math.min(1, Math.max(0, amount / total));
-  return `${Math.round(ratio * 1000) / 10}%`;
+  return Math.round(ratio * 100);
 }
 
 function CardShell({ children }: { children: React.ReactNode }) {
@@ -61,6 +57,7 @@ function CardShell({ children }: { children: React.ReactNode }) {
 }
 
 function ServiceRow({ line, total }: { line: ServiceLine; total: number }) {
+  const fillClassName = `${styles.barFill} ${styles[`w${barPercent(line.amount, total)}`]}`;
   return (
     <div className={styles.line}>
       <span className={styles.label}>{line.label}</span>
@@ -73,13 +70,13 @@ function ServiceRow({ line, total }: { line: ServiceLine; total: number }) {
         aria-valuemin={0}
         aria-valuemax={total}
       >
-        <div id={line.barId} className={styles.barFill} />
+        <div className={fillClassName} />
       </div>
     </div>
   );
 }
 
-export function CostsCard({ costs, nonce }: CostsCardProps) {
+export function CostsCard({ costs }: CostsCardProps) {
   if (costs.kind === "error") {
     return (
       <CardShell>
@@ -91,18 +88,13 @@ export function CostsCard({ costs, nonce }: CostsCardProps) {
   }
 
   const services: ServiceLine[] = [
-    { label: "Workers (LLM Mistral)", amount: costs.services.workers, barId: "cost-bar-workers" },
-    { label: "PostgreSQL", amount: costs.services.postgres, barId: "cost-bar-postgres" },
-    { label: "GCS", amount: costs.services.gcs, barId: "cost-bar-gcs" },
+    { label: "Workers (LLM Mistral)", amount: costs.services.workers },
+    { label: "PostgreSQL", amount: costs.services.postgres },
+    { label: "GCS", amount: costs.services.gcs },
   ];
-
-  const barCss = services
-    .map((line) => `#${line.barId}{width:${barWidth(line.amount, costs.total_eur)}}`)
-    .join("");
 
   return (
     <CardShell>
-      <style nonce={nonce}>{barCss}</style>
       <header className={styles.header}>
         <h2 className={styles.title}>Coûts · 30 j</h2>
         <InfoTooltip label={METHODOLOGY_LABEL} content={METHODOLOGY_TEXT} />

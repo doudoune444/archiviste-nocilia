@@ -69,15 +69,24 @@ describe("Ragas card — four rows with name, value and bar", () => {
     expect(meters[0]).toHaveAttribute("aria-valuenow", "0.91");
   });
 
-  it("ships each bar width in a nonce-tagged style, never an inline attribute", () => {
-    render(<RagasGauges quality={OK_QUALITY} nonce="ragas-nonce" />);
+  it("carries each bar width as a static class, never an inline style or nonce <style>", () => {
+    render(<RagasGauges quality={OK_QUALITY} />);
     const fill = screen
       .getAllByRole("meter")[0]
       .firstElementChild as HTMLElement;
+    // faithfulness 0.91 → 91 %
+    expect(fill.classList.contains("w91")).toBe(true);
     expect(fill.style.width).toBe("");
-    const styleTag = document.querySelector("style");
-    expect(styleTag).toHaveAttribute("nonce", "ragas-nonce");
-    expect(styleTag?.textContent).toContain(`#${fill.id}{width:91%}`);
+    expect(document.querySelector("style")).toBeNull();
+  });
+
+  it("quantifies a 0.61 score to a 61 % width while the label keeps the exact value", () => {
+    render(<RagasGauges quality={{ ...OK_QUALITY, faithfulness: 0.61 }} />);
+    const fill = screen
+      .getAllByRole("meter")[0]
+      .firstElementChild as HTMLElement;
+    expect(fill.classList.contains("w61")).toBe(true);
+    expect(screen.getByText("0.61")).toBeInTheDocument();
   });
 });
 

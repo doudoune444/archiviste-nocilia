@@ -27,10 +27,6 @@ const FOOTER_STACK =
 export default async function MetriquesPage() {
   const incomingHeaders = await headers();
   const requestId = incomingHeaders.get("x-request-id") ?? crypto.randomUUID();
-  // The strict CSP (style-src 'self' 'nonce-…', no 'unsafe-inline') blocks inline
-  // style attributes, so data-driven bar widths are delivered via a nonce-tagged
-  // <style> element instead. The nonce is forwarded by the middleware as x-nonce.
-  const nonce = incomingHeaders.get("x-nonce") ?? undefined;
 
   const [stats, quality, costs] = await Promise.all([
     fetchStats(requestId),
@@ -47,13 +43,13 @@ export default async function MetriquesPage() {
 
       <div className={styles.band}>
         <div className={styles.slotRagas}>
-          <RagasGauges quality={quality} nonce={nonce} />
+          <RagasGauges quality={quality} />
         </div>
         <div className={styles.slotDeps}>
           <DepHealth />
         </div>
         <div className={styles.slotCosts}>
-          <CostsCard costs={costs} nonce={nonce} />
+          <CostsCard costs={costs} />
         </div>
         <div className={styles.slotConversations}>
           <StatsCard stats={stats} />

@@ -9,10 +9,14 @@
 //
 // Behaviour is verified through the public render output, never internal state.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import { CostsCard } from "@/components/costs-card/CostsCard";
 import type { CostsResult } from "@/lib/observability-types";
+
+vi.mock("@/components/costs-card/CostsCard.module.css", () => ({
+  default: new Proxy({}, { get: (_t, prop: string) => prop }),
+}));
 
 const METHODOLOGY_LABEL = "Méthode d'estimation des coûts";
 const METHODOLOGY_TEXT =
@@ -67,9 +71,8 @@ describe("CostsCard — per-service lines (verbatim labels)", () => {
     expect(amount.className).toMatch(/amount/);
   });
 
-  it("draws a per-service bar whose width is proportional to the total", () => {
-    render(<CostsCard costs={OK_COSTS} nonce="test-nonce" />);
-    // postgres 8.00 / total 12.34 ≈ 64.8 %
+  it("carries each service bar width as a static class proportional to the total", () => {
+    render(<CostsCard costs={OK_COSTS} />);
     const bars = screen.getAllByRole("meter");
     expect(bars).toHaveLength(3);
     const postgresBar = bars.find(
@@ -78,21 +81,14 @@ describe("CostsCard — per-service lines (verbatim labels)", () => {
     expect(postgresBar).toBeDefined();
     expect(postgresBar).toHaveAttribute("aria-valuemax", "12.34");
     const fill = postgresBar?.firstElementChild as HTMLElement;
-    // Width ships in a CSP-safe <style> (the strict style-src blocks inline style
-    // attributes in production), keyed by the fill's id — never an inline style.
-    expect(fill.id).toBe("cost-bar-postgres");
+    // postgres 8.00 / total 12.34 ≈ 65 % (quantified to the nearest integer)
+    expect(fill.classList.contains("w65")).toBe(true);
     expect(fill.style.width).toBe("");
-    const css = Array.from(document.querySelectorAll("style"))
-      .map((tag) => tag.textContent)
-      .join("");
-    expect(css).toContain("#cost-bar-postgres{width:64.8%}");
   });
 
-  it("ships the bar widths in a nonce-tagged style element", () => {
-    render(<CostsCard costs={OK_COSTS} nonce="abc123" />);
-    const styleTag = document.querySelector("style");
-    expect(styleTag).not.toBeNull();
-    expect(styleTag).toHaveAttribute("nonce", "abc123");
+  it("drives bar widths without any nonce <style> element", () => {
+    render(<CostsCard costs={OK_COSTS} />);
+    expect(document.querySelector("style")).toBeNull();
   });
 });
 
